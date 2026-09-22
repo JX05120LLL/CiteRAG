@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>CiteRAG · A 方案预览</title>
+  <link rel="icon" href="../../assets/brand/favicon.svg" type="image/svg+xml">
+  <style>
+    :root{--page:#f3f3f1;--paper:#fff;--ink:#191919;--muted:#6b6b68;--line:#dededb;--soft:#f5f5f3;--focus:#171717;font-family:"Microsoft YaHei UI","Microsoft YaHei","PingFang SC",sans-serif;color-scheme:light}
+    *{box-sizing:border-box}body{margin:0;background:var(--page);color:var(--ink);font-size:14px;line-height:1.55}button,select,a{font:inherit}button,a{touch-action:manipulation}button{cursor:pointer}button:focus-visible,a:focus-visible,.viewer:focus-visible{outline:3px solid var(--focus);outline-offset:4px}a{color:inherit;text-underline-offset:4px}button{transition:background-color 130ms,border-color 130ms,color 130ms}button:disabled{cursor:default}.header{background:#fafaf8;border-bottom:1px solid var(--line);padding:21px 28px}.header-inner{max-width:1520px;margin:auto}.heading{display:flex;align-items:center;justify-content:space-between;gap:24px}h1{margin:0;font-size:18px;line-height:28px;font-weight:600;letter-spacing:.01em}.eyebrow{color:var(--muted);font-size:12px;margin-left:13px;font-weight:400;white-space:nowrap}.header-links{display:flex;align-items:center;gap:19px;font-size:12px;white-space:nowrap}.header-links a{text-decoration:none;color:var(--muted)}.header-links a:hover{color:var(--ink);text-decoration:underline}.header-links .overview{color:var(--ink);font-weight:500}.concepts{display:flex;align-items:stretch;margin-top:20px;gap:28px}.concept{display:flex;align-items:center;gap:11px;background:none;border:0;border-bottom:3px solid transparent;padding:0 5px 15px;text-align:left;color:var(--muted);min-height:57px}.concept:hover{color:var(--ink)}.concept[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--ink)}.letter{display:grid;place-items:center;flex:none;width:29px;height:29px;border:1px solid #d4d4d0;border-radius:6px;font-size:13px;font-weight:600;background:white}.concept[aria-selected="true"] .letter{background:var(--ink);color:white;border-color:var(--ink)}.concept-name{display:block;font-size:14px;font-weight:600}.concept-detail{display:block;font-size:11px;margin-top:1px;color:var(--muted)}main{max-width:1576px;margin:auto;padding:18px 28px 24px}.toolbar{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:14px}.pages{display:flex;gap:4px;padding:3px;background:#e9e9e6;border:1px solid #e1e1dd;border-radius:8px}.page-tab{min-height:34px;padding:0 13px;border:0;border-radius:5px;color:var(--muted);background:none;font-size:12px;white-space:nowrap}.page-tab:hover{color:var(--ink)}.page-tab[aria-selected="true"]{background:white;color:var(--ink);box-shadow:0 1px 4px #00000008;font-weight:500}.tools{display:flex;align-items:center;gap:10px}.size{font-size:11px;color:var(--muted);white-space:nowrap}.zoom{display:flex;align-items:center;gap:2px;padding:3px;border:1px solid var(--line);border-radius:7px}.zoom button{border:0;background:none;padding:5px 8px;font-size:11px;color:var(--muted);border-radius:4px;min-height:28px}.zoom button[aria-pressed="true"]{background:white;color:var(--ink)}.download{font-size:11px;text-decoration:none;color:var(--muted);background:white;border:1px solid var(--line);border-radius:7px;min-height:36px;padding:8px 10px;white-space:nowrap}.download:hover{color:var(--ink);border-color:#898983}.viewer{margin:0;width:100%;border:1px solid #d9d9d5;border-radius:9px;background:white;overflow:auto;scrollbar-color:#b8b8b3 #ededeb;box-shadow:0 6px 26px #00000005}.viewer img{display:block;width:100%;height:auto;aspect-ratio:3/2}.viewer.actual-size{max-height:calc(100vh - 272px);min-height:360px}.viewer.actual-size img{width:1440px;max-width:none;height:960px;aspect-ratio:auto}.below{display:flex;justify-content:space-between;align-items:flex-start;gap:24px;padding:14px 2px 0}.concept-summary{max-width:820px}.caption{margin:0;font-size:13px;color:var(--ink)}.tradeoff{margin:5px 0 0;font-size:12px;color:var(--muted)}.static-note{margin:0;max-width:340px;text-align:right;font-size:11px;color:var(--muted)}footer{display:flex;justify-content:space-between;gap:24px;border-top:1px solid var(--line);margin-top:22px;padding-top:15px;font-size:11px;color:var(--muted)}footer p{margin:0}footer a{text-decoration:none}footer a:hover{text-decoration:underline}.file-error{padding:50px 24px;text-align:center;color:var(--muted)}.file-error strong{display:block;margin-bottom:6px;color:var(--ink)}[hidden]{display:none!important}noscript p{margin:0;padding:12px 28px;background:white;font-size:13px}
+    @media(max-width:1050px){.header{padding:18px 20px}main{padding:16px 20px 24px}.heading{align-items:flex-start}.eyebrow{display:block;margin-left:0;font-size:11px}.concepts{gap:18px;margin-top:16px}.toolbar{align-items:flex-start;flex-wrap:wrap;gap:10px}.tools{flex-wrap:wrap}.below{flex-direction:column;gap:10px}.static-note{max-width:none;text-align:left}.viewer.actual-size{max-height:70vh}.size{display:none}}
+    @media(max-width:650px){.header{padding:14px 12px}main{padding:13px 12px 20px}.heading{gap:12px}h1{font-size:15px}.header-links{gap:10px;font-size:11px;flex-wrap:wrap;justify-content:flex-end;max-width:125px}.concepts{gap:8px;justify-content:space-between}.concept{padding:0 0 11px;gap:6px;flex:1}.letter{width:24px;height:24px;font-size:11px}.concept-name{font-size:12px}.concept-detail{font-size:10px;max-width:100px}.pages{width:100%;justify-content:space-between}.page-tab{padding:0 9px;flex:1;font-size:11px;min-height:35px}.tools{margin-left:auto;gap:8px}.zoom button{min-height:30px}.download{min-height:38px}.viewer{border-radius:6px}.viewer.actual-size{min-height:280px}.caption{font-size:12px}.tradeoff{font-size:11px}footer{flex-direction:column;gap:8px}}
+    @media(prefers-reduced-motion:reduce){button{transition:none}}
+  </style>
+</head>
+<body>
+  <header class="header">
+    <div class="header-inner">
+      <div class="heading">
+        <h1>CiteRAG<span class="eyebrow">A · 对话优先 · 已选定视觉方向</span></h1>
+        <div class="header-links"><a href="../brand/index.html">正式 Logo</a><a class="overview" href="exports/a-overview.png" target="_blank" rel="noopener">查看四页总览 ↗</a><a href="DESIGN-SPEC.md">设计说明</a></div>
+      </div>
+    </div>
+  </header>
+  <noscript><p>当前显示 A 方案实时语音。切换页面需要启用 JavaScript；也可直接打开 exports 目录中的四页 SVG / PNG。</p></noscript>
+  <main>
+    <div class="toolbar">
+      <nav class="pages" role="tablist" aria-label="选择预览页面">
+        <button class="page-tab" role="tab" id="page-01-workbench" aria-selected="false" aria-controls="design-panel" tabindex="-1" data-page="01-workbench">问答工作台</button>
+        <button class="page-tab" role="tab" id="page-02-voice" aria-selected="true" aria-controls="design-panel" tabindex="0" data-page="02-voice">实时语音</button>
+        <button class="page-tab" role="tab" id="page-03-image" aria-selected="false" aria-controls="design-panel" tabindex="-1" data-page="03-image">图片提问</button>
+        <button class="page-tab" role="tab" id="page-04-knowledge" aria-selected="false" aria-controls="design-panel" tabindex="-1" data-page="04-knowledge">知识库管理</button>
+      </nav>
+      <div class="tools"><span class="size">1440 × 960</span><div class="zoom" role="group" aria-label="画面缩放"><button id="fit" aria-pressed="true">适应窗口</button><button id="actual" aria-pressed="false">100%</button></div><a class="download" id="png" href="exports/a-02-voice.png" download>PNG 下载</a><a class="download" id="svg" href="exports/a-02-voice.svg" download>SVG 下载</a></div>
+    </div>
+    <section id="design-panel" role="tabpanel" aria-labelledby="page-02-voice">
+      <figure class="viewer" id="viewer" tabindex="0" aria-label="桌面效果图；100% 模式下可使用滚动条或方向键查看完整画面">
+        <img id="design-image" src="exports/a-02-voice.svg" width="1440" height="960" alt="A 对话优先方案的实时语音设计：白色全屏画布、黑色声纹、字幕与浮动控制条。">
+        <div class="file-error" id="file-error" hidden><strong>这张效果图暂时无法读取</strong>请将 index.html 与 exports 文件夹保留在同一目录，再重新打开。</div>
+      </figure>
+    </section>
+    <div class="below">
+      <div class="concept-summary"><p class="caption" id="caption" aria-live="polite">A / 实时语音 · 收起日常导航，用全屏声纹、字幕与浮动控制条聚焦通话。</p><p class="tradeoff" id="tradeoff">选择重点：轻量的日常问答。来源随回答展开，深入比对资料时需要更多展开操作。</p></div>
+      <p class="static-note">所有内容为演示，画面内部按钮不工作。<br>这里可以切换页面和缩放；不连接任何真实服务。</p>
+    </div>
+    <footer><p>已保留 A · 对话优先。四页效果图与设计源文件均可继续编辑。</p><p><a href="README.md">使用与交付说明</a> · PNG 固定快照 / SVG 保留矢量与文字</p></footer>
+  </main>
+  <script>
+    (() => {
+      const descriptions = {
+        '01-workbench': '对话是主线，来源在回答附近展开，保留轻量的私人会话入口。',
+        '02-voice': '收起日常导航，用全屏声纹、字幕与浮动控制条聚焦通话。',
+        '03-image': '图片和型号确认留在对话内，观察与知识库结论保持清楚区分。',
+        '04-knowledge': '采用紧凑文件管理器，上传、资料与入库状态围绕同一任务组织。'
+      };
+      const pageNames = {'01-workbench':'问答工作台','02-voice':'实时语音','03-image':'图片提问','04-knowledge':'知识库管理'};
+      const pageButtons = [...document.querySelectorAll('[data-page]')];
+      const image = document.getElementById('design-image');
+      const viewer = document.getElementById('viewer');
+      const error = document.getElementById('file-error');
+      let page = '02-voice';
+
+      function readHash() {
+        const parts = window.location.hash.slice(1).split('/');
+        if (parts[0] === 'a' && Object.hasOwn(pageNames, parts[1])) {
+          page = parts[1];
+        }
+      }
+      function render(updateHash = true) {
+        pageButtons.forEach(button => { const selected = button.dataset.page === page; button.setAttribute('aria-selected', String(selected)); button.tabIndex = selected ? 0 : -1; });
+        document.getElementById('design-panel').setAttribute('aria-labelledby', `page-${page}`);
+        const filename = `a-${page}`;
+        image.hidden = false;
+        error.hidden = true;
+        image.src = `exports/${filename}.svg`;
+        image.alt = `A 对话优先方案的${pageNames[page]}设计。${descriptions[page]}所有内容为演示。`;
+        document.getElementById('caption').textContent = `A / ${pageNames[page]} · ${descriptions[page]}`;
+        ['png', 'svg'].forEach(extension => { const link = document.getElementById(extension); link.href = `exports/${filename}.${extension}`; link.download = `${filename}.${extension}`; });
+        viewer.scrollTop = 0;
+        viewer.scrollLeft = 0;
+        if (updateHash && window.location.hash !== `#a/${page}`) window.location.hash = `a/${page}`;
+      }
+      function bindTabs(buttons) {
+        const activate = button => { page = button.dataset.page; render(); };
+        buttons.forEach((button, index) => {
+          button.addEventListener('click', () => activate(button));
+          button.addEventListener('keydown', event => {
+            let next;
+            if (event.key === 'ArrowRight') next = (index + 1) % buttons.length;
+            else if (event.key === 'ArrowLeft') next = (index - 1 + buttons.length) % buttons.length;
+            else if (event.key === 'Home') next = 0;
+            else if (event.key === 'End') next = buttons.length - 1;
+            else return;
+            event.preventDefault();
+            activate(buttons[next]);
+            buttons[next].focus();
+          });
+        });
+      }
+      bindTabs(pageButtons);
+      function zoom(actual) { viewer.classList.toggle('actual-size', actual); document.getElementById('fit').setAttribute('aria-pressed', String(!actual)); document.getElementById('actual').setAttribute('aria-pressed', String(actual)); viewer.scrollTop = 0; viewer.scrollLeft = 0; }
+      document.getElementById('fit').addEventListener('click', () => zoom(false));
+      document.getElementById('actual').addEventListener('click', () => zoom(true));
+      image.addEventListener('error', () => { image.hidden = true; error.hidden = false; });
+      image.addEventListener('load', () => { image.hidden = false; error.hidden = true; });
+      window.addEventListener('hashchange', () => { readHash(); render(false); });
+      readHash();
+      render(false);
+    })();
+  </script>
+</body>
+</html>

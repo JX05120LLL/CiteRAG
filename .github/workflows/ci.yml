@@ -1,0 +1,212 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repository:
+    name: Repository boundaries
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Reject local-only files
+        shell: python
+        run: |
+          import fnmatch
+          import subprocess
+
+          paths = subprocess.check_output(["git", "ls-files", "-z"]).decode().split("\0")
+          patterns = (
+              ".local/*", "output/*", "scripts/*", "LiveRAG/*", "LightRAG/*",
+              ".playwright-cli/*", "design/ui/common.py", "design/ui/concept_a.py",
+              "backend/tests/*", "frontend/*.test.*", "frontend/*.spec.*",
+          )
+          private_names = (
+              ".env", ".env.*", "*.pem", "*.key", "*.p12", "*.pfx",
+              "credentials*.json", "*.credential.xml", "*.backup.xml", "*.dpapi",
+          )
+          local_dirs = {
+              "secrets", "node_modules", ".venv", "__pycache__", ".pytest_cache",
+              ".ruff_cache", "dist", "coverage", "test-results", "playwright-report",
+          }
+          blocked = [path for path in paths if path and (
+              any(fnmatch.fnmatchcase(path, pattern) for pattern in patterns)
+              or any(fnmatch.fnmatchcase(path.rsplit("/", 1)[-1], pattern)
+                     for pattern in private_names)
+              or local_dirs.intersection(path.split("/"))
+          )]
+          if blocked:
+              raise SystemExit("Local-only files are tracked:\n" + "\n".join(blocked))
+          print("Repository file boundaries passed (not a full secret scan).")
+
+  frontend:
+    name: Frontend build and smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          package_json_file: frontend/package.json
+          run_install: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24.14.0'
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Build
+        run: pnpm build
+      - name: Verify built entry and assets
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import { existsSync, readFileSync } from 'node:fs';
+          import { JSDOM } from 'jsdom';
+
+          const { document } = new JSDOM(readFileSync('dist/index.html', 'utf8')).window;
+          assert.ok(document.title.includes('CiteRAG'));
+          assert.ok(document.querySelector('#app'));
+          assert.ok(document.querySelector('script[type="module"][src]'));
+          assert.ok(document.querySelector('link[rel="stylesheet"][href]'));
+          for (const element of document.querySelectorAll('script[src], link[href]')) {
+            const path = element.getAttribute('src') ?? element.getAttribute('href');
+            if (path.startsWith('data:')) continue;
+            assert.ok(existsSync(`dist/${path.replace(/^\//, '')}`), `Missing asset: ${path}`);
+          }
+          console.log('Built HTML entry, JavaScript, styles, and icon passed.');
+          JS
+
+  backend:
+    name: Backend and PostgreSQL smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: postgres:17.9
+        env:
+          POSTGRES_DB: citerag_ci
+          # Disposable CI container only; no real credentials or application data.
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 127.0.0.1:5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d citerag_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      CITERAG_DATABASE_URL: postgresql+asyncpg://postgres@127.0.0.1:5432/citerag_ci
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
+        with:
+          version: '0.11.3'
+          python-version: '3.12.13'
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - name: Install locked dependencies
+        run: uv sync --locked
+      - name: Lint and compile
+        run: |
+          uv run --locked --no-env-file ruff check app migrations
+          uv run --locked --no-env-file python -m compileall -q app migrations
+      - name: Generate migration SQL
+        run: uv run --locked --no-env-file alembic upgrade head --sql > "$RUNNER_TEMP/citerag-migration.sql"
+      - name: Migrate and verify local API behavior
+        run: |
+          uv run --locked --no-env-file python <<'PY'
+          import asyncio
+          import os
+          import subprocess
+          import sys
+          from uuid import uuid4
+
+          import asyncpg
+          from fastapi.testclient import TestClient
+
+          from app.config import Settings
+          from app.database import EXPECTED_SCHEMA_REVISION
+          from app.main import create_app
+
+          async def schema_snapshot():
+              dsn = os.environ['CITERAG_DATABASE_URL'].replace('postgresql+asyncpg://', 'postgresql://', 1)
+              connection = await asyncpg.connect(dsn, timeout=5, command_timeout=10)
+              try:
+                  revisions = await connection.fetch('SELECT version_num FROM alembic_version')
+                  assert [row['version_num'] for row in revisions] == [EXPECTED_SCHEMA_REVISION]
+                  owners = await connection.fetch('SELECT id FROM local_profiles')
+                  assert len(owners) == 1
+                  return owners[0]['id']
+              finally:
+                  await connection.close()
+
+          migrate = [sys.executable, '-m', 'alembic', 'upgrade', 'head']
+          subprocess.run(migrate, check=True)
+          original_owner = asyncio.run(schema_snapshot())
+          subprocess.run(migrate, check=True)
+          assert asyncio.run(schema_snapshot()) == original_owner, 'Migration changed the local owner'
+
+          # Real PostgreSQL and application lifespan; HTTP requests use ASGI in-process.
+          for _ in range(2):
+              with TestClient(create_app(), base_url='http://127.0.0.1', client=('127.0.0.1', 50000)) as api:
+                  response = api.get('/api/health')
+                  assert response.status_code == 200
+                  assert response.json() == {'status': 'alive', 'database_configured': True}
+                  assert response.headers['cache-control'] == 'no-store'
+                  response = api.get('/api/status')
+                  assert response.status_code == 200
+                  assert response.json() == {
+                      'status': 'partial', 'mode': 'local_single_user',
+                      'database': 'available', 'rag': 'not_configured', 'models': 'not_configured',
+                  }
+                  for path in ('/api/knowledge-bases', '/api/conversations'):
+                      response = api.get(path)
+                      assert response.status_code == 200
+                      assert response.json() == {'items': []}
+                  for headers in (
+                      {'Host': 'untrusted.invalid'}, {'Origin': 'https://untrusted.invalid'},
+                      {'X-Forwarded-For': '127.0.0.1'}, {'Sec-Fetch-Site': 'cross-site'},
+                  ):
+                      assert api.get('/api/status', headers=headers).status_code == 403
+                  assert api.post('/api/conversations', json={'kb_id': str(uuid4())}).status_code == 403
+                  response = api.post('/api/conversations', json={'kb_id': str(uuid4())},
+                                      headers={'Origin': 'http://127.0.0.1:5173'})
+                  assert response.status_code == 404
+                  assert response.json()['detail']['code'] == 'kb_not_found'
+                  assert api.get('/api/conversations?limit=0').status_code == 422
+
+          with TestClient(create_app(Settings()), base_url='http://127.0.0.1', client=('127.0.0.1', 50000)) as api:
+              response = api.get('/api/status')
+              assert response.status_code == 200
+              assert response.json()['database'] == 'not_configured'
+              response = api.get('/api/knowledge-bases')
+              assert response.status_code == 503
+              assert response.json()['detail']['code'] == 'database_not_configured'
+          print('Migrations, stable owner, API lifecycle, lists, boundaries, and missing configuration passed.')
+          PY

@@ -1,0 +1,62 @@
+# Local reference repositories and material that is not part of CiteRAG
+/.local/
+/LiveRAG/
+/LightRAG/
+/output/
+/.playwright-cli/
+
+# Workstation helper and design-generation scripts; keep local only
+/scripts/
+/design/ui/common.py
+/design/ui/concept_a.py
+
+# Maintainer test sources stay local; public CI checks live in the workflow
+/backend/tests/
+/frontend/**/*.test.*
+/frontend/**/*.spec.*
+
+# Credentials and local configuration
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+credentials*.json
+*.credential.xml
+*.backup.xml
+*.dpapi
+secrets/
+
+# Runtime data and backups
+/data/
+/uploads/
+/storage/
+/backups/
+*.db
+*.sqlite
+*.sqlite3
+*.log
+
+# Python / Node / test artifacts
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+node_modules/
+dist/
+coverage/
+test-results/
+playwright-report/
+
+# Workstation metadata
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.tmp

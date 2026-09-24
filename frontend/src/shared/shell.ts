@@ -16,7 +16,9 @@ export function renderHeader(state: AppState, navigate: (page: Page) => void) {
   brand.append(mark, el('span', '', 'CiteRAG'));
   const context = el('div', 'top-context');
   if (page === 'workbench') context.append(icon('book'));
-  context.append(el('span', '', page === 'knowledge' ? '我的知识库' : page === 'status' ? '系统状态' : '尚未选择知识库'));
+  const currentBase = state.bases?.find((base) => base.id === state.selectedKbId);
+  context.append(el('span', '', page === 'knowledge' ? '我的知识库' : page === 'status' ? '系统状态'
+    : currentBase?.name ?? '尚未选择知识库'));
   if (page === 'workbench') {
     const rule = el('span', 'context-rule');
     rule.append(icon('lock'), el('span', '', '一个聊天固定一个知识库'));
@@ -26,25 +28,29 @@ export function renderHeader(state: AppState, navigate: (page: Page) => void) {
   return top;
 }
 
-export function renderSidebar(state: AppState, navigate: (page: Page) => void, refresh: () => Promise<void>) {
+export function renderSidebar(state: AppState, navigate: (page: Page) => void,
+                              refresh: () => Promise<void>, createChat: () => Promise<void>,
+                              selectChat: (id: string) => Promise<void>) {
   const {page, chats, loading} = state;
   const aside = el('aside', 'sidebar');
   aside.setAttribute('aria-label', '聊天与导航');
-  const newChat = action('新建聊天', 'button new-chat');
+  const newChat = action('新建聊天', 'button new-chat', () => { void createChat(); });
   newChat.prepend(icon('plus'));
-  newChat.disabled = true;
-  newChat.setAttribute('aria-describedby', 'chat-unavailable');
+  newChat.disabled = state.chatPending || !state.bases?.some(
+    (base) => base.id === state.selectedKbId && base.status === 'ready');
   const search = action('搜索聊天', 'sidebar-search');
   search.prepend(icon('search'));
   search.disabled = true;
-  const explanation = el('p', 'sidebar-hint', '聊天功能尚未开放');
-  explanation.id = 'chat-unavailable';
+  const explanation = el('p', 'sidebar-hint', newChat.disabled
+    ? '先选择已就绪知识库，再创建聊天。' : '选择已有聊天，或在当前知识库新建聊天。');
   const history = el('div', 'history');
   history.append(el('p', 'section-label', '我的聊天'));
   if (chats?.length) {
     for (const chat of chats) {
-      const entry = el('div', 'history-entry');
-      entry.append(el('span', 'history-title', chat.title), el('span', 'metadata', '查看聊天功能尚未开放'));
+      const entry = action('', 'history-entry', () => { void selectChat(chat.id); });
+      entry.append(el('span', 'history-title', chat.title));
+      entry.disabled = state.chatPending;
+      if (chat.id === state.selectedChatId) entry.setAttribute('aria-current', 'true');
       history.append(entry);
     }
   } else history.append(el('p', 'empty-history', loading ? '正在读取聊天…' : chats ? '暂无聊天' : '聊天列表暂不可用'));

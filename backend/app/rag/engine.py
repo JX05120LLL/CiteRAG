@@ -1,16 +1,25 @@
 """Isolated, single-owner SDK lifecycle. No query or ingestion HTTP endpoints in M0."""
 
 import asyncio
+import re
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Protocol
 from uuid import UUID
 
 
-def workspace_for(kb_id: UUID, root: Path) -> tuple[str, Path]:
+def workspace_for(
+    kb_id: UUID, root: Path, workspace: str | None = None
+) -> tuple[str, Path]:
     if not isinstance(kb_id, UUID):
         raise TypeError('Knowledge base ID must be a server UUID')
-    workspace = f'kb_{kb_id.hex}'
+    base = f'kb_{kb_id.hex}'
+    if workspace is None:
+        workspace = base
+    if not isinstance(workspace, str) or not re.fullmatch(
+        re.escape(base) + r'(?:_r_[0-9a-f]{32})?', workspace
+    ):
+        raise ValueError('Engine workspace does not belong to this knowledge base')
     root = root.resolve()
     directory = (root / workspace).resolve()
     if directory.parent != root:
@@ -42,21 +51,22 @@ class EngineManager:
         self._root = root
         self._factory = factory
         self._assert_owner = assert_owner
-        self._engines: dict[UUID, Engine] = {}
-        self._initializing: dict[UUID, Engine] = {}
+        self._engines: dict[tuple[UUID, str], Engine] = {}
+        self._initializing: dict[tuple[UUID, str], Engine] = {}
         # SDK shared initialization must be serial, even between different workspaces.
         self._lock = asyncio.Lock()
         self._closed = False
 
-    async def get(self, kb_id: UUID) -> Engine:
+    async def get(self, kb_id: UUID, workspace: str | None = None) -> Engine:
+        workspace, directory = workspace_for(kb_id, self._root, workspace)
+        key = (kb_id, workspace)
         async with self._lock:
             self._assert_owner()
             if self._closed:
                 raise RuntimeError('Engine manager is closed')
-            if kb_id not in self._engines:
-                workspace, directory = workspace_for(kb_id, self._root)
+            if key not in self._engines:
                 engine = self._factory(workspace, directory)
-                self._initializing[kb_id] = engine
+                self._initializing[key] = engine
                 try:
                     await engine.initialize_storages()
                     self._assert_owner()
@@ -70,9 +80,9 @@ class EngineManager:
                         )
                     raise
                 finally:
-                    self._initializing.pop(kb_id, None)
-                self._engines[kb_id] = engine
-            return self._engines[kb_id]
+                    self._initializing.pop(key, None)
+                self._engines[key] = engine
+            return self._engines[key]
 
     async def close(self) -> None:
         async with self._lock:

@@ -2,18 +2,26 @@ import os
 import signal
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from sqlalchemy import select, update
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.api.answers import router as answers_router
 from app.api.boundaries import require_local_request
+from app.api.documents import router as documents_router
 from app.api.routes import router
-from app.config import Settings
+from app.config import LOCAL_RUNTIME_ROOT, Settings
 from app.database import Database
+from app.ingestion.jobs import IngestionRunner
+from app.ingestion.storage import PrivateSourceStore
+from app.models import AnswerAttempt, Conversation, KnowledgeBase, LocalProfile
 from app.rag.engine import assert_isolated_configuration
+from app.rag.ingestion_adapter import LightRAGIngestionAdapter
 from app.rag.owner import ApiOwner, OwnerLost
 from app.rag.runtime import RagRuntime
 from app.services.errors import ServiceError
@@ -51,7 +59,16 @@ def create_app(
                     ApiOwner(settings.database_url.get_secret_value(), on_lost=on_owner_lost)
                 )
                 await db.verify_schema()
-            runtime = RagRuntime(settings)
+            async def workspace_resolver(kb_id):
+                async with db.sessions() as session:
+                    workspace = await session.scalar(select(KnowledgeBase.active_workspace).where(
+                        KnowledgeBase.id == kb_id, KnowledgeBase.owner_id.is_not(None),
+                    ))
+                    if workspace is None:
+                        raise ServiceError(404, "kb_not_found", "知识库不存在或不可访问")
+                    return workspace
+
+            runtime = RagRuntime(settings, workspace_resolver=workspace_resolver)
             application.state.rag_runtime = runtime
             stack.push_async_callback(runtime.close)
             if application.state.owner is not None:
@@ -59,6 +76,29 @@ def create_app(
             application.state.rag_probe = runtime.probe
             if lifespan_hook is not None:
                 await stack.enter_async_context(lifespan_hook(application))
+            if db is not None:
+                store = PrivateSourceStore(application.state.source_root)
+                application.state.source_store = store
+                adapter = application.state.ingestion_adapter or LightRAGIngestionAdapter(runtime)
+                runner = IngestionRunner(
+                    db, store, adapter, application.state.owner.assert_owned,
+                    enabled=settings.ingestion_enabled,
+                )
+                application.state.ingestion_runner = runner
+                stack.push_async_callback(runner.close)
+                await runner.start()
+                # A dead process cannot complete an old answer. Never replay a
+                # provider request solely because its durable attempt was running.
+                async with db.sessions() as session:
+                    owned = select(Conversation.id).where(
+                        Conversation.owner_id == await session.scalar(select(LocalProfile.id)),
+                    )
+                    await session.execute(update(AnswerAttempt).where(
+                        AnswerAttempt.conversation_id.in_(owned),
+                        AnswerAttempt.status == "running",
+                    ).values(status="interrupted", error_code="server_restarted",
+                             finished_at=datetime.now(UTC)))
+                    await session.commit()
             yield
             application.state.owner = None
 
@@ -68,6 +108,13 @@ def create_app(
     application.state.owner = None
     application.state.rag_runtime = None
     application.state.rag_probe = None
+    application.state.source_root = LOCAL_RUNTIME_ROOT / "sources"
+    application.state.source_store = None
+    application.state.ingestion_runner = None
+    application.state.ingestion_adapter = None
+    application.state.answer_enabled = settings.answer_enabled
+    application.state.query_adapter = None
+    application.state.answer_adapter = None
 
     @application.middleware("http")
     async def request_boundaries(request: Request, call_next):
@@ -106,6 +153,8 @@ def create_app(
         return error_response(422, "validation_error", "请求参数不符合要求")
 
     application.include_router(router)
+    application.include_router(documents_router)
+    application.include_router(answers_router)
     return application
 
 

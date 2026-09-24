@@ -30,6 +30,8 @@ class Settings(BaseModel):
     database_url: SecretStr | None = None
     allowed_origins: tuple[str, ...] = ("http://localhost:5173", "http://127.0.0.1:5173")
     api_workers: int = Field(default=1, ge=1, le=1)
+    ingestion_enabled: bool = False
+    answer_enabled: bool = False
     rag_database_record: Path = LOCAL_RUNTIME_ROOT / "rag-postgres" / "credential.xml"
     rag_workspace_root: Path = LOCAL_RUNTIME_ROOT / "rag-workspaces"
 
@@ -92,6 +94,8 @@ class Settings(BaseModel):
         names = {
             "CITERAG_DATABASE_URL": "database_url",
             "CITERAG_API_WORKERS": "api_workers",
+            "CITERAG_INGESTION_ENABLED": "ingestion_enabled",
+            "CITERAG_ANSWER_ENABLED": "answer_enabled",
             "CITERAG_RAG_DATABASE_RECORD": "rag_database_record",
             "CITERAG_RAG_WORKSPACE_ROOT": "rag_workspace_root",
         }

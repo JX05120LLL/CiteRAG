@@ -1,6 +1,7 @@
 import { ApiError } from './api/client';
 import type { ApiClient, KnowledgeBase } from './api/client';
 import { renderKnowledge } from './pages/knowledge';
+import { createDocumentsPanel } from './pages/documents';
 import { renderStatus } from './pages/status';
 import { renderWorkbench } from './pages/workbench';
 import { el } from './shared/dom';
@@ -15,9 +16,13 @@ export async function mountApp(root: HTMLElement, api: ApiClient): Promise<void>
     basesError: null, chatsError: null, health: null, healthError: null, healthLoading: false,
     createDraft: { name: '', pending: false, error: null, requestId: null, requestName: null, uncertain: false },
     renameDraft: null, knowledgeNotice: null,
+    selectedKbId: null, selectedChatId: null, chatMessages: [], chatDraft: '',
+    chatPending: false, chatError: null, chatRequestKey: null, chatRequestText: null,
+    chatMode: 'semantic', exactFilter: {},
   };
   let generation = 0;
   let healthGeneration = 0;
+  const documentsPanel = createDocumentsPanel(api, render, (bases) => { state.bases = bases; });
   try {
     const recovered = restorePendingCreation();
     if (recovered) Object.assign(state.createDraft, {
@@ -41,7 +46,79 @@ export async function mountApp(root: HTMLElement, api: ApiClient): Promise<void>
     state.chatsError = results[1].status === 'rejected'
       ? results[1].reason instanceof ApiError ? results[1].reason : new ApiError('http') : null;
     state.loading = false;
+    if (state.selectedKbId && !state.bases?.some((base) => base.id === state.selectedKbId)) {
+      state.selectedKbId = null;
+      state.selectedChatId = null;
+      state.chatMessages = [];
+    }
     render();
+  }
+
+  async function selectChat(id: string) {
+    const chat = state.chats?.find((item) => item.id === id);
+    if (!chat || state.chatPending) return;
+    state.selectedKbId = chat.kb_id;
+    state.selectedChatId = chat.id;
+    state.chatDraft = '';
+    state.chatRequestKey = state.chatRequestText = null;
+    state.chatError = null;
+    state.chatMessages = [];
+    render();
+    try { state.chatMessages = await api.conversationMessages(id); }
+    catch (error) { state.chatError = error instanceof ApiError ? error : new ApiError('http'); }
+    render();
+  }
+
+  async function createChat() {
+    if (!state.selectedKbId || state.chatPending) return;
+    state.chatPending = true;
+    state.chatError = null;
+    render();
+    try {
+      const chat = await api.createConversation(state.selectedKbId);
+      state.chats = [chat, ...(state.chats ?? [])];
+      state.selectedChatId = chat.id;
+      state.chatMessages = [];
+      state.chatDraft = '';
+      state.chatRequestKey = state.chatRequestText = null;
+    } catch (error) {
+      state.chatError = error instanceof ApiError ? error : new ApiError('http');
+    } finally { state.chatPending = false; render(); }
+  }
+
+  async function sendChat() {
+    if (!state.selectedChatId || state.chatPending) return;
+    const question = state.chatDraft.trim();
+    if (!question || question.length > 1000) return;
+    const exact = Object.fromEntries(Object.entries(state.exactFilter)
+      .map(([key, value]) => [key, value.trim()]).filter(([, value]) => Boolean(value)));
+    if (state.chatMode === 'exact' && !['doc_code', 'model_code', 'edition'].some((key) => key in exact)) {
+      state.chatError = new ApiError('validation', 'exact_filter'); render(); return;
+    }
+    if (!state.chatRequestKey || state.chatRequestText !== question) {
+      state.chatRequestKey = crypto.randomUUID();
+      state.chatRequestText = question;
+    }
+    state.chatPending = true;
+    state.chatError = null;
+    render();
+    try {
+      const message = await api.askMessage(state.selectedChatId, question, state.chatRequestKey,
+        state.chatMode, state.chatMode === 'exact' ? exact : undefined);
+      state.chatMessages = [...state.chatMessages.filter((item) => item.message_id !== message.message_id), message];
+      state.chatDraft = '';
+      state.chatRequestKey = null;
+      state.chatRequestText = null;
+    } catch (error) {
+      state.chatError = error instanceof ApiError ? error : new ApiError('http');
+      try { state.chatMessages = await api.conversationMessages(state.selectedChatId); }
+      catch { /* Keep the original network error visible; an uncertain write may have committed. */ }
+      if (state.chatMessages.some((item) => item.client_message_id === state.chatRequestKey)) {
+        state.chatDraft = '';
+        state.chatRequestKey = null;
+        state.chatRequestText = null;
+      }
+    } finally { state.chatPending = false; render(); }
   }
 
   function acceptKnowledgeBase(base: KnowledgeBase) {
@@ -131,6 +208,7 @@ export async function mountApp(root: HTMLElement, api: ApiClient): Promise<void>
   }
 
   function openCreate() {
+    documentsPanel.close();
     navigate('knowledge');
     focusName('kb-create-name');
   }
@@ -165,15 +243,29 @@ export async function mountApp(root: HTMLElement, api: ApiClient): Promise<void>
     const main = el('main', `main ${isManagement ? 'management' : 'workbench'}`);
     main.id = 'main-content';
     main.tabIndex = -1;
-    if (state.page === 'knowledge') renderKnowledge(main, state, { refresh, createKnowledgeBase, beginRename, renameKnowledgeBase, cancelRename });
+    if (state.page === 'knowledge' && documentsPanel.isOpen) main.append(documentsPanel.render());
+    else if (state.page === 'knowledge') renderKnowledge(main, state, { refresh, createKnowledgeBase, beginRename, renameKnowledgeBase, cancelRename, openDocuments: documentsPanel.open });
     else if (state.page === 'status') renderStatus(main, state, loadHealth);
-    else renderWorkbench(main, state, navigate, refresh);
+    else renderWorkbench(main, state, navigate, {
+      refresh, selectChat, createChat, sendChat,
+      selectKb: (id: string) => { state.selectedKbId = id; state.selectedChatId = null;
+        state.chatMessages = []; state.chatError = null; state.chatDraft = '';
+        state.chatRequestKey = state.chatRequestText = null; render(); },
+      setDraft: (text: string) => { state.chatDraft = text; if (text.trim() !== state.chatRequestText) {
+        state.chatRequestKey = null; state.chatRequestText = null;
+      } },
+      setMode: (mode: 'semantic' | 'exact') => { state.chatMode = mode;
+        state.chatRequestKey = state.chatRequestText = null; render(); },
+      setExact: (key: 'doc_code' | 'model_code' | 'edition' | 'phrase', value: string) => {
+        state.exactFilter[key] = value; state.chatRequestKey = state.chatRequestText = null;
+      },
+    });
     shell.append(renderHeader(state, navigate));
     if (isManagement) {
       const frame = el('div', 'management-frame');
       frame.append(renderManagementSidebar(state, navigate, openCreate), main);
       shell.append(frame);
-    } else shell.append(renderSidebar(state, navigate, refresh), main);
+    } else shell.append(renderSidebar(state, navigate, refresh, createChat, selectChat), main);
     root.replaceChildren(skip, shell);
   }
 

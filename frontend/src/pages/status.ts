@@ -54,7 +54,7 @@ export function renderStatus(main: HTMLElement, state: AppState, refresh: () => 
     }
     content.append(list);
   }
-  content.append(el('p', 'scope-note', '同一安装使用同一份本地资料。这里显示服务返回的当前状态；文字问答、实时语音与图片提问尚未开放。'));
+  content.append(el('p', 'scope-note', '同一安装使用同一份本地资料。这里显示服务返回的当前状态；文字问答需单独启用，实时语音与图片提问留待后续。'));
   const retry = action('刷新状态', 'button secondary', () => { void refresh(); });
   retry.disabled = state.healthLoading;
   content.append(retry);

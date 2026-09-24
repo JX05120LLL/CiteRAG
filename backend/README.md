@@ -1,8 +1,10 @@
 # CiteRAG 后端
 
-Python 3.12、FastAPI、SQLAlchemy 2、Alembic 与 PostgreSQL 17。首版为本地单用户，无管理员、注册、登录或密码流程；服务端维护一个内部本地归属，关联自有知识库及聊天。M1-1 新增知识库创建、改名、列表持久化、创建幂等及 5 库上限，空库不可创建聊天；上传、任务、问答、图片和语音留后续阶段。M0 真实模型/双库证据沿用，Embedding 超长输入边界暂缓未通过，M0 与完整 M1 均未完成。
+Python 3.12、FastAPI、SQLAlchemy 2、Alembic 与 PostgreSQL 17。本地单用户，无管理员、注册或登录。M1-1 知识库管理已提交；M1-2 私有原文、受限解析、任务、入库核验和修复，以及 M1-3 普通/精确问答、真实来源与持久聊天首片已实现。本片默认关闭问答；近期上下文/摘要、删除/替换、图片和语音仍留后续。M0 超长 Embedding 输入边界暂缓未通过，M0 与完整 M1 均未完成。
 
-本轮只在隔离测试库验证，既有 8000 服务和实际业务库保持旧基线。新增接口需显式迁移并重启后使用；验证进度见 [M1 记录](../docs/development/M1-VALIDATION.md)。
+本轮只在隔离测试库升级到 `0005_answer_attempts`。实际业务库本轮不可达；上轮只读核查为 `0002_local_single_user`，旧 API 无新接口，不能当作当前在线证据。未迁移业务或重启旧 API。默认关闭模型入库与问答；新接口需停写备份后显式迁移并重启，进度见 [M1 记录](../docs/development/M1-VALIDATION.md)。
+
+上轮 `0002` 库版本与旧接口为当时实查；本轮接手及收尾 API、前端和业务库不可达，引擎库仍可连接，停止原因未定位。不要直接将新代码启动到旧 schema，详见 [交接](../docs/development/HANDOFF.md)。
 
 ## 安装与无配置启动
 
@@ -24,6 +26,8 @@ uv run --no-env-file uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers
 | `CITERAG_DATABASE_URL` | 无；业务数据库连接串，作为敏感值处理。 |
 | `CITERAG_ALLOWED_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173`；逗号分隔的精确回环浏览器 Origin，禁止通配符和路径。前端换到 5174 时同步修改。 |
 | `CITERAG_API_WORKERS` | 只能为 `1`；`WEB_CONCURRENCY` 也不能大于 1。 |
+| `CITERAG_INGESTION_ENABLED` | 默认 `false`；允许原文受理和解析，完成后等待。设置 `true` 会让受管队列调用模型入库，须先完成本次真实请求范围/预算授权；保存凭证或已有成功报告不等于授权。 |
+| `CITERAG_ANSWER_ENABLED` | 默认 `false`；关闭模型检索与回答。设置 `true` 会发送问题及检索证据给模型，须先说明类别、次数上限、费用和数据影响并另获授权。 |
 
 配置独立业务库后显式迁移，再用上面的命令启动：
 
@@ -31,9 +35,9 @@ uv run --no-env-file uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers
 uv run --no-env-file alembic upgrade head
 ```
 
-源码当前 head 为 `0003_knowledge_management`。新库先经过原有 `0001_m0_accounts` 和 `0002_local_single_user`，建立单例 `local_profiles` 并为知识库和聊天新增 `local_owner_id`；再为知识库增加 nullable `create_request_id UUID`、`create_request_name varchar(120)` 及本地归属＋创建键唯一约束。旧库两列保持 NULL，旧 `users`、`auth_sessions`、知识库和聊天记录保留；聊天旧 `owner_id` 外键列仍保留且允许新本地聊天不填写。迁移不认领旧资料，不把已有账号变成默认用户，不需要执行管理员初始化。现有业务库沿用 M0 记录的 `0002_local_single_user` 基线；本轮未迁移，也未直连 SQL 复查其版本。
+源码当前 head 为 `0004_managed_ingestion`：在 `0003` 知识库创建幂等基础上增加 revision/历史遮蔽水位及 documents、parsed_blocks、ingestion_jobs。旧账号、知识库、聊天和归属全部保留，不认领旧资料。迁移只管理业务库，不管理 LightRAG 表；本轮已只读核对实际业务库为 `0002`，仅在隔离库升级新 head。
 
-已有 CiteRAG 数据库升级前先备份，确认只作用于本项目业务库。正常运行不执行 downgrade；`0003` 在存在已使用的创建键时拒绝回退，防止丢失幂等记录导致重复创建；`0002` 在存在已归属本地的知识库或聊天时拒绝回退，避免丢失归属。数据库本身仍需有效 PostgreSQL 连接凭证，它不等于网页账号。
+已有数据升级前先停写，完整备份业务库、引擎库、私有原文及版本清单；恢复时保持维护，核对任务、原文和 active_workspace，不能只回退 schema。`0004` 有受管记录、非零修订或历史遮蔽水位时拒绝 downgrade；应用空间切换会留下任务及修订记录。`0003` 拒绝丢弃已使用的创建键，`0002` 拒绝丢失本地归属。数据库仍需有效连接凭证，它不等于网页账号。
 
 配置数据库后，启动必须持有独占 PostgreSQL owner 会话锁；第二个 API 进程启动失败。取得锁后检查 Alembic 版本，缺失、旧版或不兼容版本拒绝启动，不自动升级。持锁连接丢失后停止受理并终止进程。启动也拒绝全局 `POSTGRES_WORKSPACE` 或当前目录的 `config.ini`，不读取其可能包含的凭证。
 
@@ -53,6 +57,18 @@ API 仅监听回环地址，并验证真实连接来源、Host、Origin 和跨�
 - `POST /api/conversations`：`{kb_id,title}` → 201，只允许本地归属下已就绪的知识库，聊天固定该库。
 - `GET /api/conversations?limit=20&offset=0`：返回当前本地归属的聊天列表。
 - `GET /api/conversations/{id}`：只读取本地归属及正确知识库绑定的聊天，未归属旧记录返回 404。
+- `POST /api/knowledge-bases/{id}/documents`：multipart `files`（1–5 份）和 UUID `client_request_id`，可靠保存后返回 202 任务；202 不表示解析或索引成功。同键同载荷重放同一任务，同库相同内容拒绝。
+- `GET /api/knowledge-bases/{id}/documents`、`GET /api/knowledge-bases/{id}/jobs`、`GET /api/jobs/{id}`：持久资料/任务状态，区分受理、解析、索引、核验及失败；不暴露存储路径或引擎空间。
+- `GET /api/documents/{id}/original`、`GET /api/documents/{id}/blocks`：私有下载和实际解析位置，校验归属与维护状态；磁盘/数据库读取后重新校验。原文下载校验哈希并以附件响应。
+- `POST /api/jobs/{id}/retry`、`POST /api/knowledge-bases/{id}/rebuild`（后者接收 `client_request_id`）：显式修复，过期任务不得修改已切换空间。重建核验后切换数据库 active_workspace，旧空间以 cleanup_pending 隔离保留。
+
+## 受管解析与引擎边界
+
+原文固定在私有 `.local/runtime/sources/`，随机存储键与 SHA-256；单文件 20 MiB。UTF-8 TXT/MD 使用实际行号，文字 PDF 最多 100 页并保留实际页码，DOCX 限普通段落/简单表格行。解析在 20 秒/384 MiB 子进程中运行，输出最多 500 万字符/5 万块；拒绝扫描/加密、乱码、危险 ZIP、合并表格、嵌入对象、字段及非空页眉页脚等可能丢失正文的结构。新增依赖锁定 pypdf 6.19.0、python-docx 1.2.0、python-multipart 0.0.32。
+
+同库仅一个活动任务、全安装串行修改引擎；进入修改前提交 maintaining/revision。预检失败保留原 ready，修改后失败或中断保持 blocked。只有核对引擎文档状态、正文、片段和检索来源后才 ready；重启不自动重放不确定引擎写入。旧空间物理清理、删除/替换和完整问答仍未交付。
+
+提交结果不确定的原文先保留；启动持有 owner 后按数据库引用清理超过 24 小时的孤立 `.source/.partial`。保留已提交、近期和非受管文件。Windows 已验证文件刷新/原子重命名，不声称目录 fsync 或隔离同一 OS 用户。
 
 旧 `/api/auth/*`、`/api/me`、`/api/admin/*` 及管理员初始化 CLI 不再属于有效入口。错误使用 `{detail:{code,message}}`：403 本地来源边界拒绝，404 不存在或不属于本地归属，409 状态冲突，422 参数不合规，503 数据库未配置、持久层或 owner 不可用。未配置业务库的 code 为 `database_not_configured`；连接故障不能伪报成功，也不返回连接信息。
 
@@ -68,6 +84,6 @@ GitHub CI 使用独立临时 PostgreSQL 17.9，验证新库迁移、重复迁移
 
 `backend/tests/` 仅在维护者本机保留，不随仓库发布，新克隆无需运行 `pytest`。已有本地测试文件时，可运行 `uv run --no-env-file pytest -q`；未设置 `CITERAG_TEST_DATABASE_URL` 时真实 PostgreSQL 测试明确跳过，不用 SQLite 或内存库替代。独立测试实例准备、隐藏输入与执行方式见[本地开发的运行检查](../docs/development/LOCAL-DEVELOPMENT.md#运行检查)。本地测试还覆盖旧库升级保留、本地归属、知识库绑定及 owner 生命周期，不能用较小范围的 CI 冒烟代替。禁止把真实业务库或共享实例作为测试目标。
 
-M1-1 的隔离 PostgreSQL 测试覆盖并发幂等、5 库限制、失败事务不消费创建键、应用生命周期重启后的持久化、旧库升级与回退门禁；每轮实际结果见 [M1 验证记录](../docs/development/M1-VALIDATION.md)。
+M1-1 历史测试覆盖建库幂等/容量/事务；M1-2 增加受限解析、真实隔离 PostgreSQL 生命周期、SDK＋隔离引擎库＋本地模型替身和真实浏览器。三者不等于真实供应商验证；每轮结果见 [M1 验证记录](../docs/development/M1-VALIDATION.md)。
 
 LightRAG 为锁定提交的可选 `rag` 依赖，`uv sync --locked --extra rag` 才安装。安装成功不代表四类 PG 存储、双库真实检索或模型验证通过。当前行为结果与缺项见 [M0 验证记录](../docs/development/M0-VALIDATION.md)，旧账号方案计数只作历史证据。

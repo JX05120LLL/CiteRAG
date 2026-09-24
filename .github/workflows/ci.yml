@@ -145,6 +145,9 @@ jobs:
           import os
           import subprocess
           import sys
+          import tempfile
+          import time
+          from pathlib import Path
           from uuid import uuid4
 
           import asyncpg
@@ -162,6 +165,8 @@ jobs:
                   assert [row['version_num'] for row in revisions] == [EXPECTED_SCHEMA_REVISION]
                   owners = await connection.fetch('SELECT id FROM local_profiles')
                   assert len(owners) == 1
+                  assert await connection.fetchval("SELECT to_regclass('conversation_messages')")
+                  assert await connection.fetchval("SELECT to_regclass('answer_attempts')")
                   return owners[0]['id']
               finally:
                   await connection.close()
@@ -174,10 +179,15 @@ jobs:
 
           # Real PostgreSQL and application lifespan; HTTP requests use ASGI in-process.
           created_kb = None
+          accepted_job = None
+          upload_key = str(uuid4())
+          source_directory = tempfile.TemporaryDirectory()
           create_body = {'name': '  CI synthetic library  ', 'client_request_id': str(uuid4())}
           write_headers = {'Origin': 'http://127.0.0.1:5173'}
           for _ in range(2):
-              with TestClient(create_app(), base_url='http://127.0.0.1', client=('127.0.0.1', 50000)) as api:
+              application = create_app()
+              application.state.source_root = Path(source_directory.name)
+              with TestClient(application, base_url='http://127.0.0.1', client=('127.0.0.1', 50000)) as api:
                   response = api.get('/api/health')
                   assert response.status_code == 200
                   assert response.json() == {'status': 'alive', 'database_configured': True}
@@ -217,6 +227,11 @@ jobs:
                                       headers=write_headers)
                   assert response.status_code == 409
                   assert response.json()['detail']['code'] == 'kb_not_ready'
+                  response = api.post(f"/api/conversations/{uuid4()}/messages", json={
+                      'client_message_id': str(uuid4()), 'text': 'Synthetic question',
+                  }, headers=write_headers)
+                  assert response.status_code == 503
+                  assert response.json()['detail']['code'] == 'answer_disabled'
                   assert api.post('/api/knowledge-bases', json=create_body).status_code == 403
                   for headers in (
                       {'Host': 'untrusted.invalid'}, {'Origin': 'https://untrusted.invalid'},
@@ -229,6 +244,25 @@ jobs:
                   assert response.status_code == 404
                   assert response.json()['detail']['code'] == 'kb_not_found'
                   assert api.get('/api/conversations?limit=0').status_code == 422
+                  response = api.post(f"/api/knowledge-bases/{created_kb['id']}/documents",
+                                      data={'client_request_id': upload_key},
+                                      files=[('files', ('synthetic.txt', b'Synthetic CI manual A001.'))],
+                                      headers=write_headers)
+                  assert response.status_code == 202
+                  if accepted_job is None:
+                      accepted_job = response.json()['id']
+                  assert response.json()['id'] == accepted_job, 'Upload replay created another job'
+                  for attempt in range(100):
+                      job = api.get(f'/api/jobs/{accepted_job}').json()
+                      if job['stage'] == 'parsed':
+                          break
+                      time.sleep(0.1)
+                  assert job['status'] == 'queued' and job['stage'] == 'parsed'
+                  assert job['engine_mutated'] is False, 'CI must never invoke model ingestion'
+                  documents = api.get(f"/api/knowledge-bases/{created_kb['id']}/documents").json()['items']
+                  assert len(documents) == 1 and documents[0]['status'] == 'parsed'
+                  assert api.get(f"/api/documents/{documents[0]['id']}/original").content == b'Synthetic CI manual A001.'
+          source_directory.cleanup()
 
           with TestClient(create_app(Settings()), base_url='http://127.0.0.1', client=('127.0.0.1', 50000)) as api:
               response = api.get('/api/status')
@@ -237,5 +271,5 @@ jobs:
               response = api.get('/api/knowledge-bases')
               assert response.status_code == 503
               assert response.json()['detail']['code'] == 'database_not_configured'
-          print('Migrations, stable owner, API lifecycle, lists, boundaries, and missing configuration passed.')
+          print('Migrations, ownership, restart, upload replay, bounded parsing, private source and local boundaries passed; no model calls.')
           PY

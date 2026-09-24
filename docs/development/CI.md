@@ -1,6 +1,8 @@
 # GitHub CI
 
-工作流位于 [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml)，在推送、Pull Request 和手动触发时运行。打开仓库的 [Actions 页面](https://github.com/JX05120LLL/CiteRAG/actions) 查看各次运行；已核验的首次结果记录如下。
+M1-3 补记：公开工作流随 `0005_answer_attempts` 校验消息/回答表存在，并检查默认问答关闭返回 `answer_disabled`；仍只用临时 PostgreSQL 和合成资料，不调用真实模型。此前远端成功运行只覆盖 `fbafd86`；新增改动的运行结果应按对应提交核对，本机冒烟结果另见 [M1 验证记录](M1-VALIDATION.md)。
+
+工作流位于 [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml)，在推送、Pull Request 和手动触发时运行。接手实查 `fbafd86` 对应的 [CI #35957495928](https://github.com/JX05120LLL/CiteRAG/actions/runs/35957495928) 三个作业均成功；该历史结果仅覆盖 M1-1，不覆盖后续 M1-2/M1-3 代码。其他运行见 [Actions](https://github.com/JX05120LLL/CiteRAG/actions)。
 
 已核验的首次运行：提交 [`ed26168`](https://github.com/JX05120LLL/CiteRAG/commit/ed261687485a7de832fbd3383831fbe98ff6dc2c) 的 [CI #35708529819](https://github.com/JX05120LLL/CiteRAG/actions/runs/35708529819) **成功**，Repository boundaries、Frontend build and smoke、Backend and PostgreSQL smoke 三个作业均通过。此结论只对应该提交，后续提交以各自运行结果为准。
 
@@ -11,7 +13,7 @@
 | 提交文件范围 | 拒绝已跟踪的本地辅助脚本、专用测试、凭证配置及运行产物路径；仅检查路径，不等于完整密钥扫描。 |
 | 前端 | 按锁文件安装依赖、TypeScript 类型检查、Vite 构建及构建产物冒烟检查。 |
 | 后端静态检查 | 按锁文件安装依赖、Ruff、Python 编译及 Alembic 迁移 SQL 生成。 |
-| 后端集成冒烟 | 独立临时 PostgreSQL 17.9 上执行新库迁移与重复迁移，核对本地归属不变；通过 TestClient 启停真实应用生命周期并发起进程内 ASGI 请求，检查存活、数据库状态、空知识库/聊天列表、来源拒绝、不存在知识库及缺失配置的响应。 |
+| 后端集成冒烟 | 临时 PostgreSQL 17.9 上执行 `0004` 新库/重复迁移，核对本地归属；TestClient 启停真实应用生命周期，检查建库/改名/幂等、上传受理与同键任务重放、受限 TXT 解析、私有原文、重启后仍为 parsed 等待及本地请求边界。 |
 
 CI 仅具有 `contents: read` 权限，不部署、不连接真实模型，也不读取工作站数据或凭证。PostgreSQL 服务仅供该 CI 作业使用，使用临时免密实例，无需为本工作流添加真实 GitHub Secrets；此方式不适用于持久业务数据库。
 
@@ -23,8 +25,14 @@ CI 覆盖安装、构建、迁移与基础 HTTP 行为，不能替代本机完�
 
 CI 通过不代表 M0 完成。固定 SDK、pgvector、模型与重排、双知识库隔离和可核查来源已有独立真实验收；Embedding 超长输入边界仍未通过，详见[路线图](ROADMAP.md)与[M0 验证记录](M0-VALIDATION.md)。
 
-## M1-1 检查增量
+## M1-1 历史检查增量
 
 用户允许先推进 M1-1，M0 保持未完成。工作流增加 `0003_knowledge_management` 迁移和知识库创建/重放/改名/重启持久化的临时 PostgreSQL 冒烟；它不运行本机专用测试，不连接真实模型，也不升级维护者实际业务库。并发去重、容量竞争、旧记录保留、失败事务与回退门禁由本机隔离 PostgreSQL 测试补足，实际本轮结果见 [M1 验证记录](M1-VALIDATION.md)。
 
-本轮未 commit、push 或触发 GitHub 运行，工作流文件更新不等于远端 CI 已通过。新代码需要显式迁移并重启；既有 8000 服务仍为旧基线。
+M1-1 已随后提交为 `fbafd86`，远程结果见本文开头；开发时未 push 的记录是历史快照。
+
+## M1-2 检查增量
+
+公共基础冒烟已追加 `0004_managed_ingestion` 迁移、同一上传键重放、解析子进程、原文访问及应用生命周期重启。`CITERAG_INGESTION_ENABLED` 保持默认 false，断言解析后仍未修改引擎；CI 不安装/运行真实模型链路。专用生命周期、并发故障、真实 SDK＋隔离引擎库和浏览器测试仍仅本机。
+
+当前工作流修改未 commit/push，也未触发本次远端运行；本机执行及最终检查计数见 [M1 验证记录](M1-VALIDATION.md)，不能把旧提交的绿色作业计为本片通过。实际业务库仍为 `0002`、旧 8000 API 未升级；CI 通过也不等于 M0 或完整 M1 验收完成。

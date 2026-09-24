@@ -12,6 +12,73 @@ export interface Conversation {
   created_at: string;
 }
 
+export interface Citation {
+  evidence_id: string;
+  document_id: string;
+  filename: string;
+  locator: Record<string, string | number>;
+  excerpt: string;
+}
+
+export interface ChatMessage {
+  message_id: string;
+  attempt_id: string;
+  client_message_id: string;
+  question: string;
+  mode: 'semantic' | 'exact';
+  status: 'running' | 'answered' | 'insufficient_evidence' | 'needs_clarification' |
+    'conflicting_evidence' | 'failed' | 'interrupted';
+  text: string;
+  citations: Citation[];
+  kb_revision: number;
+  error_code: string | null;
+  created_at: string;
+  saved: boolean;
+  stale?: boolean;
+  hidden?: boolean;
+}
+
+export interface ManagedDocument {
+  id: string;
+  filename: string;
+  size: number;
+  status: 'pending' | 'parsing' | 'parsed' | 'indexing' | 'ready' | 'failed';
+  error_code: string | null;
+  created_at: string;
+  doc_code: string | null;
+  model_code: string | null;
+  edition: string | null;
+}
+
+export interface ExactFilter {
+  doc_code?: string;
+  model_code?: string;
+  edition?: string;
+  phrase?: string;
+}
+
+export interface IngestionJob {
+  id: string;
+  kb_id: string;
+  operation: 'upload' | 'rebuild';
+  status: 'queued' | 'running' | 'succeeded' | 'failed' | 'interrupted';
+  stage: 'accepted' | 'parsing' | 'parsed' | 'indexing' | 'verifying' | 'complete';
+  error_code: string | null;
+  document_ids: string[];
+  created_at: string;
+  engine_mutated: boolean;
+  can_retry: boolean;
+  cleanup_pending?: boolean;
+}
+
+export interface ParsedBlock {
+  ordinal: number;
+  text: string;
+  locator: Record<string, string | number>;
+  start: number;
+  end: number;
+}
+
 export interface SystemHealth {
   status: 'partial';
   mode: 'local_single_user';
@@ -62,19 +129,32 @@ const recoveryMessages: Record<string, string> = {
 const conflictMessages: Record<string, string> = {
   capacity_exceeded: '最多可创建 5 个知识库，当前已达到上限。',
   idempotency_conflict: '请求与先前的名称不一致，请刷新列表并检查已创建的知识库。',
+  kb_not_ready: '知识库尚未就绪，当前不能问答。',
+  answer_in_progress: '当前聊天已有提问正在处理。',
+  kb_changed: '知识库在回答期间发生变化，本次结果已停止；请刷新后重新提问。',
+};
+
+const documentErrors: Record<string, string> = {
+  file_count: '每批请选择 1–5 个文件。',
+  file_size: '文件须非空且每份不超过 20 MiB。',
+  file_type: '请选择 UTF-8 TXT、Markdown、文字 PDF 或普通 DOCX。',
+  pending_files_changed: '请选择原请求中的同名、同大小文件。服务端会再次核对文件内容。',
+  exact_filter: '精确查询须填写至少一项已确认的文档属性。',
 };
 
 const databaseErrors: Record<string, string> = {
   database_not_configured: '业务数据库尚未配置。请按本地开发指南配置数据库并执行初始化迁移，然后重启后端。',
   database_unavailable: '业务数据库暂不可用。请检查数据库连接和初始化迁移，然后重试。',
   persistence_failed: '业务数据库操作未完成。请检查数据库连接和初始化迁移，然后重试。',
+  answer_disabled: '文字问答尚未启用；解析完成不等于已入库。',
 };
 
 export class ApiError extends Error {
   constructor(public readonly kind: ErrorKind, public readonly code = '') {
     super(kind === 'unavailable' ? databaseErrors[code] ?? errorMessages[kind]
       : kind === 'conflict' ? conflictMessages[code] ?? errorMessages[kind]
-      : kind === 'local-storage' ? recoveryMessages[code] ?? errorMessages[kind] : errorMessages[kind]);
+      : kind === 'local-storage' ? recoveryMessages[code] ?? errorMessages[kind]
+      : kind === 'validation' ? documentErrors[code] ?? errorMessages[kind] : errorMessages[kind]);
   }
 }
 
@@ -126,15 +206,67 @@ function knowledgeBase(value: unknown): KnowledgeBase {
   return { id: value.id, name: value.name, status: value.status };
 }
 
+function isDocument(value: Record<string, unknown>): boolean {
+  return typeof value.id === 'string' && typeof value.filename === 'string' &&
+    Number.isInteger(value.size) && Number(value.size) >= 0 &&
+    ['pending', 'parsing', 'parsed', 'indexing', 'ready', 'failed'].includes(String(value.status)) &&
+    (value.error_code === null || typeof value.error_code === 'string') && isVerificationTime(value.created_at) &&
+    ['doc_code', 'model_code', 'edition'].every((key) => value[key] == null || typeof value[key] === 'string');
+}
+
+function ingestionJob(value: unknown): IngestionJob {
+  if (!isRecord(value) || typeof value.id !== 'string' || typeof value.kb_id !== 'string' ||
+      !['upload', 'rebuild'].includes(String(value.operation)) ||
+      !['queued', 'running', 'succeeded', 'failed', 'interrupted'].includes(String(value.status)) ||
+      !['accepted', 'parsing', 'parsed', 'indexing', 'verifying', 'complete'].includes(String(value.stage)) ||
+      (value.error_code !== null && typeof value.error_code !== 'string') ||
+      !Array.isArray(value.document_ids) || !value.document_ids.every((id) => typeof id === 'string') ||
+      !isVerificationTime(value.created_at) || typeof value.engine_mutated !== 'boolean' || typeof value.can_retry !== 'boolean' ||
+      (value.status === 'succeeded') !== (value.stage === 'complete') ||
+      (value.cleanup_pending !== undefined && typeof value.cleanup_pending !== 'boolean')) throw new ApiError('invalid-response');
+  // Free-form backend messages may contain provider details; never pass them to the UI.
+  return { id: value.id, kb_id: value.kb_id, operation: value.operation as IngestionJob['operation'],
+    status: value.status as IngestionJob['status'], stage: value.stage as IngestionJob['stage'],
+    error_code: value.error_code, document_ids: value.document_ids as string[], created_at: value.created_at,
+    engine_mutated: value.engine_mutated, can_retry: value.can_retry,
+    ...(value.cleanup_pending === undefined ? {} : { cleanup_pending: value.cleanup_pending }) };
+}
+
+function parsedBlock(value: Record<string, unknown>): boolean {
+  return Number.isInteger(value.ordinal) && Number(value.ordinal) >= 0 && typeof value.text === 'string' &&
+    Number.isInteger(value.start) && Number(value.start) >= 0 && Number.isInteger(value.end) && Number(value.end) >= Number(value.start) &&
+    isRecord(value.locator) && Object.values(value.locator).every((part) => typeof part === 'string' || (typeof part === 'number' && Number.isFinite(part)));
+}
+
+function chatMessage(value: unknown): ChatMessage {
+  if (!isRecord(value) || !['message_id', 'attempt_id', 'client_message_id', 'question', 'text'].every((key) =>
+      typeof value[key] === 'string') ||
+      !['running', 'answered', 'insufficient_evidence', 'needs_clarification',
+        'conflicting_evidence', 'failed', 'interrupted'].includes(String(value.status)) ||
+      !Array.isArray(value.citations) || !value.citations.every((item: unknown) => isRecord(item) &&
+        ['evidence_id', 'document_id', 'filename', 'excerpt'].every((key) => typeof item[key] === 'string') &&
+        isRecord(item.locator) && Object.values(item.locator).every((part) =>
+          typeof part === 'string' || (typeof part === 'number' && Number.isFinite(part)))) ||
+      !['semantic', 'exact'].includes(String(value.mode)) ||
+      !Number.isInteger(value.kb_revision) || Number(value.kb_revision) < 0 ||
+      (value.error_code !== null && typeof value.error_code !== 'string') ||
+      !isVerificationTime(value.created_at) || typeof value.saved !== 'boolean' ||
+      (value.stale !== undefined && typeof value.stale !== 'boolean') ||
+      (value.hidden !== undefined && typeof value.hidden !== 'boolean')) throw new ApiError('invalid-response');
+  return value as unknown as ChatMessage;
+}
+
 export function createApi(fetcher: typeof fetch = globalThis.fetch) {
-  async function request(path: string, method: 'GET' | 'POST' | 'PATCH' = 'GET', body?: unknown): Promise<unknown> {
+  async function request(path: string, method: 'GET' | 'POST' | 'PATCH' = 'GET', body?: unknown,
+                         timeoutMs = 10000): Promise<unknown> {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000);
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
+      const multipart = body instanceof FormData;
       const response = await fetcher(path, {
         method, credentials: 'omit',
-        headers: { Accept: 'application/json', ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: controller.signal,
+        headers: { Accept: 'application/json', ...(body === undefined || multipart ? {} : { 'Content-Type': 'application/json' }) },
+        ...(body === undefined ? {} : { body: multipart ? body : JSON.stringify(body) }), signal: controller.signal,
       });
       let value: unknown = null;
       try { value = await response.json(); }
@@ -159,8 +291,44 @@ export function createApi(fetcher: typeof fetch = globalThis.fetch) {
       knowledgeBase(await request('/api/knowledge-bases', 'POST', { name, client_request_id: clientRequestId })),
     renameKnowledgeBase: async (id: string, name: string): Promise<KnowledgeBase> =>
       knowledgeBase(await request(`/api/knowledge-bases/${encodeURIComponent(id)}`, 'PATCH', { name })),
+    documents: async (kbId: string): Promise<ManagedDocument[]> =>
+      collection<Record<string, unknown>>(await request(`/api/knowledge-bases/${encodeURIComponent(kbId)}/documents`), isDocument)
+        .map((item) => ({ ...item, doc_code: item.doc_code ?? null, model_code: item.model_code ?? null,
+          edition: item.edition ?? null }) as unknown as ManagedDocument),
+    updateDocumentAttributes: async (id: string, values: {doc_code: string | null; model_code: string | null; edition: string | null}): Promise<ManagedDocument> => {
+      const value = await request(`/api/documents/${encodeURIComponent(id)}/attributes`, 'PATCH', values);
+      if (!isRecord(value) || !isDocument(value)) throw new ApiError('invalid-response');
+      return value as unknown as ManagedDocument;
+    },
+    jobs: async (kbId: string): Promise<IngestionJob[]> =>
+      collection<Record<string, unknown>>(await request(`/api/knowledge-bases/${encodeURIComponent(kbId)}/jobs`), () => true).map(ingestionJob),
+    job: async (id: string): Promise<IngestionJob> => ingestionJob(await request(`/api/jobs/${encodeURIComponent(id)}`)),
+    uploadDocuments: async (kbId: string, files: File[], clientRequestId: string): Promise<IngestionJob> => {
+      const data = new FormData();
+      data.set('client_request_id', clientRequestId);
+      for (const file of files) data.append('files', file);
+      return ingestionJob(await request(`/api/knowledge-bases/${encodeURIComponent(kbId)}/documents`, 'POST', data));
+    },
+    retryJob: async (id: string): Promise<IngestionJob> => ingestionJob(await request(`/api/jobs/${encodeURIComponent(id)}/retry`, 'POST')),
+    rebuild: async (kbId: string, clientRequestId: string): Promise<IngestionJob> =>
+      ingestionJob(await request(`/api/knowledge-bases/${encodeURIComponent(kbId)}/rebuild`, 'POST', { client_request_id: clientRequestId })),
+    blocks: async (id: string): Promise<ParsedBlock[]> =>
+      collection(await request(`/api/documents/${encodeURIComponent(id)}/blocks`), parsedBlock),
     conversations: async (): Promise<Conversation[]> => collection(await request('/api/conversations?limit=20&offset=0'), (item) =>
       ['id', 'owner_id', 'kb_id', 'title', 'created_at'].every((key) => typeof item[key] === 'string')),
+    createConversation: async (kbId: string): Promise<Conversation> => {
+      const value = await request('/api/conversations', 'POST', { kb_id: kbId });
+      if (!isRecord(value) || !['id', 'owner_id', 'kb_id', 'title', 'created_at'].every((key) =>
+        typeof value[key] === 'string')) throw new ApiError('invalid-response');
+      return value as unknown as Conversation;
+    },
+    conversationMessages: async (id: string): Promise<ChatMessage[]> =>
+      collection<Record<string, unknown>>(await request(`/api/conversations/${encodeURIComponent(id)}/messages`),
+        () => true).map(chatMessage),
+    askMessage: async (id: string, text: string, key: string,
+                       mode: 'semantic' | 'exact' = 'semantic', exact?: ExactFilter): Promise<ChatMessage> =>
+      chatMessage(await request(`/api/conversations/${encodeURIComponent(id)}/messages`, 'POST',
+        { client_message_id: key, text, mode, ...(mode === 'exact' ? { exact } : {}) }, 60000)),
     health: async (): Promise<SystemHealth> => {
       const value = await request('/api/status');
       if (!isRecord(value) || value.status !== 'partial' || value.mode !== 'local_single_user' ||

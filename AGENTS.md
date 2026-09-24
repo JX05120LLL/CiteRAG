@@ -4,7 +4,8 @@
 - 产品范围以当前 PRD 为准，技术边界以架构文档为准；不能从演示截图推断新增业务需求。
 - 首版本地单用户，无管理员、注册或登录；使用者管理自己的知识库。API 仅面向回环地址，后续多用户不属于首版。
 - 当前已确定：CiteRAG 名称、A 版 UI、无字「回响」Logo。正式资产在 `assets/brand/`，UI 在 `design/ui/`。
-- 阶段顺序以 `docs/development/ROADMAP.md` 为准。2026-09-24 用户明确授权在 Embedding 超长输入边界暂缓、M0 仍未完成的情况下先推进 M1；本次先做 M1-1 知识库创建、改名与列表持久化，不把阶段顺序例外当成 M0 验收通过。前端原生 TypeScript + HTML/CSS，不引入 React/Vue。
+- 阶段顺序以 `docs/development/ROADMAP.md` 为准。2026-09-24 用户授权在 Embedding 超长输入边界暂缓、M0 未完成时先推进 M1；M1-1 已提交为 `fbafd86`，M1-2 与 M1-3 问答首片已实现并通过本机分层验证。不把阶段顺序例外或隔离验证当成 M0/完整 M1 验收通过。前端原生 TypeScript + HTML/CSS，不引入 React/Vue。
+- 入库与问答默认关闭，`CITERAG_INGESTION_ENABLED=false`、`CITERAG_ANSWER_ENABLED=false`。真实模型请求必须先说明发送内容类别、次数上限、费用和数据影响并另获授权；已有模型/双库证据沿用，不重复付费验证。业务迁移、原文存储或配置变更先说明兼容性、数据影响及停写备份/恢复方式，不清空旧数据。
 - `.local/`、`LiveRAG/`、`LightRAG/`、`output/` 是本地材料或参考目录，不属于待发布项目，不递归加入 Git。
 - 不读取或输出真实凭证；不提交私人资料、运行数据或备份。
 - 非简单任务先说明范围与验证方式；不覆盖已有改动，不做无关重构。

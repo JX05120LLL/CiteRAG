@@ -9,6 +9,7 @@ interface KnowledgeActions {
   beginRename: (base: KnowledgeBase) => void;
   renameKnowledgeBase: () => Promise<void>;
   cancelRename: () => void;
+  openDocuments: (base: KnowledgeBase) => void;
 }
 
 function nameField(id: string, label: string, draft: KnowledgeDraft, disabled: boolean) {
@@ -97,11 +98,7 @@ export function renderKnowledge(main: HTMLElement, state: AppState, actions: Kno
   const title = el('div');
   title.append(heading('我的知识库'));
   title.append(el('p', 'metadata', bases ? `${bases.length} / ${knowledgeLimit} 个知识库` : '管理本地知识库名称与资料状态'));
-  const upload = action('上传资料', 'button secondary');
-  upload.disabled = true;
-  upload.prepend(icon('upload'));
-  upload.setAttribute('aria-describedby', 'upload-unavailable');
-  titlebar.append(title, upload);
+  titlebar.append(title);
   content.append(titlebar);
   content.append(createForm(state, actions.createKnowledgeBase));
   if (state.knowledgeNotice) content.append(alert(state.knowledgeNotice, 'success'));
@@ -112,7 +109,7 @@ export function renderKnowledge(main: HTMLElement, state: AppState, actions: Kno
   } else if (error) content.append(alert(error.message));
   else if (!bases?.length) {
     const empty = el('div', 'management-empty');
-    empty.append(icon('folder'), el('h2', '', '还没有知识库'), el('p', 'intro', '先为资料创建一个知识库。新建库暂无资料，不可问答；资料上传与入库将在后续阶段开放。'));
+    empty.append(icon('folder'), el('h2', '', '还没有知识库'), el('p', 'intro', '先为资料创建一个知识库，再进入「资料与任务」上传文件。新建库暂无资料，不可问答。'));
     content.append(empty);
   } else {
     const table = el('table', 'knowledge-table');
@@ -134,7 +131,10 @@ export function renderKnowledge(main: HTMLElement, state: AppState, actions: Kno
       const remove = action('删除', 'text-button');
       remove.disabled = true;
       remove.setAttribute('aria-describedby', 'upload-unavailable');
-      group.append(rename, remove);
+      const documents = action('资料与任务', 'text-button', () => actions.openDocuments(base));
+      documents.disabled = isKnowledgePending(state);
+      documents.setAttribute('aria-label', `资料与任务：${base.name}`);
+      group.append(documents, rename, remove);
       controls.append(group);
       item.append(name, el('td', 'knowledge-table-status', kbStatuses[base.status]), controls);
       body.append(item);
@@ -142,7 +142,7 @@ export function renderKnowledge(main: HTMLElement, state: AppState, actions: Kno
     table.append(head, body);
     content.append(table);
   }
-  const note = el('p', 'scope-note', '资料上传、入库与知识库删除尚未开放。问答将在资料链路接入后开放；上传完成不等于可问答。');
+  const note = el('p', 'scope-note', '进入「资料与任务」上传文件、核查解析位置和处理进度。上传受理不等于入库成功；资料就绪后可新建聊天，删除留后续切片。');
   note.id = 'upload-unavailable';
   const retry = action('刷新列表', 'button secondary', () => { void actions.refresh(); });
   retry.disabled = loading || isKnowledgePending(state);

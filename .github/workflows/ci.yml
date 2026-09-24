@@ -173,6 +173,9 @@ jobs:
           assert asyncio.run(schema_snapshot()) == original_owner, 'Migration changed the local owner'
 
           # Real PostgreSQL and application lifespan; HTTP requests use ASGI in-process.
+          created_kb = None
+          create_body = {'name': '  CI synthetic library  ', 'client_request_id': str(uuid4())}
+          write_headers = {'Origin': 'http://127.0.0.1:5173'}
           for _ in range(2):
               with TestClient(create_app(), base_url='http://127.0.0.1', client=('127.0.0.1', 50000)) as api:
                   response = api.get('/api/health')
@@ -188,7 +191,33 @@ jobs:
                   for path in ('/api/knowledge-bases', '/api/conversations'):
                       response = api.get(path)
                       assert response.status_code == 200
-                      assert response.json() == {'items': []}
+                      expected = [created_kb] if path == '/api/knowledge-bases' and created_kb else []
+                      assert response.json() == {'items': expected}
+                  response = api.post('/api/knowledge-bases', json=create_body, headers=write_headers)
+                  assert response.status_code == 201
+                  if created_kb is None:
+                      created_kb = response.json()
+                      assert set(created_kb) == {'id', 'name', 'status'}
+                      assert created_kb['name'] == 'CI synthetic library'
+                      assert created_kb['status'] == 'empty'
+                      response = api.patch(f"/api/knowledge-bases/{created_kb['id']}",
+                                           json={'name': 'CI renamed library'}, headers=write_headers)
+                      assert response.status_code == 200
+                      created_kb = response.json()
+                  else:
+                      assert response.json() == created_kb, 'Restart/replay lost library metadata'
+                  assert api.post('/api/knowledge-bases', json=create_body,
+                                  headers=write_headers).json() == created_kb
+                  response = api.post('/api/knowledge-bases',
+                                      json={**create_body, 'name': 'changed payload'},
+                                      headers=write_headers)
+                  assert response.status_code == 409
+                  assert response.json()['detail']['code'] == 'idempotency_conflict'
+                  response = api.post('/api/conversations', json={'kb_id': created_kb['id']},
+                                      headers=write_headers)
+                  assert response.status_code == 409
+                  assert response.json()['detail']['code'] == 'kb_not_ready'
+                  assert api.post('/api/knowledge-bases', json=create_body).status_code == 403
                   for headers in (
                       {'Host': 'untrusted.invalid'}, {'Origin': 'https://untrusted.invalid'},
                       {'X-Forwarded-For': '127.0.0.1'}, {'Sec-Fetch-Site': 'cross-site'},

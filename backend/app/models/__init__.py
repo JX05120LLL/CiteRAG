@@ -60,6 +60,15 @@ class KnowledgeBase(Base):
             "status IN ('empty', 'ready', 'maintaining', 'blocked')",
             name="ck_knowledge_bases_status",
         ),
+        UniqueConstraint(
+            "local_owner_id", "create_request_id", name="uq_knowledge_bases_create_request"
+        ),
+        CheckConstraint(
+            "(create_request_id IS NULL AND create_request_name IS NULL) OR "
+            "(create_request_id IS NOT NULL AND create_request_name IS NOT NULL "
+            "AND local_owner_id IS NOT NULL)",
+            name="ck_knowledge_bases_create_request",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
@@ -69,6 +78,8 @@ class KnowledgeBase(Base):
     )
     status: Mapped[str] = mapped_column(String(16), default="empty", server_default="empty")
     active_workspace: Mapped[str] = mapped_column(String(100), unique=True)
+    create_request_id: Mapped[UUID | None] = mapped_column()
+    create_request_name: Mapped[str | None] = mapped_column(String(120))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

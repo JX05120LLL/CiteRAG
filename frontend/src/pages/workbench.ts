@@ -42,7 +42,7 @@ export function renderWorkbench(main: HTMLElement, state: AppState, navigate: (p
     if (error) {
       content.append(alert(error.message), action('重新连接', 'button secondary', () => { void refresh(); }));
     } else {
-      content.append(el('p', 'intro', bases?.length ? '这里是你的本地知识库。新建聊天与问答将在后续阶段开放。' : '你可以在「我的知识库」查看本地资料状态。建库、资料上传与入库功能尚未开放。'));
+      content.append(el('p', 'intro', bases?.length ? '这里是你的本地知识库。新建聊天与问答将在后续阶段开放。' : '你可以前往「我的知识库」创建知识库。资料上传、入库与问答将在后续阶段开放。'));
       if (bases?.length) {
         const list = el('ul', 'knowledge-list');
         for (const base of bases) {

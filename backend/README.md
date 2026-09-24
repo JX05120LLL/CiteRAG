@@ -1,6 +1,8 @@
-# CiteRAG M0 后端
+# CiteRAG 后端
 
-Python 3.12、FastAPI、SQLAlchemy 2、Alembic 与 PostgreSQL 17。首版为本地单用户，无管理员、注册、登录或密码流程；服务端维护一个内部本地归属，关联自有知识库及聊天。尚无建库入库、问答、图片、语音和真实模型连接。
+Python 3.12、FastAPI、SQLAlchemy 2、Alembic 与 PostgreSQL 17。首版为本地单用户，无管理员、注册、登录或密码流程；服务端维护一个内部本地归属，关联自有知识库及聊天。M1-1 新增知识库创建、改名、列表持久化、创建幂等及 5 库上限，空库不可创建聊天；上传、任务、问答、图片和语音留后续阶段。M0 真实模型/双库证据沿用，Embedding 超长输入边界暂缓未通过，M0 与完整 M1 均未完成。
+
+本轮只在隔离测试库验证，既有 8000 服务和实际业务库保持旧基线。新增接口需显式迁移并重启后使用；验证进度见 [M1 记录](../docs/development/M1-VALIDATION.md)。
 
 ## 安装与无配置启动
 
@@ -29,9 +31,9 @@ uv run --no-env-file uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers
 uv run --no-env-file alembic upgrade head
 ```
 
-当前 head 为 `0002_local_single_user`。新库先经过原有 `0001_m0_accounts`，再建立单例 `local_profiles` 并为知识库和聊天新增 `local_owner_id`。旧 `users`、`auth_sessions`、知识库和聊天记录保留；聊天旧 `owner_id` 外键列保留且允许新本地聊天不填写。迁移不认领旧资料，不把已有账号变成默认用户，不需要执行管理员初始化。
+源码当前 head 为 `0003_knowledge_management`。新库先经过原有 `0001_m0_accounts` 和 `0002_local_single_user`，建立单例 `local_profiles` 并为知识库和聊天新增 `local_owner_id`；再为知识库增加 nullable `create_request_id UUID`、`create_request_name varchar(120)` 及本地归属＋创建键唯一约束。旧库两列保持 NULL，旧 `users`、`auth_sessions`、知识库和聊天记录保留；聊天旧 `owner_id` 外键列仍保留且允许新本地聊天不填写。迁移不认领旧资料，不把已有账号变成默认用户，不需要执行管理员初始化。现有业务库沿用 M0 记录的 `0002_local_single_user` 基线；本轮未迁移，也未直连 SQL 复查其版本。
 
-已有 CiteRAG 数据库升级前先备份，确认只作用于本项目业务库。正常运行不执行 downgrade；`0002` 在存在已归属本地的知识库或聊天时拒绝回退，避免丢失归属。数据库本身仍需有效 PostgreSQL 连接凭证，它不等于网页账号。
+已有 CiteRAG 数据库升级前先备份，确认只作用于本项目业务库。正常运行不执行 downgrade；`0003` 在存在已使用的创建键时拒绝回退，防止丢失幂等记录导致重复创建；`0002` 在存在已归属本地的知识库或聊天时拒绝回退，避免丢失归属。数据库本身仍需有效 PostgreSQL 连接凭证，它不等于网页账号。
 
 配置数据库后，启动必须持有独占 PostgreSQL owner 会话锁；第二个 API 进程启动失败。取得锁后检查 Alembic 版本，缺失、旧版或不兼容版本拒绝启动，不自动升级。持锁连接丢失后停止受理并终止进程。启动也拒绝全局 `POSTGRES_WORKSPACE` 或当前目录的 `config.ini`，不读取其可能包含的凭证。
 
@@ -45,7 +47,9 @@ API 仅监听回环地址，并验证真实连接来源、Host、Origin 和跨�
 
 - `GET /api/health`：`{status, database_configured}`，进程存活与是否配置数据库，不证明知识引擎已就绪。
 - `GET /api/status`：`{status, mode, database, rag, models}`；`mode` 为 `local_single_user`，不返回连接信息。
-- `GET /api/knowledge-bases`：`{items:[{id,name,status}]}`，列出本地归属下全部库状态。未实现建库或将库标为 ready 的接口，不自动创建演示库。
+- `GET /api/knowledge-bases`：`{items:[{id,name,status}]}`，列出本地归属下全部库状态，不自动创建演示库。
+- `POST /api/knowledge-bases`：`{name,client_request_id}` → 201 `{id,name,status}`，客户端创建键必须为 UUID。名称去首尾空白后为 1–120 字符，拒绝控制字符及额外字段。新库为 `empty`，创建不初始化引擎或发模型请求。同一本地归属、同键、同初始名称重放返回已有库；不同名称使用同键返回 `409 idempotency_conflict`。数据库事务串行去重和容量检查，最多 5 库，超额 `409 capacity_exceeded`；满额不影响已有请求重放。
+- `PATCH /api/knowledge-bases/{id}`：`{name}` → 200 `{id,name,status}`，只修改本地归属下的显示名称；不改变状态、空间或创建幂等记录。改名后的原始创建请求重放返回当前名称，不恢复旧名。不存在或未归属资料返回 404。
 - `POST /api/conversations`：`{kb_id,title}` → 201，只允许本地归属下已就绪的知识库，聊天固定该库。
 - `GET /api/conversations?limit=20&offset=0`：返回当前本地归属的聊天列表。
 - `GET /api/conversations/{id}`：只读取本地归属及正确知识库绑定的聊天，未归属旧记录返回 404。
@@ -63,5 +67,7 @@ uv run --no-env-file alembic upgrade head --sql
 GitHub CI 使用独立临时 PostgreSQL 17.9，验证新库迁移、重复迁移与真实 API 响应，详见 [CI 说明](../docs/development/CI.md)。上述 `--sql` 命令只生成迁移 SQL，不连接数据库；实际数据库行为由 CI 冒烟或本地集成验证确认。
 
 `backend/tests/` 仅在维护者本机保留，不随仓库发布，新克隆无需运行 `pytest`。已有本地测试文件时，可运行 `uv run --no-env-file pytest -q`；未设置 `CITERAG_TEST_DATABASE_URL` 时真实 PostgreSQL 测试明确跳过，不用 SQLite 或内存库替代。独立测试实例准备、隐藏输入与执行方式见[本地开发的运行检查](../docs/development/LOCAL-DEVELOPMENT.md#运行检查)。本地测试还覆盖旧库升级保留、本地归属、知识库绑定及 owner 生命周期，不能用较小范围的 CI 冒烟代替。禁止把真实业务库或共享实例作为测试目标。
+
+M1-1 的隔离 PostgreSQL 测试覆盖并发幂等、5 库限制、失败事务不消费创建键、应用生命周期重启后的持久化、旧库升级与回退门禁；每轮实际结果见 [M1 验证记录](../docs/development/M1-VALIDATION.md)。
 
 LightRAG 为锁定提交的可选 `rag` 依赖，`uv sync --locked --extra rag` 才安装。安装成功不代表四类 PG 存储、双库真实检索或模型验证通过。当前行为结果与缺项见 [M0 验证记录](../docs/development/M0-VALIDATION.md)，旧账号方案计数只作历史证据。

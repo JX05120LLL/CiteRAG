@@ -7,9 +7,16 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.api.capabilities import load_capability_status
 from app.api.dependencies import LocalOwner, Session
-from app.api.schemas import ConversationCreate, ConversationView, KnowledgeBaseView
+from app.api.schemas import (
+    ConversationCreate,
+    ConversationView,
+    KnowledgeBaseCreate,
+    KnowledgeBaseRename,
+    KnowledgeBaseView,
+)
 from app.models import KnowledgeBase, LocalProfile
 from app.services.conversations import ConversationService
+from app.services.knowledge import KnowledgeService
 
 router = APIRouter(prefix="/api")
 
@@ -48,6 +55,18 @@ async def knowledge_bases(owner: LocalOwner, session: Session):
         .limit(100)
     )
     return {"items": [KnowledgeBaseView.model_validate(item) for item in items]}
+
+
+@router.post("/knowledge-bases", status_code=201, response_model=KnowledgeBaseView)
+async def create_knowledge_base(body: KnowledgeBaseCreate, owner: LocalOwner, session: Session):
+    return await KnowledgeService(session).create(owner, body.name, body.client_request_id)
+
+
+@router.patch("/knowledge-bases/{kb_id}", response_model=KnowledgeBaseView)
+async def rename_knowledge_base(
+    kb_id: UUID, body: KnowledgeBaseRename, owner: LocalOwner, session: Session,
+):
+    return await KnowledgeService(session).rename(owner, kb_id, body.name)
 
 
 @router.post("/conversations", status_code=201, response_model=ConversationView)

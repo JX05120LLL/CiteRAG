@@ -1,6 +1,12 @@
 # M0 验证记录
 
-## 最新 LightRAG 真实联调（2026-09-24）
+## M1 开始后的 M0 状态（2026-09-24）
+
+用户明确允许暂缓 Embedding 超长输入边界、先推进 M1-1 知识库创建/改名/列表。该项仍未通过，**M0 整体未完成**；阶段顺序例外不改变以下真实证据或 M0 通过条件。M1 本轮新增真实模型请求为 **0**，既有 8000 服务只读 `database/models/rag=available`；本轮不升级实际业务库或重启该服务。M1 的实现、隔离 PostgreSQL/浏览器验证与未完成范围单独记录在 [M1 验证记录](M1-VALIDATION.md)。
+
+以下保留 M0 各轮的原始证据和历史状态；其中“M1 未开始”等表述只对应当时快照，当前阶段以本节、[路线图](ROADMAP.md)和 [交接文档](HANDOFF.md)为准。
+
+## LightRAG 真实联调（M1 开始前，2026-09-24）
 
 用户明确授权本次最多 40 次百炼真实请求后，运行受控 `rag verify --real`，实际退出码 **0**。本次仅发送两份固定的合成 A/B 质保资料及 LightRAG 生成的受限提示词；实际预留 **21 次**模型请求，报告中的 21 个请求追踪标识互异。报告显示真实使用 `qwen-plus`、`text-embedding-v4`、`qwen3-rerank`，Embedding 维度 1024，独立引擎库 PostgreSQL 17 / pgvector 0.8.1，两套 workspace 的五类关键存储行共 **10 项**；来源隔离、删除、重开、清理四项验收标志均为 true。当前配置匹配的本机 `rag.json` 结果为 `available`，只读 API 实测 `database=available`、`models=available`、`rag=available`。核对仅在内存中对请求 ID 计数和去重，终端、文档和聊天只输出模型名、数量、布尔结果与版本，未输出任何 ID、请求/响应正文或凭证明文。两库数据已由验证器按生成的 workspace 清理；报告保存在 Git 忽略的本机目录。本次未重跑五模型连通或 Embedding 边界请求。
 

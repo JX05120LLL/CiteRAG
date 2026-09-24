@@ -1,8 +1,9 @@
 from datetime import datetime
 from typing import Annotated, Literal
+from unicodedata import category
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, StringConstraints
+from pydantic import BaseModel, ConfigDict, StringConstraints, field_validator
 
 from app.validation import CapabilityState
 
@@ -30,3 +31,24 @@ class KnowledgeBaseView(BaseModel):
     id: UUID
     name: str
     status: Literal["empty", "ready", "maintaining", "blocked"]
+
+
+class KnowledgeBaseRename(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: Annotated[
+        str, StringConstraints(strict=True, strip_whitespace=True, min_length=1, max_length=120)
+    ]
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def printable_name(cls, value: object) -> object:
+        if isinstance(value, str) and any(
+            category(character).startswith("C") for character in value
+        ):
+            raise ValueError("Knowledge base names must not contain control characters")
+        return value
+
+
+class KnowledgeBaseCreate(KnowledgeBaseRename):
+    client_request_id: UUID

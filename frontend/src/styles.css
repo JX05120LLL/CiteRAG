@@ -120,7 +120,26 @@ p { margin: 0; }
 .knowledge-table { width: 100%; margin-top: 26px; border-collapse: collapse; text-align: left; }
 .knowledge-table th { color: var(--muted); font-size: 12px; font-weight: 400; padding: 14px 0; border-bottom: 1px solid var(--line); }
 .knowledge-table td { padding: 24px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
-.knowledge-table th:first-child { width: 65%; }
+.knowledge-table th:first-child { width: 52%; }
+.knowledge-table th:last-child { width: 112px; }
+.knowledge-table td { padding-right: 16px; vertical-align: top; }
+.knowledge-table td:last-child { padding-right: 0; }
+.knowledge-table-status { color: var(--muted); font-size: 13px; }
+.row-actions { display: flex; flex-wrap: wrap; gap: 16px; }
+.row-actions .text-button { min-height: 40px; margin-top: -8px; }
+.knowledge-form { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px; }
+.create-knowledge-form { margin-top: 28px; padding: 24px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.knowledge-field { flex: 1 1 240px; min-width: 0; }
+.knowledge-field label { display: block; margin-bottom: 8px; font-size: 13px; font-weight: 600; }
+.name-input { display: block; width: 100%; min-height: 42px; padding: 8px 14px; border: 1px solid #a0a0a0; border-radius: 12px; color: inherit; background: #fff; }
+.name-input:disabled, .name-input:read-only { background: var(--soft); }
+.name-input[aria-invalid="true"] { border-color: var(--error); }
+.field-hint { color: var(--muted); font-size: 12px; line-height: 1.8; margin-top: 7px; }
+.form-controls { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 29px; }
+.knowledge-form .notice, .form-note { flex-basis: 100%; margin: 0; max-width: none; }
+.rename-knowledge-form .knowledge-field { flex-basis: 100%; }
+.rename-knowledge-form .form-controls { padding-top: 0; }
+.rename-knowledge-form .button { padding: 8px 14px; }
 .health-list { max-width: 760px; margin: 30px 0; }
 .health-row { display: flex; justify-content: space-between; gap: 24px; padding: 22px 0; border-bottom: 1px solid var(--line); }
 .health-row dd { margin: 0; color: var(--muted); text-align: right; }
@@ -181,6 +200,12 @@ p { margin: 0; }
   .management-nav { display: flex; flex-wrap: wrap; gap: 8px; }
   .management-frame .management-content { padding: 24px 20px; }
   .management-frame h1 { font-size: 22px; }
+  .create-knowledge-form .form-controls { padding-top: 0; }
+  .knowledge-table th:first-child { width: 46%; }
+  .knowledge-table th:last-child { width: 52px; }
+  .knowledge-table td { padding-right: 8px; font-size: 13px; }
+  .row-actions { gap: 8px; }
+  .rename-knowledge-form .button { padding: 7px 10px; font-size: 12px; }
   .health-row { display: block; padding: 18px 0; }
   .health-row dd { margin-top: 8px; text-align: left; }
   .health-detail { max-width: none; }

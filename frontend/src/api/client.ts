@@ -37,7 +37,9 @@ export interface RagInfo {
   last_verified_at?: string;
 }
 
-export type ErrorKind = 'forbidden' | 'unavailable' | 'http' | 'network' | 'invalid-response';
+export type ErrorKind = 'forbidden' | 'unavailable' | 'http' | 'network' | 'invalid-response' | 'validation' | 'conflict' | 'not-found' | 'local-storage';
+
+export const nameValidationMessage = '名称须为 1–120 个字符，不能仅含空白或包含控制字符。';
 
 const errorMessages: Record<ErrorKind, string> = {
   forbidden: '请求被本地访问规则拒绝，请使用本机工作台地址重试。',
@@ -45,6 +47,21 @@ const errorMessages: Record<ErrorKind, string> = {
   http: '请求未完成，请稍后重试。',
   network: '无法连接服务，请检查服务是否启动及网络连接。',
   'invalid-response': '服务返回的数据不完整，请稍后重试。',
+  validation: nameValidationMessage,
+  conflict: '操作与当前资料状态冲突，请刷新列表后重试。',
+  'not-found': '知识库已不存在或不属于当前本地安装，请刷新列表。',
+  'local-storage': '浏览器恢复记录暂不可用，请允许当前页面使用会话存储后重试。',
+};
+
+const recoveryMessages: Record<string, string> = {
+  recovery_read_failed: '浏览器恢复记录无法读取，已暂停创建。请允许当前页面使用会话存储后刷新页面。',
+  recovery_write_failed: '浏览器恢复记录无法保存，本次尚未发起创建。请允许当前页面使用会话存储后重试。',
+  recovery_clear_failed: '请求已返回，但浏览器恢复记录未能清除。请恢复会话存储后重试确认。',
+};
+
+const conflictMessages: Record<string, string> = {
+  capacity_exceeded: '最多可创建 5 个知识库，当前已达到上限。',
+  idempotency_conflict: '请求与先前的名称不一致，请刷新列表并检查已创建的知识库。',
 };
 
 const databaseErrors: Record<string, string> = {
@@ -55,7 +72,9 @@ const databaseErrors: Record<string, string> = {
 
 export class ApiError extends Error {
   constructor(public readonly kind: ErrorKind, public readonly code = '') {
-    super(kind === 'unavailable' ? databaseErrors[code] ?? errorMessages[kind] : errorMessages[kind]);
+    super(kind === 'unavailable' ? databaseErrors[code] ?? errorMessages[kind]
+      : kind === 'conflict' ? conflictMessages[code] ?? errorMessages[kind]
+      : kind === 'local-storage' ? recoveryMessages[code] ?? errorMessages[kind] : errorMessages[kind]);
   }
 }
 
@@ -97,19 +116,33 @@ function collection<T>(value: unknown, valid: (item: Record<string, unknown>) =>
   return value.items as T[];
 }
 
+function isKnowledgeBase(value: unknown): value is KnowledgeBase {
+  return isRecord(value) && typeof value.id === 'string' && typeof value.name === 'string' &&
+    typeof value.status === 'string' && ['empty', 'ready', 'maintaining', 'blocked'].includes(value.status);
+}
+
+function knowledgeBase(value: unknown): KnowledgeBase {
+  if (!isKnowledgeBase(value)) throw new ApiError('invalid-response');
+  return { id: value.id, name: value.name, status: value.status };
+}
+
 export function createApi(fetcher: typeof fetch = globalThis.fetch) {
-  async function request(path: string): Promise<unknown> {
+  async function request(path: string, method: 'GET' | 'POST' | 'PATCH' = 'GET', body?: unknown): Promise<unknown> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10000);
     try {
       const response = await fetcher(path, {
-        method: 'GET', credentials: 'omit', headers: { Accept: 'application/json' }, signal: controller.signal,
+        method, credentials: 'omit',
+        headers: { Accept: 'application/json', ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: controller.signal,
       });
       let value: unknown = null;
       try { value = await response.json(); }
       catch { if (response.ok) throw new ApiError('invalid-response'); }
       if (!response.ok) {
-        const kind: ErrorKind = response.status === 403 ? 'forbidden' : response.status === 503 ? 'unavailable' : 'http';
+        const kind: ErrorKind = response.status === 403 ? 'forbidden' : response.status === 503 ? 'unavailable'
+          : response.status === 422 ? 'validation' : response.status === 409 ? 'conflict'
+          : response.status === 404 ? 'not-found' : 'http';
         const code = isRecord(value) && isRecord(value.detail) && typeof value.detail.code === 'string' ? value.detail.code : '';
         throw new ApiError(kind, code);
       }
@@ -121,8 +154,11 @@ export function createApi(fetcher: typeof fetch = globalThis.fetch) {
   }
 
   return {
-    knowledgeBases: async (): Promise<KnowledgeBase[]> => collection(await request('/api/knowledge-bases'), (item) =>
-      typeof item.id === 'string' && typeof item.name === 'string' && ['empty', 'ready', 'maintaining', 'blocked'].includes(String(item.status))),
+    knowledgeBases: async (): Promise<KnowledgeBase[]> => collection(await request('/api/knowledge-bases'), isKnowledgeBase),
+    createKnowledgeBase: async (name: string, clientRequestId: string): Promise<KnowledgeBase> =>
+      knowledgeBase(await request('/api/knowledge-bases', 'POST', { name, client_request_id: clientRequestId })),
+    renameKnowledgeBase: async (id: string, name: string): Promise<KnowledgeBase> =>
+      knowledgeBase(await request(`/api/knowledge-bases/${encodeURIComponent(id)}`, 'PATCH', { name })),
     conversations: async (): Promise<Conversation[]> => collection(await request('/api/conversations?limit=20&offset=0'), (item) =>
       ['id', 'owner_id', 'kb_id', 'title', 'created_at'].every((key) => typeof item[key] === 'string')),
     health: async (): Promise<SystemHealth> => {

@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async
 
 from app.config import Settings
 
-EXPECTED_SCHEMA_REVISION = "0002_local_single_user"
+EXPECTED_SCHEMA_REVISION = "0003_knowledge_management"
 
 
 class Database:

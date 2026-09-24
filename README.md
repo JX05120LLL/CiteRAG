@@ -6,14 +6,17 @@ A local, single-user multimodal knowledge assistant, designed around answers wit
 
 本地单用户多模态知识助手。使用者直接管理自己的知识库，通过文字、实时语音和图片提问，核查回答来源，并保存聊天继续交流。首版无需注册、登录或创建管理员。
 
-**当前阶段：M0 尚未整体验收，M1 未开始。** 工程、本地业务库与五模型连通已有验证；短文本 Embedding 实测 1024 维，超长输入边界按用户决定暂缓、仍未通过。固定 LightRAG、真实百炼与独立 PostgreSQL 的双库入库/检索验收已通过，当前状态 API 的 `rag=available`；这不豁免剩余边界验收。原生 TypeScript/Vite 前端、FastAPI、本地单用户归属与 GitHub CI 已建立，保留 A 版 UI 和「回响」Logo。问答、入库、语音和图片尚未开放；设计图中的资料、回答和状态均为演示，旧图的管理员文案已失效。
+**当前阶段：M0 尚未整体验收；用户授权先推进 M1，首片 M1-1 已实现并通过本机验证，完整 M1 未完成。** 本片范围为知识库创建、改名、列表持久化、建库幂等与 5 库上限；空库仍不可建聊天，上传、任务、问答、语音和图片留后续阶段。实现与验证分别记录在 [M1 计划](docs/development/M1-IMPLEMENTATION.md)和 [M1 验证](docs/development/M1-VALIDATION.md)。
+
+五模型连通及固定 LightRAG＋真实百炼＋独立 PostgreSQL 双库验收沿用 M0 真实证据；短文本 Embedding 实测 1024 维，超长输入边界暂缓且仍未通过。既有 8000 服务只读状态为 `database/models/rag=available`，保持旧基线；本轮不升级实际业务库，新代码需显式迁移并重启后才能使用。原生 TypeScript/Vite、FastAPI、本地归属、A 版 UI 与「回响」Logo 保留。设计图中的资料、回答和状态均为演示，旧管理员文案已失效。
 
 ## 从这里开始
 
 - [文档目录](docs/README.md)：PRD、技术架构与阅读顺序。
 - [开发路线与 M0 清单](docs/development/ROADMAP.md)：接入验证 → 文字 → 语音 → 图片 → 试用。
+- [M1 分步计划](docs/development/M1-IMPLEMENTATION.md)与[验证记录](docs/development/M1-VALIDATION.md)：第一片知识库管理、后续切片与实际证据。
 - [当前进度与下次交接](docs/development/HANDOFF.md)：已验证基线、模型准备、剩余工作与续接提示词。
-- [M0 本地开发](docs/development/LOCAL-DEVELOPMENT.md)：安装、启动、配置边界与独立数据库测试。
+- [本地开发](docs/development/LOCAL-DEVELOPMENT.md)：安装、启动、配置边界与独立数据库测试。
 - [本地单用户调整](docs/development/M0-LOCAL-SINGLE-USER.md)：2026-09-22 确认的范围、数据兼容与验收计划。
 - [M0 验证记录](docs/development/M0-VALIDATION.md)：实际检查、模拟验证及尚未完成的真实接入条件。
 - [GitHub CI](docs/development/CI.md)：自动构建、静态检查与临时 PostgreSQL/API 冒烟验证；专用测试文件仅在本机保留。

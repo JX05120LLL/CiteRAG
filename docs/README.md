@@ -1,6 +1,6 @@
 # CiteRAG 文档导航
 
-当前阶段：**M0 尚未整体验收，M1 未开始**。五模型连通已有真实证据，短文本 Embedding 实测 1024 维；超长输入边界暂缓且未通过。固定 LightRAG、真实百炼与独立 PostgreSQL 的双库入库/检索验收已通过，当前状态 API 的 `rag=available`。首版为本地单用户，无管理员、注册或登录；本地归属、页面空态、PostgreSQL 业务库与 GitHub CI 已验证。问答、入库、语音、图片未开放。项目名称 CiteRAG、A 版桌面 UI、第二款 B「回响」无字 Logo 已确定。
+当前阶段：**M0 尚未整体验收；用户授权先推进 M1，M1-1 知识库管理已实现并通过本机验证，完整 M1 未完成**。本片只覆盖建库、改名、列表持久化、建库幂等和 5 库上限，空库不可建聊天；上传、任务、问答、语音、图片留后续切片。五模型、短文本 Embedding 1024 维及真实百炼＋LightRAG＋独立 PostgreSQL 双库验收沿用 M0 证据；超长输入边界暂缓且未通过。既有 8000 服务保持旧基线，只读 `database/models/rag=available`；本轮只在隔离测试库验证新迁移，不升级实际业务库。首版仍为本地单用户，无管理员、注册或登录，保留 CiteRAG、A 版桌面 UI 和「回响」无字 Logo。
 
 | 文档 | 用途 |
 |---|---|
@@ -8,6 +8,8 @@
 | [本地单用户首版 PRD](多模态知识助手_PRD_v0.2_单企业首版.md) | 已修订产品范围、三模态闭环、数据边界和验收标准；保留旧文件名以兼容链接。 |
 | [技术选型与架构设计](多模态知识助手_技术选型与架构设计_v0.1.md) | 原生 TypeScript、FastAPI、LightRAG、PostgreSQL、LiveKit 的职责与接入约束。 |
 | [开发路线与 M0 清单](development/ROADMAP.md) | 实施顺序、尚未完成的接入验证及分阶段所需资料。 |
+| [M1 分步实施计划](development/M1-IMPLEMENTATION.md) | 四步推进文字闭环；第一片知识库管理的范围、迁移与验收。 |
+| [M1 验证记录](development/M1-VALIDATION.md) | 本片实际检查、模拟与真实隔离 PostgreSQL/浏览器证据及未验证项。 |
 | [M0 实施计划](development/M0-IMPLEMENTATION.md) | 本批范围、影响与验收重点。 |
 | [本地单用户调整计划](development/M0-LOCAL-SINGLE-USER.md) | 最新范围决定、旧数据保留方式和迁移验收。 |
 | [本地开发](development/LOCAL-DEVELOPMENT.md) | 安装、启动、受控配置与测试命令。 |

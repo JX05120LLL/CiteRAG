@@ -22,3 +22,9 @@ CI 仅具有 `contents: read` 权限，不部署、不连接真实模型，也�
 CI 覆盖安装、构建、迁移与基础 HTTP 行为，不能替代本机完整测试集、浏览器视觉核对或真实 LightRAG/模型接入验证。CI 的空配置实例应报告 `not_configured`；维护者本机已完成模型及 LightRAG 双库真实验证，当前配置匹配报告时 API 的 `models`、`rag` 均显示 `available`。不要为使检查通过而伪造 ready 状态。
 
 CI 通过不代表 M0 完成。固定 SDK、pgvector、模型与重排、双知识库隔离和可核查来源已有独立真实验收；Embedding 超长输入边界仍未通过，详见[路线图](ROADMAP.md)与[M0 验证记录](M0-VALIDATION.md)。
+
+## M1-1 检查增量
+
+用户允许先推进 M1-1，M0 保持未完成。工作流增加 `0003_knowledge_management` 迁移和知识库创建/重放/改名/重启持久化的临时 PostgreSQL 冒烟；它不运行本机专用测试，不连接真实模型，也不升级维护者实际业务库。并发去重、容量竞争、旧记录保留、失败事务与回退门禁由本机隔离 PostgreSQL 测试补足，实际本轮结果见 [M1 验证记录](M1-VALIDATION.md)。
+
+本轮未 commit、push 或触发 GitHub 运行，工作流文件更新不等于远端 CI 已通过。新代码需要显式迁移并重启；既有 8000 服务仍为旧基线。

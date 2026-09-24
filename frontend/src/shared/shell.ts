@@ -1,6 +1,6 @@
 import brandMark from '../../../assets/brand/mark.svg';
 import type { AppState, Page } from '../state';
-import { kbStatuses } from '../state';
+import { isKnowledgePending, kbStatuses, knowledgeLimit } from '../state';
 import { action, el, icon } from './dom';
 
 export function renderHeader(state: AppState, navigate: (page: Page) => void) {
@@ -73,18 +73,21 @@ export function renderSidebar(state: AppState, navigate: (page: Page) => void, r
   return aside;
 }
 
-export function renderManagementSidebar(state: AppState, navigate: (page: Page) => void) {
+export function renderManagementSidebar(state: AppState, navigate: (page: Page) => void, openCreate: () => void) {
   const aside = el('aside', 'management-sidebar');
   aside.setAttribute('aria-label', '我的知识库与管理导航');
   const heading = el('div', 'management-sidebar-heading');
-  const create = action('', 'text-button');
+  const create = action('', 'text-button', openCreate);
   create.append(icon('plus'));
-  create.disabled = true;
+  create.disabled = state.loading || !!state.basesError || isKnowledgePending(state) ||
+    state.createDraft.error?.code === 'recovery_read_failed' ||
+    ((state.bases?.length ?? 0) >= knowledgeLimit && !state.createDraft.uncertain);
   create.setAttribute('aria-label', '新建知识库');
-  create.setAttribute('aria-describedby', 'kb-create-unavailable');
+  create.setAttribute('aria-describedby', 'kb-create-hint');
   heading.append(el('h2', '', '我的知识库'), create);
-  const hint = el('p', 'management-sidebar-hint', '建库功能尚未开放');
-  hint.id = 'kb-create-unavailable';
+  const hint = el('p', 'management-sidebar-hint', state.loading ? '正在读取知识库…' : state.basesError ? '连接恢复后可创建知识库'
+    : isKnowledgePending(state) ? '正在保存，请稍候' : (state.bases?.length ?? 0) >= knowledgeLimit ? '已达到 5 个知识库上限' : '最多 5 个知识库，可随时改名');
+  hint.id = 'kb-create-hint';
   const list = el('ul', 'management-kb-list');
   if (state.bases?.length) {
     for (const base of state.bases) {

@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async
 
 from app.config import Settings
 
-EXPECTED_SCHEMA_REVISION = "0005_answer_attempts"
+EXPECTED_SCHEMA_REVISION = "0006_m1_lifecycle"
 
 
 class Database:

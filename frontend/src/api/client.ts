@@ -42,7 +42,8 @@ export interface ManagedDocument {
   id: string;
   filename: string;
   size: number;
-  status: 'pending' | 'parsing' | 'parsed' | 'indexing' | 'ready' | 'failed';
+  status: 'pending' | 'parsing' | 'parsed' | 'indexing' | 'ready' | 'failed' |
+    'deleting' | 'replacing' | 'deleted';
   error_code: string | null;
   created_at: string;
   doc_code: string | null;
@@ -60,15 +61,16 @@ export interface ExactFilter {
 export interface IngestionJob {
   id: string;
   kb_id: string;
-  operation: 'upload' | 'rebuild';
+  operation: 'upload' | 'rebuild' | 'delete' | 'replace';
   status: 'queued' | 'running' | 'succeeded' | 'failed' | 'interrupted';
-  stage: 'accepted' | 'parsing' | 'parsed' | 'indexing' | 'verifying' | 'complete';
+  stage: 'accepted' | 'parsing' | 'parsed' | 'indexing' | 'verifying' | 'cleanup' | 'complete';
   error_code: string | null;
   document_ids: string[];
   created_at: string;
   engine_mutated: boolean;
   can_retry: boolean;
   cleanup_pending?: boolean;
+  can_cleanup?: boolean;
 }
 
 export interface ParsedBlock {
@@ -209,27 +211,29 @@ function knowledgeBase(value: unknown): KnowledgeBase {
 function isDocument(value: Record<string, unknown>): boolean {
   return typeof value.id === 'string' && typeof value.filename === 'string' &&
     Number.isInteger(value.size) && Number(value.size) >= 0 &&
-    ['pending', 'parsing', 'parsed', 'indexing', 'ready', 'failed'].includes(String(value.status)) &&
+    ['pending', 'parsing', 'parsed', 'indexing', 'ready', 'failed', 'deleting', 'replacing', 'deleted'].includes(String(value.status)) &&
     (value.error_code === null || typeof value.error_code === 'string') && isVerificationTime(value.created_at) &&
     ['doc_code', 'model_code', 'edition'].every((key) => value[key] == null || typeof value[key] === 'string');
 }
 
 function ingestionJob(value: unknown): IngestionJob {
   if (!isRecord(value) || typeof value.id !== 'string' || typeof value.kb_id !== 'string' ||
-      !['upload', 'rebuild'].includes(String(value.operation)) ||
+      !['upload', 'rebuild', 'delete', 'replace'].includes(String(value.operation)) ||
       !['queued', 'running', 'succeeded', 'failed', 'interrupted'].includes(String(value.status)) ||
-      !['accepted', 'parsing', 'parsed', 'indexing', 'verifying', 'complete'].includes(String(value.stage)) ||
+      !['accepted', 'parsing', 'parsed', 'indexing', 'verifying', 'cleanup', 'complete'].includes(String(value.stage)) ||
       (value.error_code !== null && typeof value.error_code !== 'string') ||
       !Array.isArray(value.document_ids) || !value.document_ids.every((id) => typeof id === 'string') ||
       !isVerificationTime(value.created_at) || typeof value.engine_mutated !== 'boolean' || typeof value.can_retry !== 'boolean' ||
       (value.status === 'succeeded') !== (value.stage === 'complete') ||
-      (value.cleanup_pending !== undefined && typeof value.cleanup_pending !== 'boolean')) throw new ApiError('invalid-response');
+      (value.cleanup_pending !== undefined && typeof value.cleanup_pending !== 'boolean') ||
+      (value.can_cleanup !== undefined && typeof value.can_cleanup !== 'boolean')) throw new ApiError('invalid-response');
   // Free-form backend messages may contain provider details; never pass them to the UI.
   return { id: value.id, kb_id: value.kb_id, operation: value.operation as IngestionJob['operation'],
     status: value.status as IngestionJob['status'], stage: value.stage as IngestionJob['stage'],
     error_code: value.error_code, document_ids: value.document_ids as string[], created_at: value.created_at,
     engine_mutated: value.engine_mutated, can_retry: value.can_retry,
-    ...(value.cleanup_pending === undefined ? {} : { cleanup_pending: value.cleanup_pending }) };
+    ...(value.cleanup_pending === undefined ? {} : { cleanup_pending: value.cleanup_pending }),
+    ...(value.can_cleanup === undefined ? {} : { can_cleanup: value.can_cleanup }) };
 }
 
 function parsedBlock(value: Record<string, unknown>): boolean {
@@ -257,7 +261,7 @@ function chatMessage(value: unknown): ChatMessage {
 }
 
 export function createApi(fetcher: typeof fetch = globalThis.fetch) {
-  async function request(path: string, method: 'GET' | 'POST' | 'PATCH' = 'GET', body?: unknown,
+  async function request(path: string, method: 'GET' | 'POST' | 'PATCH' | 'DELETE' = 'GET', body?: unknown,
                          timeoutMs = 10000): Promise<unknown> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -310,17 +314,37 @@ export function createApi(fetcher: typeof fetch = globalThis.fetch) {
       return ingestionJob(await request(`/api/knowledge-bases/${encodeURIComponent(kbId)}/documents`, 'POST', data));
     },
     retryJob: async (id: string): Promise<IngestionJob> => ingestionJob(await request(`/api/jobs/${encodeURIComponent(id)}/retry`, 'POST')),
+    cleanupJob: async (id: string): Promise<IngestionJob> => ingestionJob(await request(`/api/jobs/${encodeURIComponent(id)}/cleanup`, 'POST')),
+    deleteDocument: async (id: string, clientRequestId: string): Promise<IngestionJob> =>
+      ingestionJob(await request(`/api/documents/${encodeURIComponent(id)}/delete`, 'POST', { client_request_id: clientRequestId })),
+    replaceDocument: async (id: string, file: File, clientRequestId: string): Promise<IngestionJob> => {
+      const data = new FormData();
+      data.set('client_request_id', clientRequestId);
+      data.set('file', file);
+      return ingestionJob(await request(`/api/documents/${encodeURIComponent(id)}/replacement`, 'POST', data));
+    },
     rebuild: async (kbId: string, clientRequestId: string): Promise<IngestionJob> =>
       ingestionJob(await request(`/api/knowledge-bases/${encodeURIComponent(kbId)}/rebuild`, 'POST', { client_request_id: clientRequestId })),
     blocks: async (id: string): Promise<ParsedBlock[]> =>
       collection(await request(`/api/documents/${encodeURIComponent(id)}/blocks`), parsedBlock),
-    conversations: async (): Promise<Conversation[]> => collection(await request('/api/conversations?limit=20&offset=0'), (item) =>
+    conversations: async (limit = 20, offset = 0): Promise<Conversation[]> => collection(await request(
+      `/api/conversations?limit=${limit}&offset=${offset}`), (item) =>
       ['id', 'owner_id', 'kb_id', 'title', 'created_at'].every((key) => typeof item[key] === 'string')),
     createConversation: async (kbId: string): Promise<Conversation> => {
       const value = await request('/api/conversations', 'POST', { kb_id: kbId });
       if (!isRecord(value) || !['id', 'owner_id', 'kb_id', 'title', 'created_at'].every((key) =>
         typeof value[key] === 'string')) throw new ApiError('invalid-response');
       return value as unknown as Conversation;
+    },
+    renameConversation: async (id: string, title: string): Promise<Conversation> => {
+      const value = await request(`/api/conversations/${encodeURIComponent(id)}`, 'PATCH', { title });
+      if (!isRecord(value) || !['id', 'owner_id', 'kb_id', 'title', 'created_at'].every((key) =>
+        typeof value[key] === 'string')) throw new ApiError('invalid-response');
+      return value as unknown as Conversation;
+    },
+    deleteConversation: async (id: string): Promise<void> => {
+      const value = await request(`/api/conversations/${encodeURIComponent(id)}`, 'DELETE');
+      if (!isRecord(value) || value.deleted !== true) throw new ApiError('invalid-response');
     },
     conversationMessages: async (id: string): Promise<ChatMessage[]> =>
       collection<Record<string, unknown>>(await request(`/api/conversations/${encodeURIComponent(id)}/messages`),
@@ -329,6 +353,9 @@ export function createApi(fetcher: typeof fetch = globalThis.fetch) {
                        mode: 'semantic' | 'exact' = 'semantic', exact?: ExactFilter): Promise<ChatMessage> =>
       chatMessage(await request(`/api/conversations/${encodeURIComponent(id)}/messages`, 'POST',
         { client_message_id: key, text, mode, ...(mode === 'exact' ? { exact } : {}) }, 60000)),
+    retryAnswer: async (chatId: string, messageId: string, attemptId: string): Promise<ChatMessage> =>
+      chatMessage(await request(`/api/conversations/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}/retry`,
+        'POST', { attempt_id: attemptId }, 60000)),
     health: async (): Promise<SystemHealth> => {
       const value = await request('/api/status');
       if (!isRecord(value) || value.status !== 'partial' || value.mode !== 'local_single_user' ||

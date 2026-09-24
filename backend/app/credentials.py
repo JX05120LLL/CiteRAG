@@ -501,7 +501,7 @@ def load_dashscope_config(path: Path) -> DashScopeConfig:
         "summary": "qwen-max",
         "embedding": "text-embedding-v4",
         "embedding_dimension": 1024,
-        "rerank": "qwen3-rerank",
+        "rerank": "qwen3-vl-rerank",
     }
     if record.models != expected:
         raise CredentialError("DashScope model configuration is incompatible")

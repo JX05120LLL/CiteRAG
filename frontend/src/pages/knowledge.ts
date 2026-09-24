@@ -142,7 +142,7 @@ export function renderKnowledge(main: HTMLElement, state: AppState, actions: Kno
     table.append(head, body);
     content.append(table);
   }
-  const note = el('p', 'scope-note', '进入「资料与任务」上传文件、核查解析位置和处理进度。上传受理不等于入库成功；资料就绪后可新建聊天，删除留后续切片。');
+  const note = el('p', 'scope-note', '进入「资料与任务」上传、替换或删除受管资料并核查任务。上传受理不等于入库成功；知识库整体删除尚未提供。');
   note.id = 'upload-unavailable';
   const retry = action('刷新列表', 'button secondary', () => { void actions.refresh(); });
   retry.disabled = loading || isKnowledgePending(state);

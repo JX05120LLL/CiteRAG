@@ -28,7 +28,9 @@ class RebuildRequest(BaseModel):
 
 
 def job_view(job, active_workspace=None):
-    current = active_workspace is None or not job.engine_mutated or (
+    cleaning = (job.cleanup_pending and job.retired_workspace is not None
+                and job.retired_workspace != active_workspace)
+    current = active_workspace is None or not job.engine_mutated or cleaning or (
         (job.target_workspace if job.operation == "upload" else job.retired_workspace)
         == active_workspace
     )
@@ -40,6 +42,8 @@ def job_view(job, active_workspace=None):
         "can_retry": job.status in {"failed", "interrupted"}
         and job.error_code not in {"rebuild_required", "stale_job"} and current,
         "cleanup_pending": job.cleanup_pending,
+        "can_cleanup": job.cleanup_pending and job.status == "succeeded"
+        and job.retired_workspace is not None and job.retired_workspace != active_workspace,
     }
 
 
@@ -48,7 +52,8 @@ class DocumentView(BaseModel):
     id: UUID
     filename: str
     size: int
-    status: Literal["pending", "parsing", "parsed", "indexing", "ready", "failed"]
+    status: Literal["pending", "parsing", "parsed", "indexing", "ready", "failed",
+                    "deleting", "replacing", "deleted"]
     error_code: str | None
     # Keeping the view explicit prevents exposing storage paths or engine namespaces.
     created_at: datetime
@@ -202,6 +207,82 @@ async def rebuild_kb(
 ):
     runner = runner_for(request)
     job = await DocumentService(session).rebuild(owner, kb_id, body.client_request_id)
+    runner.wake()
+    return job_view(job)
+
+
+@router.post("/documents/{document_id}/delete", status_code=202)
+async def delete_document(
+    document_id: UUID, body: RebuildRequest, request: Request,
+    owner: LocalOwner, session: Session,
+):
+    runner = runner_for(request)
+    if not runner.enabled:
+        raise ServiceError(503, "ingestion_disabled", "索引维护尚未启用，不能受理删除")
+    job = await DocumentService(session).delete(owner, document_id, body.client_request_id)
+    runner.wake()
+    return job_view(job)
+
+
+@router.post("/documents/{document_id}/replacement", status_code=202)
+async def replace_document(
+    document_id: UUID, request: Request, owner: LocalOwner, session: Session,
+):
+    runner = runner_for(request)
+    if not runner.enabled:
+        raise ServiceError(503, "ingestion_disabled", "索引维护尚未启用，不能受理替换")
+    received = 0
+
+    async def limited_receive():
+        nonlocal received
+        message = await request.receive()
+        received += len(message.get("body", b""))
+        if received > 20 * 1024 * 1024 + 64 * 1024:
+            raise MultiPartException("Replacement exceeds file limit")
+        return message
+
+    bounded = Request(request.scope, receive=limited_receive)
+    source = None
+    try:
+        async with bounded.form(max_files=1, max_fields=1, max_part_size=1024) as form:
+            if set(form.keys()) != {"file", "client_request_id"}:
+                raise ServiceError(422, "invalid_file", "请提供一份替换文件和请求键")
+            file = form["file"]
+            if not isinstance(file, UploadFile) or not file.filename:
+                raise ServiceError(422, "invalid_file", "替换文件不符合要求")
+            try:
+                request_id = UUID(str(form["client_request_id"]))
+            except (ValueError, TypeError):
+                raise ServiceError(422, "validation_error", "替换请求键不符合要求") from None
+
+            async def chunks():
+                while block := await file.read(1024 * 1024):
+                    yield block
+
+            source = await request.app.state.source_store.stage(file.filename, chunks())
+        job, created = await DocumentService(session).replace(
+            owner, document_id, request_id, source,
+        )
+    except (HTTPException, MultiPartException):
+        if source is not None:
+            request.app.state.source_store.discard(source.storage_key)
+        raise ServiceError(422, "invalid_file", "替换文件不符合要求") from None
+    except ServiceError:
+        if source is not None:
+            request.app.state.source_store.discard(source.storage_key)
+        raise
+    if not created:
+        request.app.state.source_store.discard(source.storage_key)
+    runner.wake()
+    return job_view(job)
+
+
+@router.post("/jobs/{job_id}/cleanup", status_code=202)
+async def cleanup_job(job_id: UUID, request: Request, owner: LocalOwner, session: Session):
+    runner = runner_for(request)
+    if not runner.enabled:
+        raise ServiceError(503, "ingestion_disabled", "索引维护尚未启用，不能清理空间")
+    job = await DocumentService(session).cleanup(owner, job_id)
     runner.wake()
     return job_view(job)
 

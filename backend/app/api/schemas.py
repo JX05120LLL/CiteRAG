@@ -7,7 +7,8 @@ from pydantic import BaseModel, ConfigDict, StringConstraints, field_validator
 
 from app.validation import CapabilityState
 
-__all__ = ["CapabilityState", "ConversationCreate", "ConversationView", "KnowledgeBaseView"]
+__all__ = ["CapabilityState", "ConversationCreate", "ConversationRename",
+           "ConversationView", "KnowledgeBaseView"]
 
 
 class ConversationCreate(BaseModel):
@@ -15,6 +16,14 @@ class ConversationCreate(BaseModel):
     title: Annotated[
         str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)
     ] = "新聊天"
+
+
+class ConversationRename(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: Annotated[
+        str, StringConstraints(strict=True, strip_whitespace=True, min_length=1, max_length=120)
+    ]
 
 
 class ConversationView(BaseModel):

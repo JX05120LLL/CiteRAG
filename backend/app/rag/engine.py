@@ -101,6 +101,16 @@ class EngineManager:
             if errors:
                 _raise_cleanup_group('Engine shutdown failed', errors)
 
+    async def release(self, kb_id: UUID, workspace: str) -> None:
+        """Finalize one retired instance before its private working directory is removed."""
+        workspace_for(kb_id, self._root, workspace)
+        async with self._lock:
+            self._assert_owner()
+            engine = self._engines.get((kb_id, workspace))
+            if engine is not None:
+                await _finalize_protected(engine)
+                self._engines.pop((kb_id, workspace), None)
+
 
 async def _finalize_protected(engine: Engine) -> None:
     """Finish one cleanup even if the caller receives another cancellation."""

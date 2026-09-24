@@ -20,6 +20,7 @@ from app.models import (
 from app.rag.answer_adapter import AnswerError, checked_answer
 from app.rag.query_adapter import QueryError, RetrievedChunk
 from app.rag.source_mapping import locate_chunk
+from app.services.conversation_context import prepare_context
 from app.services.errors import ServiceError
 
 
@@ -130,9 +131,65 @@ class AnswerService:
         await self.session.flush()
         self.session.add(attempt)
         await self.session.commit()
+        return await self._finish_attempt(owner, conversation_id, kb, message, attempt,
+                                          retriever, answerer, mode, exact)
+
+    async def retry(self, owner: UUID, conversation_id: UUID, message_id: UUID,
+                    retry_id: UUID, retriever: Retriever, answerer: Answerer) -> dict:
+        _, kb = await self._owned_conversation(owner, conversation_id, lock=True)
+        message = await self.session.scalar(select(ConversationMessage).where(
+            ConversationMessage.id == message_id,
+            ConversationMessage.conversation_id == conversation_id,
+        ))
+        if message is None:
+            raise ServiceError(404, "message_not_found", "消息不存在或不可访问")
+        existing = await self.session.get(AnswerAttempt, retry_id)
+        if existing is not None:
+            if existing.message_id != message_id or existing.conversation_id != conversation_id:
+                raise ServiceError(409, "idempotency_conflict", "重试请求键已用于其他消息")
+            if (kb.status != "ready" or existing.kb_revision != kb.revision
+                or existing.workspace != kb.active_workspace):
+                raise ServiceError(409, "kb_changed", "知识库已变化，请重新提问")
+            if existing.status == "running":
+                raise ServiceError(409, "answer_in_progress", "回答仍在处理中，请稍后读取结果")
+            await self.session.commit()
+            return answer_view(message, existing)
+        if kb.status != "ready":
+            raise ServiceError(409, "kb_not_ready", "知识库未就绪，暂不能重试")
+        active = await self.session.scalar(select(AnswerAttempt.id).where(
+            AnswerAttempt.conversation_id == conversation_id,
+            AnswerAttempt.status == "running",
+        ).limit(1))
+        if active is not None:
+            raise ServiceError(409, "answer_in_progress", "当前聊天已有提问正在处理")
+        last = await self.session.scalar(select(AnswerAttempt).where(
+            AnswerAttempt.message_id == message_id,
+        ).order_by(AnswerAttempt.created_at.desc(), AnswerAttempt.id.desc()))
+        if last is None or last.status not in {"failed", "interrupted"}:
+            raise ServiceError(409, "answer_not_retryable", "仅失败或中断的回答可以重试")
+        if last.kb_revision != kb.revision or last.workspace != kb.active_workspace:
+            raise ServiceError(409, "kb_changed", "知识库已变化，请重新提问")
+        attempt = AnswerAttempt(
+            id=retry_id, conversation_id=conversation_id, message_id=message_id,
+            status="running", citations=[], kb_revision=kb.revision,
+            workspace=kb.active_workspace,
+        )
+        self.session.add(attempt)
+        await self.session.commit()
+        return await self._finish_attempt(owner, conversation_id, kb, message, attempt,
+                                          retriever, answerer, message.mode,
+                                          message.query_filter)
+
+    async def _finish_attempt(
+        self, owner: UUID, conversation_id: UUID, kb: KnowledgeBase,
+        message: ConversationMessage, attempt: AnswerAttempt,
+        retriever: Retriever, answerer: Answerer, mode: str, exact: dict | None,
+    ) -> dict:
+        question = message.content
         try:
+            context = await prepare_context(self.session, conversation_id, kb, answerer)
             status, text, citations = await self._resolve(
-                kb.id, kb.active_workspace, question, retriever, answerer, mode, exact,
+                kb.id, attempt.workspace, question, retriever, answerer, mode, exact, context,
             )
             error_code = None
         except asyncio.CancelledError:
@@ -167,7 +224,9 @@ class AnswerService:
         if (current_kb is None or current_kb.status != "ready"
             or current_kb.revision != attempt.kb_revision
             or current_kb.active_workspace != attempt.workspace
-            or current_attempt.status != "running"):
+            or current_attempt is None or current_attempt.status != "running"):
+            if current_attempt is None:
+                raise ServiceError(409, "answer_interrupted", "聊天已变化，本次回答未保存")
             current_attempt.status, current_attempt.text = "interrupted", None
             current_attempt.citations, current_attempt.error_code = [], "kb_changed"
             current_attempt.finished_at = datetime.now(UTC)
@@ -182,9 +241,10 @@ class AnswerService:
     async def _resolve(
         self, kb_id: UUID, workspace: str, question: str,
         retriever: Retriever, answerer: Answerer, mode: str, exact: dict | None,
+        context: dict,
     ) -> tuple[str, str, list[dict]]:
         if mode == "exact":
-            return await self._resolve_exact(kb_id, question, exact or {}, answerer)
+            return await self._resolve_exact(kb_id, question, exact or {}, answerer, context)
         documents = list(await self.session.scalars(select(Document).where(
             Document.kb_id == kb_id, Document.status == "ready", Document.indexed_once.is_(True),
         )))
@@ -224,7 +284,7 @@ class AnswerService:
         await self.session.commit()
         if not evidence:
             return "insufficient_evidence", "", []
-        raw = await answerer.answer(question, evidence)
+        raw = await self._answer(answerer, question, evidence, context)
         status, text, identifiers = checked_answer(
             raw, {item["id"]: item["text"] for item in evidence},
         )
@@ -232,7 +292,7 @@ class AnswerService:
         return status, text, selected
 
     async def _resolve_exact(
-        self, kb_id: UUID, question: str, filters: dict, answerer: Answerer,
+        self, kb_id: UUID, question: str, filters: dict, answerer: Answerer, context: dict,
     ) -> tuple[str, str, list[dict]]:
         attributes = {key: filters[key] for key in ("doc_code", "model_code", "edition")
                       if key in filters}
@@ -278,8 +338,16 @@ class AnswerService:
                 "filename": document.filename, "locator": block.locator,
                 "excerpt": block.text,
             })
-        raw = await answerer.answer(question, evidence)
+        raw = await self._answer(answerer, question, evidence, context)
         status, text, identifiers = checked_answer(
             raw, {item["id"]: item["text"] for item in evidence},
         )
         return status, text, [c for c in citations if c["evidence_id"] in identifiers]
+
+    @staticmethod
+    async def _answer(answerer: Answerer, question: str, evidence: list[dict],
+                      context: dict) -> str:
+        contextual = getattr(answerer, "answer_with_context", None)
+        if contextual is not None:
+            return await contextual(question, evidence, context)
+        return await answerer.answer(question, evidence)

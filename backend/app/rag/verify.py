@@ -88,7 +88,7 @@ class RagProviderEvidence:
             ),
             total_tokens=add(prior.total_tokens if prior else None, usage.total_tokens),
         )
-        if model == "qwen3-rerank":
+        if model == "qwen3-vl-rerank":
             self.rerank_count += 1
 
 

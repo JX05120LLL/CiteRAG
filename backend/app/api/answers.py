@@ -69,6 +69,11 @@ class ExactFilter(BaseModel):
 AskRequest.model_rebuild()
 
 
+class RetryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    attempt_id: UUID
+
+
 @router.post("/conversations/{conversation_id}/messages")
 async def ask(conversation_id: UUID, body: AskRequest, request: Request,
               owner: LocalOwner, session: Session):
@@ -86,3 +91,15 @@ async def ask(conversation_id: UUID, body: AskRequest, request: Request,
 @router.get("/conversations/{conversation_id}/messages")
 async def list_messages(conversation_id: UUID, owner: LocalOwner, session: Session):
     return {"items": await AnswerService(session).list_messages(owner, conversation_id)}
+
+
+@router.post("/conversations/{conversation_id}/messages/{message_id}/retry")
+async def retry_answer(conversation_id: UUID, message_id: UUID, body: RetryRequest,
+                       request: Request, owner: LocalOwner, session: Session):
+    if not request.app.state.answer_enabled:
+        raise ServiceError(503, "answer_disabled", "文字检索与模型回答尚未启用")
+    runtime = request.app.state.rag_runtime
+    retriever = request.app.state.query_adapter or LightRAGQueryAdapter(runtime)
+    answerer = request.app.state.answer_adapter or LightRAGAnswerAdapter(runtime)
+    return await AnswerService(session).retry(owner, conversation_id, message_id,
+                                              body.attempt_id, retriever, answerer)

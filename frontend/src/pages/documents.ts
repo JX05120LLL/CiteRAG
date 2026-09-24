@@ -8,10 +8,13 @@ import { kbStatuses } from '../state';
 const documentLabels: Record<ManagedDocument['status'], string> = {
   pending: '已受理，等待处理', parsing: '正在解析', parsed: '解析完成，尚未入库',
   indexing: '正在建立索引', ready: '入库核验通过', failed: '处理失败',
+  deleting: '正在删除，原文已暂停访问', replacing: '正在替换，旧原文已暂停访问',
+  deleted: '已删除，原文与索引已清理',
 };
 const stageLabels: Record<IngestionJob['stage'], string> = {
   accepted: '已受理，等待处理', parsing: '正在解析', parsed: '解析完成，尚未入库',
-  indexing: '正在建立索引', verifying: '正在核验入库结果', complete: '入库核验通过',
+  indexing: '正在建立索引', verifying: '正在核验入库结果',
+  cleanup: '正在清理旧空间', complete: '核验与清理通过',
 };
 const failureLabels: Record<string, string> = {
   duplicate_document: '此知识库已有相同内容，请检查资料列表。',
@@ -34,6 +37,9 @@ const failureLabels: Record<string, string> = {
   nothing_to_rebuild: '尚无曾进入索引的受管原文，请先完成资料入库。',
   job_not_retryable: '此任务当前无需重试，请刷新核对状态。',
   stale_job: '此历史任务已被后续重建替代，请查看当前知识库与最新任务。',
+  cleanup_failed: '旧空间清理未完成，知识库保持待修复；请重试任务。',
+  cleanup_unavailable: '当前不能清理旧空间，请刷新知识库和任务状态。',
+  ingestion_disabled: '索引维护尚未启用，暂不能删除或替换资料。',
   ingestion_unavailable: '资料任务服务不可用，请检查系统状态后重试。',
   attribute_value: '属性值须为 1–80 个可打印字符；清空字段表示不再确认该属性。',
 };
@@ -153,6 +159,39 @@ export function createDocumentsPanel(api: ApiClient, changed: () => void, accept
     finally { busy = false; changed(); await refresh(); }
   }
 
+  async function maintain(document: ManagedDocument, operation: 'delete' | 'replace', file?: File) {
+    if (mutationUnavailable() || pending || activeJob() || base?.status !== 'ready' || document.status !== 'ready') return;
+    if (operation === 'replace' && !file) return;
+    if (operation === 'replace' && file) {
+      try { validateFiles([file]); }
+      catch (reason) { error = reason instanceof ApiError ? reason : new ApiError('validation'); changed(); return; }
+    }
+    const impact = operation === 'delete' ? '删除' : '替换';
+    if (!window.confirm(`${impact}后该库旧知识回答与来源会被遮蔽；维护期间暂停问答。确认${impact}「${document.filename}」？`)) return;
+    busy = true; error = null; notice = null; inspected = null; changed();
+    try {
+      const key = crypto.randomUUID();
+      const job = operation === 'delete' ? await api.deleteDocument(document.id, key)
+        : await api.replaceDocument(document.id, file!, key);
+      if (job.kb_id !== base?.id || job.operation !== operation) throw new ApiError('invalid-response');
+      notice = `${impact}任务已受理。请以持久任务的核验及清理结果为准。`;
+    } catch (reason) {
+      error = reason instanceof ApiError ? reason : new ApiError('http');
+      if (error.kind === 'network') notice = '受理结果不确定，请先刷新持久任务；不要重复选择文件。';
+    } finally { busy = false; await refresh(); changed(); }
+  }
+
+  async function cleanup(job: IngestionJob) {
+    if (mutationUnavailable() || pending || activeJob() || !job.can_cleanup) return;
+    busy = true; error = null; notice = null; changed();
+    try {
+      const accepted = await api.cleanupJob(job.id);
+      if (accepted.id !== job.id) throw new ApiError('invalid-response');
+      notice = '旧空间清理已排队。完成前请查看任务状态。';
+    } catch (reason) { error = reason instanceof ApiError ? reason : new ApiError('http'); }
+    finally { busy = false; await refresh(); changed(); }
+  }
+
   async function inspect(document: ManagedDocument) {
     const current = generation;
     inspected = { document, blocks: null, error: null }; changed();
@@ -264,8 +303,24 @@ export function createDocumentsPanel(api: ApiClient, changed: () => void, accept
         const original = el('a', 'text-button', '下载原文'); original.href = `/api/documents/${encodeURIComponent(document.id)}/original`; original.download = ''; original.rel = 'noreferrer';
         const inspectButton = action('查看解析位置', 'text-button', () => { void inspect(document); });
         inspectButton.disabled = base.status === 'maintaining' || base.status === 'blocked' || !['parsed', 'ready'].includes(document.status);
-        if (base.status === 'maintaining' || base.status === 'blocked') controls.append(el('span', 'metadata', '原文核查暂停'));
+        if (base.status === 'maintaining' || base.status === 'blocked' || ['deleting', 'replacing', 'deleted'].includes(document.status)) controls.append(el('span', 'metadata', '原文核查暂停'));
         else controls.append(original);
+        if (document.status === 'ready' && base.status === 'ready') {
+          const remove = action('删除资料', 'button secondary', () => { void maintain(document, 'delete'); });
+          remove.disabled = mutationUnavailable() || !!pending || activeJob();
+          controls.append(remove);
+          const replacement = el('label', 'replace-file-label', '选择新原文替换');
+          const fileInput = el('input', 'replace-file'); fileInput.type = 'file';
+          fileInput.accept = '.txt,.md,.pdf,.docx';
+          fileInput.setAttribute('aria-label', `替换 ${document.filename}`);
+          fileInput.disabled = mutationUnavailable() || !!pending || activeJob();
+          fileInput.addEventListener('change', () => {
+            const selected = fileInput.files?.[0];
+            if (selected) void maintain(document, 'replace', selected);
+            fileInput.value = '';
+          });
+          replacement.append(fileInput); controls.append(replacement);
+        }
         controls.append(inspectButton); row.append(description, controls); list.append(row);
       }
       content.append(list);
@@ -288,7 +343,8 @@ export function createDocumentsPanel(api: ApiClient, changed: () => void, accept
       for (const job of jobs) {
         const item = el('li', 'ingestion-job');
         const label = job.status === 'failed' ? '处理失败' : job.status === 'interrupted' ? '处理已中断' : stageLabels[job.stage];
-        const title = el('div', 'job-heading'); title.append(el('strong', '', job.operation === 'upload' ? '资料上传任务' : '原文重建任务'), el('span', 'job-state', label));
+        const taskName = { upload: '资料上传任务', rebuild: '原文重建任务', delete: '资料删除任务', replace: '资料替换任务' }[job.operation];
+        const title = el('div', 'job-heading'); title.append(el('strong', '', taskName), el('span', 'job-state', label));
         item.append(title, el('p', 'metadata', `${new Date(job.created_at).toLocaleString('zh-CN', { hour12: false })} · ${job.document_ids.length} 份资料`));
         if (job.stage === 'parsed' && job.status === 'queued') item.append(el('p', 'field-hint', '解析结果已保存，等待启用入库处理，尚未进入索引。'));
         if (job.error_code) item.append(el('p', 'field-hint', failureLabels[job.error_code] ?? '任务未完成，请核对状态并重试。'));
@@ -300,13 +356,17 @@ export function createDocumentsPanel(api: ApiClient, changed: () => void, accept
           retryButton.disabled = mutationUnavailable() || !!pending || activeJob(); item.append(retryButton);
         }
         if (job.cleanup_pending) item.append(el('p', 'field-hint', '旧空间仍隔离保留，物理清理尚未完成。'));
+        if (job.can_cleanup) {
+          const button = action('清理旧空间', 'button secondary', () => { void cleanup(job); });
+          button.disabled = mutationUnavailable() || !!pending || activeJob(); item.append(button);
+        }
         list.append(item);
       }
       content.append(list);
       if (!jobs.length) content.append(el('p', 'empty-documents', '尚无持久任务。任务受理后，刷新页面仍可在此查看。'));
     }
     const repair = el('section', 'document-repair'); repair.append(el('h2', '', '从原文重建'));
-    repair.append(el('p', 'field-hint', '重建期间暂停问答并遮蔽此前知识回答与证据。系统在新空间完成核验后切换，旧空间隔离保留；原文不会被清空。'));
+    repair.append(el('p', 'field-hint', '重建期间暂停问答并遮蔽此前知识回答与证据。新空间核验后切换，再物理清理旧空间；清理失败时库保持待修复。'));
     const confirmation = el('label', 'rebuild-confirmation');
     const checkbox = el('input'); checkbox.type = 'checkbox'; checkbox.checked = rebuildConfirmed;
     checkbox.disabled = busy || uncertain; checkbox.addEventListener('change', () => { rebuildConfirmed = checkbox.checked; changed(); });
@@ -314,7 +374,7 @@ export function createDocumentsPanel(api: ApiClient, changed: () => void, accept
     const rebuild = action(uncertain && pending?.operation === 'rebuild' ? '同键重试重建' : '重建知识库', 'button secondary', () => { void submit('rebuild'); });
     rebuild.disabled = mutationUnavailable() || !documents?.length || pending?.operation === 'upload' || (!pending && activeJob()) || (!rebuildConfirmed && pending?.operation !== 'rebuild');
     repair.append(rebuild); content.append(repair);
-    content.append(el('p', 'scope-note', '就绪资料可确认编号、型号和版本用于精确查询；资料删除和替换留待后续。'));
+    content.append(el('p', 'scope-note', '就绪资料可确认编号、型号和版本用于精确查询；删除与替换会遮蔽该库先前知识回答。'));
     return content;
   }
 

@@ -194,20 +194,27 @@ class DashScopeClient:
             raise ValueError("rerank query must not be empty")
         if not documents or any(not isinstance(item, str) or not item for item in documents):
             raise ValueError("rerank documents must contain non-empty strings")
+        if len(documents) > 100:
+            raise ValueError("qwen3-vl-rerank supports at most 100 text documents")
         if top_n < 1 or top_n > len(documents):
             raise ValueError("rerank top_n must be within the document count")
         response = await self._post(
-            "/compatible-api/v1/reranks",
+            "/api/v1/services/rerank/text-rerank/text-rerank",
             {
                 "model": model,
-                "query": query,
-                "documents": documents,
-                "top_n": top_n,
+                "input": {
+                    "query": {"text": query},
+                    "documents": [{"text": document} for document in documents],
+                },
+                "parameters": {"top_n": top_n},
             },
             model,
         )
         body = _json_object(response, model)
-        results = body.get("results")
+        output = body.get("output")
+        if not isinstance(output, dict):
+            raise _protocol_error(model, response)
+        results = output.get("results")
         if not isinstance(results, list) or not results or len(results) > top_n:
             raise _protocol_error(model, response)
         items: list[RerankItem] = []
@@ -234,7 +241,7 @@ class DashScopeClient:
         return RerankBatch(
             model=model,
             items=tuple(items),
-            request_id=_request_id(response, body, allow_response_id=True),
+            request_id=_request_id(response, body),
             usage=_usage(body.get("usage"), model, response),
         )
 
@@ -263,8 +270,8 @@ def _request_id(
             value = candidate.get("request_id")
             if isinstance(value, str) and value:
                 return value[:200]
-        # Only successful Embedding and rerank endpoints document body `id`
-        # as a request identifier. Chat completion `id` identifies the object.
+        # Only the successful Embedding endpoint uses body `id` here as a
+        # request identifier. Chat completion `id` identifies the object.
         if allow_response_id:
             value = body.get("id")
             if isinstance(value, str) and value:

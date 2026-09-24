@@ -6,9 +6,9 @@ A local, single-user multimodal knowledge assistant, designed around answers wit
 
 本地单用户多模态知识助手。使用者直接管理自己的知识库，通过文字、实时语音和图片提问，核查回答来源，并保存聊天继续交流。首版无需注册、登录或创建管理员。
 
-**当前阶段：M0 未完成；M1-1 已提交，M1-2 和 M1-3 问答首片已实现并通过本机分层验证；完整 M1 未完成。** 四类文字文件的私有原文、受限解析、持久任务与入库核验已接通；普通/确认属性精确问答、可回查原文位置的来源和固定知识库聊天消息现已实现。入库与问答默认分别关闭（`CITERAG_INGESTION_ENABLED=false`、`CITERAG_ANSWER_ENABLED=false`），不会自动发起模型请求；本轮模型验证使用本地替身。近期聊天上下文/摘要、删除/替换及完整旧回答失效仍待完成。范围与证据见 [M1 计划](docs/development/M1-IMPLEMENTATION.md)和 [M1 验证](docs/development/M1-VALIDATION.md)。
+**当前阶段：M0 未完成；M1-1 已提交，M1-2、M1-3 及 M1-4 的主要本机实现已完成，完整 M1 尚未验收。** 四类文字资料、受管入库、普通/精确问答、真实来源、固定库聊天、近期窗口/摘要及资料删除/替换与旧空间清理已接通；聊天改名/删除、分页与同消息回答重试也已实现。入库与问答默认分别关闭（`CITERAG_INGESTION_ENABLED=false`、`CITERAG_ANSWER_ENABLED=false`），不会自动发起模型请求；本轮仅使用本地模型替身。真正的 SSE 流式回答等缺项及分层证据见 [M1 计划](docs/development/M1-IMPLEMENTATION.md)和 [M1 验证](docs/development/M1-VALIDATION.md)。
 
-五模型与真实百炼双库验收沿用 M0 证据；超长 Embedding 输入边界仍暂缓未通过。本轮新增真实模型请求为 0。接手本轮 8000 API、5174 前端和 55432 业务库不可达，未读取实际 schema；上轮核查为 `0002_local_single_user`、旧 API 无新接口，不能当作当前在线事实。新增 `0004`/`0005` 只在隔离库升级；实际业务库未迁移、旧 API 未重启。原生 TypeScript、A 版 UI 与「回响」Logo 保留。
+五模型与真实百炼双库验收沿用 M0 证据；超长 Embedding 输入边界仍暂缓未通过。本轮新增真实模型请求为 0。接手本轮 8000 API、5174 前端和 55432 业务库不可达，未读取实际 schema；上轮核查为 `0002_local_single_user`、旧 API 无新接口，不能当作当前在线事实。新增 `0004`—`0006` 只在隔离库升级；实际业务库未迁移、旧 API 未重启。原生 TypeScript、A 版 UI 与「回响」Logo 保留。
 
 收尾复核时既有 API、前端与业务库不可达，引擎库仍可连接，停止原因未定位；开始时的可用状态不能作为当前状态。详情及恢复前提见 [交接](docs/development/HANDOFF.md)。
 

@@ -31,6 +31,9 @@ class IngestionError(RuntimeError):
 
 class IngestionRuntime(Protocol):
     async def get_for_workspace(self, kb_id: UUID, workspace: str) -> Any: ...
+    async def clear_workspace(self, kb_id: UUID, workspace: str,
+                              document_ids: list[str]) -> None: ...
+    async def verify_empty_workspace(self, kb_id: UUID, workspace: str) -> None: ...
 
 
 def _manifest(documents: Sequence[EngineDocument]) -> dict[str, tuple[EngineDocument, str]]:
@@ -89,6 +92,19 @@ async def _assert_document(
 class LightRAGIngestionAdapter:
     def __init__(self, runtime: IngestionRuntime) -> None:
         self._runtime = runtime
+
+    async def clear_workspace(self, kb_id: UUID, workspace: str,
+                              document_ids: list[str]) -> None:
+        try:
+            await self._runtime.clear_workspace(kb_id, workspace, document_ids)
+        except Exception:
+            raise IngestionError("cleanup_failed") from None
+
+    async def verify_empty(self, kb_id: UUID, workspace: str) -> None:
+        try:
+            await self._runtime.verify_empty_workspace(kb_id, workspace)
+        except Exception:
+            raise IngestionError("verification_failed") from None
 
     async def insert(
         self,

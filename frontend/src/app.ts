@@ -22,6 +22,9 @@ export async function mountApp(root: HTMLElement, api: ApiClient): Promise<void>
   };
   let generation = 0;
   let healthGeneration = 0;
+  let chatGeneration = 0;
+  let hasMoreChats = false;
+  const retryKeys = new Map<string, string>();
   const documentsPanel = createDocumentsPanel(api, render, (bases) => { state.bases = bases; });
   try {
     const recovered = restorePendingCreation();
@@ -35,12 +38,15 @@ export async function mountApp(root: HTMLElement, api: ApiClient): Promise<void>
   async function refresh() {
     if (isKnowledgePending(state)) return;
     const currentGeneration = ++generation;
+    const currentChatGeneration = ++chatGeneration;
     Object.assign(state, { loading: true, basesError: null, chatsError: null, bases: null, chats: null });
+    state.chatMessages = [];
     render();
     const results = await Promise.allSettled([api.knowledgeBases(), api.conversations()]);
     if (currentGeneration !== generation) return;
     state.bases = results[0].status === 'fulfilled' ? results[0].value : null;
     state.chats = results[1].status === 'fulfilled' ? results[1].value : null;
+    hasMoreChats = state.chats?.length === 20;
     state.basesError = results[0].status === 'rejected'
       ? results[0].reason instanceof ApiError ? results[0].reason : new ApiError('http') : null;
     state.chatsError = results[1].status === 'rejected'
@@ -52,11 +58,25 @@ export async function mountApp(root: HTMLElement, api: ApiClient): Promise<void>
       state.chatMessages = [];
     }
     render();
+    const selectedChatId = state.selectedChatId;
+    if (selectedChatId && state.chats?.some((chat) => chat.id === selectedChatId)) {
+      try {
+        const messages = await api.conversationMessages(selectedChatId);
+        if (currentGeneration === generation && currentChatGeneration === chatGeneration &&
+            state.selectedChatId === selectedChatId) state.chatMessages = messages;
+      } catch (error) {
+        if (currentGeneration === generation && currentChatGeneration === chatGeneration &&
+            state.selectedChatId === selectedChatId)
+          state.chatError = error instanceof ApiError ? error : new ApiError('http');
+      }
+      if (currentGeneration === generation && currentChatGeneration === chatGeneration) render();
+    }
   }
 
   async function selectChat(id: string) {
     const chat = state.chats?.find((item) => item.id === id);
     if (!chat || state.chatPending) return;
+    const currentChatGeneration = ++chatGeneration;
     state.selectedKbId = chat.kb_id;
     state.selectedChatId = chat.id;
     state.chatDraft = '';
@@ -64,9 +84,32 @@ export async function mountApp(root: HTMLElement, api: ApiClient): Promise<void>
     state.chatError = null;
     state.chatMessages = [];
     render();
-    try { state.chatMessages = await api.conversationMessages(id); }
-    catch (error) { state.chatError = error instanceof ApiError ? error : new ApiError('http'); }
+    try {
+      const messages = await api.conversationMessages(id);
+      if (currentChatGeneration === chatGeneration && state.selectedChatId === id) state.chatMessages = messages;
+    } catch (error) {
+      if (currentChatGeneration === chatGeneration && state.selectedChatId === id)
+        state.chatError = error instanceof ApiError ? error : new ApiError('http');
+    }
+    if (currentChatGeneration === chatGeneration) render();
+  }
+
+  async function loadMoreChats() {
+    if (!hasMoreChats || !state.chats || state.chatPending) return;
+    const currentGeneration = generation;
+    const offset = state.chats.length;
+    state.chatPending = true;
     render();
+    try {
+      const page = await api.conversations(20, offset);
+      if (currentGeneration !== generation) return;
+      const known = new Set(state.chats.map((item) => item.id));
+      state.chats = [...state.chats, ...page.filter((item) => !known.has(item.id))];
+      hasMoreChats = page.length === 20;
+      state.chatsError = null;
+    } catch (error) {
+      state.chatsError = error instanceof ApiError ? error : new ApiError('http');
+    } finally { state.chatPending = false; render(); }
   }
 
   async function createChat() {
@@ -81,6 +124,42 @@ export async function mountApp(root: HTMLElement, api: ApiClient): Promise<void>
       state.chatMessages = [];
       state.chatDraft = '';
       state.chatRequestKey = state.chatRequestText = null;
+    } catch (error) {
+      state.chatError = error instanceof ApiError ? error : new ApiError('http');
+    } finally { state.chatPending = false; render(); }
+  }
+
+  async function renameChat() {
+    const id = state.selectedChatId;
+    const chat = state.chats?.find((item) => item.id === id);
+    if (!id || !chat || state.chatPending) return;
+    const requested = window.prompt('聊天名称', chat.title);
+    if (requested === null) return;
+    const title = requested.trim();
+    if (!title || title.length > 120) {
+      state.chatError = new ApiError('validation'); render(); return;
+    }
+    state.chatPending = true;
+    try {
+      const updated = await api.renameConversation(id, title);
+      state.chats = (state.chats ?? []).map((item) => item.id === id ? updated : item);
+      state.chatError = null;
+    } catch (error) {
+      state.chatError = error instanceof ApiError ? error : new ApiError('http');
+    } finally { state.chatPending = false; render(); }
+  }
+
+  async function deleteChat() {
+    const id = state.selectedChatId;
+    if (!id || state.chatPending || !window.confirm('删除此聊天及其消息和摘要？此操作不可撤销。')) return;
+    state.chatPending = true;
+    try {
+      await api.deleteConversation(id);
+      state.chats = (state.chats ?? []).filter((item) => item.id !== id);
+      state.selectedChatId = null;
+      state.chatMessages = [];
+      state.chatError = null;
+      state.chatDraft = '';
     } catch (error) {
       state.chatError = error instanceof ApiError ? error : new ApiError('http');
     } finally { state.chatPending = false; render(); }
@@ -118,6 +197,29 @@ export async function mountApp(root: HTMLElement, api: ApiClient): Promise<void>
         state.chatRequestKey = null;
         state.chatRequestText = null;
       }
+    } finally { state.chatPending = false; render(); }
+  }
+
+  async function retryChat(messageId: string) {
+    const chatId = state.selectedChatId;
+    if (!chatId || state.chatPending ||
+        !state.chatMessages.some((item) => item.message_id === messageId &&
+          !item.hidden && !item.stale && ['failed', 'interrupted'].includes(item.status))) return;
+    const key = retryKeys.get(messageId) ?? crypto.randomUUID();
+    retryKeys.set(messageId, key);
+    state.chatPending = true;
+    state.chatError = null;
+    render();
+    try {
+      const message = await api.retryAnswer(chatId, messageId, key);
+      state.chatMessages = state.chatMessages.map((item) => item.message_id === messageId ? message : item);
+      retryKeys.delete(messageId);
+    } catch (error) {
+      state.chatError = error instanceof ApiError ? error : new ApiError('http');
+      try {
+        state.chatMessages = await api.conversationMessages(chatId);
+        if (state.chatMessages.some((item) => item.attempt_id === key)) retryKeys.delete(messageId);
+      } catch { /* Retain the key until the committed state is known. */ }
     } finally { state.chatPending = false; render(); }
   }
 
@@ -228,10 +330,12 @@ export async function mountApp(root: HTMLElement, api: ApiClient): Promise<void>
   }
 
   function navigate(next: Page) {
+    const previous = state.page;
     ++healthGeneration;
     state.page = next;
     render();
     if (next === 'status') void loadHealth();
+    if (next === 'workbench' && previous !== 'workbench') void refresh();
     root.querySelector<HTMLElement>('h1')?.focus();
   }
 
@@ -247,7 +351,7 @@ export async function mountApp(root: HTMLElement, api: ApiClient): Promise<void>
     else if (state.page === 'knowledge') renderKnowledge(main, state, { refresh, createKnowledgeBase, beginRename, renameKnowledgeBase, cancelRename, openDocuments: documentsPanel.open });
     else if (state.page === 'status') renderStatus(main, state, loadHealth);
     else renderWorkbench(main, state, navigate, {
-      refresh, selectChat, createChat, sendChat,
+      refresh, selectChat, createChat, renameChat, deleteChat, retryChat, sendChat,
       selectKb: (id: string) => { state.selectedKbId = id; state.selectedChatId = null;
         state.chatMessages = []; state.chatError = null; state.chatDraft = '';
         state.chatRequestKey = state.chatRequestText = null; render(); },
@@ -265,7 +369,8 @@ export async function mountApp(root: HTMLElement, api: ApiClient): Promise<void>
       const frame = el('div', 'management-frame');
       frame.append(renderManagementSidebar(state, navigate, openCreate), main);
       shell.append(frame);
-    } else shell.append(renderSidebar(state, navigate, refresh, createChat, selectChat), main);
+    } else shell.append(renderSidebar(state, navigate, refresh, createChat, selectChat,
+      hasMoreChats, loadMoreChats), main);
     root.replaceChildren(skip, shell);
   }
 

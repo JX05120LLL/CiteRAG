@@ -6,6 +6,7 @@ from typing import Any, Protocol
 
 class AnswerRuntime(Protocol):
     async def complete_answer(self, question: str, evidence: list[dict]) -> str: ...
+    async def complete_summary(self, previous: str, turns: list[dict]) -> str: ...
 
 
 class AnswerError(Exception):
@@ -21,6 +22,19 @@ class LightRAGAnswerAdapter:
             return await self.runtime.complete_answer(question, evidence)
         except Exception:
             raise AnswerError("answer_unavailable") from None
+
+    async def answer_with_context(self, question: str, evidence: list[dict],
+                                  context: dict) -> str:
+        try:
+            return await self.runtime.complete_answer(question, evidence, context)
+        except Exception:
+            raise AnswerError("answer_unavailable") from None
+
+    async def summarize(self, previous: str, turns: list[dict[str, str]]) -> str:
+        try:
+            return await self.runtime.complete_summary(previous, turns)
+        except Exception:
+            raise AnswerError("summary_unavailable") from None
 
 
 def checked_answer(raw: str, evidence: dict[str, str]) -> tuple[str, str, list[str]]:

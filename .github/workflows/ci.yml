@@ -167,6 +167,7 @@ jobs:
                   assert len(owners) == 1
                   assert await connection.fetchval("SELECT to_regclass('conversation_messages')")
                   assert await connection.fetchval("SELECT to_regclass('answer_attempts')")
+                  assert await connection.fetchval("SELECT to_regclass('conversation_summaries')")
                   return owners[0]['id']
               finally:
                   await connection.close()

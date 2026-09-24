@@ -1,9 +1,15 @@
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Conversation, KnowledgeBase
+from app.models import (
+    AnswerAttempt,
+    Conversation,
+    ConversationMessage,
+    ConversationSummary,
+    KnowledgeBase,
+)
 from app.services.errors import ServiceError
 
 
@@ -51,3 +57,37 @@ class ConversationService:
         if conversation is None:
             raise ServiceError(404, "conversation_not_found", "聊天不存在或不可访问")
         return conversation
+
+    async def rename(self, owner_id: UUID, conversation_id: UUID, title: str) -> Conversation:
+        conversation = await self.get_owned(owner_id, conversation_id)
+        conversation.title = title
+        await self.session.commit()
+        return conversation
+
+    async def delete(self, owner_id: UUID, conversation_id: UUID) -> None:
+        # Lock the conversation before inspecting attempts, matching ask's lock order.
+        conversation = await self.session.scalar(select(Conversation).where(
+            Conversation.id == conversation_id, Conversation.owner_id == owner_id,
+        ).with_for_update())
+        if conversation is None:
+            raise ServiceError(404, "conversation_not_found", "聊天不存在或不可访问")
+        await self.session.scalar(select(KnowledgeBase).where(
+            KnowledgeBase.id == conversation.kb_id,
+            KnowledgeBase.owner_id == owner_id,
+        ).with_for_update())
+        if await self.session.scalar(select(AnswerAttempt.id).where(
+            AnswerAttempt.conversation_id == conversation_id,
+            AnswerAttempt.status == "running",
+        ).limit(1)):
+            raise ServiceError(409, "answer_in_progress", "回答仍在处理中，请稍后删除聊天")
+        await self.session.execute(delete(ConversationSummary).where(
+            ConversationSummary.conversation_id == conversation_id,
+        ))
+        await self.session.execute(delete(AnswerAttempt).where(
+            AnswerAttempt.conversation_id == conversation_id,
+        ))
+        await self.session.execute(delete(ConversationMessage).where(
+            ConversationMessage.conversation_id == conversation_id,
+        ))
+        await self.session.delete(conversation)
+        await self.session.commit()

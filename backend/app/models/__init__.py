@@ -113,9 +113,11 @@ class Conversation(Base):
 class Document(Base):
     __tablename__ = "documents"
     __table_args__ = (
-        UniqueConstraint("kb_id", "sha256", name="uq_documents_content"),
+        Index("uq_documents_active_content", "kb_id", "sha256", unique=True,
+              postgresql_where=text("status <> 'deleted'")),
         CheckConstraint(
-            "status IN ('pending','parsing','parsed','indexing','ready','failed')",
+            "status IN ('pending','parsing','parsed','indexing','ready','failed',"
+            "'deleting','replacing','deleted')",
             name="ck_documents_status",
         ),
     )
@@ -152,13 +154,14 @@ class IngestionJob(Base):
     __tablename__ = "ingestion_jobs"
     __table_args__ = (
         UniqueConstraint("kb_id", "client_request_id", name="uq_jobs_request"),
-        CheckConstraint("operation IN ('upload','rebuild')", name="ck_jobs_operation"),
+        CheckConstraint("operation IN ('upload','rebuild','delete','replace')",
+                        name="ck_jobs_operation"),
         CheckConstraint(
             "status IN ('queued','running','succeeded','failed','interrupted')",
             name="ck_jobs_status",
         ),
         CheckConstraint(
-            "stage IN ('accepted','parsing','parsed','indexing','verifying','complete')",
+            "stage IN ('accepted','parsing','parsed','indexing','verifying','cleanup','complete')",
             name="ck_jobs_stage",
         ),
         Index("ix_jobs_status_created", "status", "created_at"),
@@ -225,3 +228,18 @@ class AnswerAttempt(Base):
     error_code: Mapped[str | None] = mapped_column(String(60))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ConversationSummary(Base):
+    __tablename__ = "conversation_summaries"
+
+    conversation_id: Mapped[UUID] = mapped_column(
+        ForeignKey("conversations.id"), primary_key=True,
+    )
+    kb_revision: Mapped[int] = mapped_column(Integer)
+    workspace: Mapped[str] = mapped_column(String(100))
+    through_created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    through_message_id: Mapped[UUID] = mapped_column()
+    content: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True),
+                                                  server_default=func.now())

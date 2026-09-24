@@ -30,7 +30,8 @@ export function renderHeader(state: AppState, navigate: (page: Page) => void) {
 
 export function renderSidebar(state: AppState, navigate: (page: Page) => void,
                               refresh: () => Promise<void>, createChat: () => Promise<void>,
-                              selectChat: (id: string) => Promise<void>) {
+                              selectChat: (id: string) => Promise<void>,
+                              hasMoreChats: boolean, loadMoreChats: () => Promise<void>) {
   const {page, chats, loading} = state;
   const aside = el('aside', 'sidebar');
   aside.setAttribute('aria-label', '聊天与导航');
@@ -52,6 +53,11 @@ export function renderSidebar(state: AppState, navigate: (page: Page) => void,
       entry.disabled = state.chatPending;
       if (chat.id === state.selectedChatId) entry.setAttribute('aria-current', 'true');
       history.append(entry);
+    }
+    if (hasMoreChats) {
+      const more = action('加载更多聊天', 'text-button', () => { void loadMoreChats(); });
+      more.disabled = state.chatPending;
+      history.append(more);
     }
   } else history.append(el('p', 'empty-history', loading ? '正在读取聊天…' : chats ? '暂无聊天' : '聊天列表暂不可用'));
   if (state.chatsError) {

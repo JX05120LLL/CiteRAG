@@ -1,8 +1,8 @@
 # CiteRAG 后端
 
-Python 3.12、FastAPI、SQLAlchemy 2、Alembic 与 PostgreSQL 17。本地单用户，无管理员、注册或登录。M1-1 知识库管理已提交；M1-2 私有原文、受限解析、任务、入库核验和修复，以及 M1-3 普通/精确问答、真实来源与持久聊天首片已实现。本片默认关闭问答；近期上下文/摘要、删除/替换、图片和语音仍留后续。M0 超长 Embedding 输入边界暂缓未通过，M0 与完整 M1 均未完成。
+Python 3.12、FastAPI、SQLAlchemy 2、Alembic 与 PostgreSQL 17。本地单用户，无管理员、注册或登录。M1-1 知识库管理已提交；M1-2 至 M1-4 的受管资料、问答与来源、持久聊天、近期摘要、删除/替换及 blocked 修复已在本机实现。入库与问答默认关闭，真正的 SSE 增量流仍待实现；图片和语音留后续。M0 超长 Embedding 输入边界暂缓未通过，M0 与完整 M1 均未完成。
 
-本轮只在隔离测试库升级到 `0005_answer_attempts`。实际业务库本轮不可达；上轮只读核查为 `0002_local_single_user`，旧 API 无新接口，不能当作当前在线证据。未迁移业务或重启旧 API。默认关闭模型入库与问答；新接口需停写备份后显式迁移并重启，进度见 [M1 记录](../docs/development/M1-VALIDATION.md)。
+本轮只在隔离测试库升级到 `0006_m1_lifecycle`。实际业务库本轮不可达；上轮只读核查为 `0002_local_single_user`，旧 API 无新接口，不能当作当前在线证据。未迁移业务或重启旧 API。默认关闭模型入库与问答；新接口需停写备份业务库、引擎库及私有原文后显式迁移并重启，进度见 [M1 记录](../docs/development/M1-VALIDATION.md)。
 
 上轮 `0002` 库版本与旧接口为当时实查；本轮接手及收尾 API、前端和业务库不可达，引擎库仍可连接，停止原因未定位。不要直接将新代码启动到旧 schema，详见 [交接](../docs/development/HANDOFF.md)。
 
@@ -35,9 +35,9 @@ uv run --no-env-file uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers
 uv run --no-env-file alembic upgrade head
 ```
 
-源码当前 head 为 `0004_managed_ingestion`：在 `0003` 知识库创建幂等基础上增加 revision/历史遮蔽水位及 documents、parsed_blocks、ingestion_jobs。旧账号、知识库、聊天和归属全部保留，不认领旧资料。迁移只管理业务库，不管理 LightRAG 表；本轮已只读核对实际业务库为 `0002`，仅在隔离库升级新 head。
+源码当前 head 为 `0006_m1_lifecycle`：`0004` 增加受管资料与任务，`0005` 增加确认属性、消息和回答尝试，`0006` 增加 revision/空间绑定摘要及删除/替换任务状态、未删除资料唯一索引。旧账号、知识库、聊天和归属全部保留，不认领旧资料。迁移只管理业务库，不管理 LightRAG 表；实际业务库本轮不可达，上轮 `0002` 仅是历史核查。
 
-已有数据升级前先停写，完整备份业务库、引擎库、私有原文及版本清单；恢复时保持维护，核对任务、原文和 active_workspace，不能只回退 schema。`0004` 有受管记录、非零修订或历史遮蔽水位时拒绝 downgrade；应用空间切换会留下任务及修订记录。`0003` 拒绝丢弃已使用的创建键，`0002` 拒绝丢失本地归属。数据库仍需有效连接凭证，它不等于网页账号。
+已有数据升级前先停写，完整备份业务库、引擎库、私有原文、本地配置及版本清单；恢复时保持维护，成套恢复并核对任务、原文和 active_workspace，不能只回退 schema。`0006` 有摘要、删除/替换或清理历史时拒绝 downgrade；`0004` 有受管记录、非零修订或历史遮蔽水位时也拒绝。`0003` 拒绝丢弃已使用的创建键，`0002` 拒绝丢失本地归属。数据库仍需有效连接凭证，它不等于网页账号。
 
 配置数据库后，启动必须持有独占 PostgreSQL owner 会话锁；第二个 API 进程启动失败。取得锁后检查 Alembic 版本，缺失、旧版或不兼容版本拒绝启动，不自动升级。持锁连接丢失后停止受理并终止进程。启动也拒绝全局 `POSTGRES_WORKSPACE` 或当前目录的 `config.ini`，不读取其可能包含的凭证。
 
@@ -57,16 +57,20 @@ API 仅监听回环地址，并验证真实连接来源、Host、Origin 和跨�
 - `POST /api/conversations`：`{kb_id,title}` → 201，只允许本地归属下已就绪的知识库，聊天固定该库。
 - `GET /api/conversations?limit=20&offset=0`：返回当前本地归属的聊天列表。
 - `GET /api/conversations/{id}`：只读取本地归属及正确知识库绑定的聊天，未归属旧记录返回 404。
+- `PATCH /api/conversations/{id}`：修改本人聊天标题；`DELETE`：拒绝仍有活动回答的聊天，并删除消息、尝试和摘要。
+- `POST /api/conversations/{id}/messages`：同一聊天固定知识库，返回经本轮来源核验的回答；默认 `answer_disabled`。`GET` 读取历史，删除/替换后遮蔽旧知识回答与来源。
+- `POST /api/conversations/{id}/messages/{message_id}/retry`：`{attempt_id}`，仅失败/中断且库 revision/活动空间未变时，在原消息下创建新尝试；同键重放不重复生成。
 - `POST /api/knowledge-bases/{id}/documents`：multipart `files`（1–5 份）和 UUID `client_request_id`，可靠保存后返回 202 任务；202 不表示解析或索引成功。同键同载荷重放同一任务，同库相同内容拒绝。
 - `GET /api/knowledge-bases/{id}/documents`、`GET /api/knowledge-bases/{id}/jobs`、`GET /api/jobs/{id}`：持久资料/任务状态，区分受理、解析、索引、核验及失败；不暴露存储路径或引擎空间。
 - `GET /api/documents/{id}/original`、`GET /api/documents/{id}/blocks`：私有下载和实际解析位置，校验归属与维护状态；磁盘/数据库读取后重新校验。原文下载校验哈希并以附件响应。
 - `POST /api/jobs/{id}/retry`、`POST /api/knowledge-bases/{id}/rebuild`（后者接收 `client_request_id`）：显式修复，过期任务不得修改已切换空间。重建核验后切换数据库 active_workspace，旧空间以 cleanup_pending 隔离保留。
+- `POST /api/documents/{id}/delete`、`POST /api/documents/{id}/replacement`：受管删除/替换任务；`POST /api/jobs/{id}/cleanup` 重试旧空间清理。旧空间、原文和解析数据清理核验成功前库不恢复就绪。
 
 ## 受管解析与引擎边界
 
 原文固定在私有 `.local/runtime/sources/`，随机存储键与 SHA-256；单文件 20 MiB。UTF-8 TXT/MD 使用实际行号，文字 PDF 最多 100 页并保留实际页码，DOCX 限普通段落/简单表格行。解析在 20 秒/384 MiB 子进程中运行，输出最多 500 万字符/5 万块；拒绝扫描/加密、乱码、危险 ZIP、合并表格、嵌入对象、字段及非空页眉页脚等可能丢失正文的结构。新增依赖锁定 pypdf 6.19.0、python-docx 1.2.0、python-multipart 0.0.32。
 
-同库仅一个活动任务、全安装串行修改引擎；进入修改前提交 maintaining/revision。预检失败保留原 ready，修改后失败或中断保持 blocked。只有核对引擎文档状态、正文、片段和检索来源后才 ready；重启不自动重放不确定引擎写入。旧空间物理清理、删除/替换和完整问答仍未交付。
+同库仅一个活动任务、全安装串行修改引擎；进入修改前提交 maintaining/revision。预检失败保留原 ready，修改后失败或中断保持 blocked。只有核对引擎文档状态、正文、片段和检索来源后才 ready；重启不自动重放不确定引擎写入。删除/替换在新空间核验并切换后，清理旧 LightRAG 存储和原文；清理失败保持 blocked，可显式重试或重建。真正的 SSE 增量回答和真实模型端到端仍未交付。
 
 提交结果不确定的原文先保留；启动持有 owner 后按数据库引用清理超过 24 小时的孤立 `.source/.partial`。保留已提交、近期和非受管文件。Windows 已验证文件刷新/原子重命名，不声称目录 fsync 或隔离同一 OS 用户。
 

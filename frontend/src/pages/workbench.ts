@@ -7,6 +7,9 @@ interface WorkbenchActions {
   refresh: () => Promise<void>;
   selectChat: (id: string) => Promise<void>;
   createChat: () => Promise<void>;
+  renameChat: () => Promise<void>;
+  deleteChat: () => Promise<void>;
+  retryChat: (messageId: string) => Promise<void>;
   sendChat: () => Promise<void>;
   selectKb: (id: string) => void;
   setDraft: (text: string) => void;
@@ -144,6 +147,7 @@ export function renderWorkbench(main: HTMLElement, state: AppState,
     }
     if (!state.selectedKbId) content.append(libraries);
     const chats = (state.chats ?? []).filter((chat) => chat.kb_id === state.selectedKbId);
+    const current = bases.find((base) => base.id === state.selectedKbId);
     if (chats.length) {
       const list = el('div', 'chat-list');
       for (const chat of chats) {
@@ -156,6 +160,10 @@ export function renderWorkbench(main: HTMLElement, state: AppState,
     }
     if (state.chatError) content.append(alert(state.chatError.message));
     if (state.selectedChatId) {
+      const controls = el('div', 'chat-controls');
+      controls.append(action('聊天改名', 'text-button', () => { void actions.renameChat(); }),
+        action('删除聊天', 'text-button', () => { void actions.deleteChat(); }));
+      content.append(controls);
       const transcript = el('section', 'chat-transcript');
       transcript.setAttribute('aria-label', '聊天记录');
       for (const message of state.chatMessages) {
@@ -173,6 +181,13 @@ export function renderWorkbench(main: HTMLElement, state: AppState,
           const list = el('ul', 'chat-citations');
           for (const citation of message.citations) list.append(citationCard(citation));
           item.append(list);
+        }
+        if (!message.hidden && !message.stale &&
+            (message.status === 'failed' || message.status === 'interrupted') &&
+            current?.status === 'ready') {
+          const retry = action('重试回答', 'text-button', () => { void actions.retryChat(message.message_id); });
+          retry.disabled = state.chatPending;
+          item.append(retry);
         }
         transcript.append(item);
       }

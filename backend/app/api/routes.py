@@ -9,6 +9,7 @@ from app.api.capabilities import load_capability_status
 from app.api.dependencies import LocalOwner, Session
 from app.api.schemas import (
     ConversationCreate,
+    ConversationRename,
     ConversationView,
     KnowledgeBaseCreate,
     KnowledgeBaseRename,
@@ -88,3 +89,15 @@ async def list_conversations(
 @router.get("/conversations/{conversation_id}", response_model=ConversationView)
 async def get_conversation(conversation_id: UUID, owner: LocalOwner, session: Session):
     return await ConversationService(session).get_owned(owner, conversation_id)
+
+
+@router.patch("/conversations/{conversation_id}", response_model=ConversationView)
+async def rename_conversation(conversation_id: UUID, body: ConversationRename,
+                              owner: LocalOwner, session: Session):
+    return await ConversationService(session).rename(owner, conversation_id, body.title)
+
+
+@router.delete("/conversations/{conversation_id}")
+async def delete_conversation(conversation_id: UUID, owner: LocalOwner, session: Session):
+    await ConversationService(session).delete(owner, conversation_id)
+    return {"deleted": True}

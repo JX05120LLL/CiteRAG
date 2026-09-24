@@ -77,6 +77,8 @@ powershell.exe -NoProfile -File D:\code\CiteRAG\.local\runtime\start.ps1
 
 LiveRAG 本版未接入具体重排模型和 VLM。CiteRAG M0 已选 `qwen3-rerank`，独立真实调用和 LightRAG 双库检索链路调用均已验证。VLM 留到 M3。双库验收结果不代替 Embedding 超长输入边界，当前进度见 [交接文档](HANDOFF.md)。
 
+2026-09-24 起代码目标重排模型改为 `qwen3-vl-rerank`，按[百炼原生重排 API](https://help.aliyun.com/zh/model-studio/text-rerank-api)发送文字查询和文字候选。旧 `qwen3-rerank` 真实证据只作历史记录；新模型未发真实请求，图片/视频输入未接线。不要把旧报告或脚本的离线测试视为新模型真实通过。
+
 申请完成后只告知平台、地域、可用模型、服务是否开通及本轮测试预算上限。Key、Access Token 等凭证留在本机，不发到聊天、源码、文档或截图。当前后台已有模型适配器与受控加载链路，但保存 Key 不会自动发起调用或标记模型可用；不要复制历史 LiveRAG 的 `.env`。
 
 ### 维护者工作站：在本机录入模型凭证
@@ -102,9 +104,11 @@ powershell.exe -NoProfile -File D:\code\CiteRAG\scripts\configure_models.ps1 -Pr
 
 重复配置同一平台时，明确输入 `REPLACE` 才替换旧文件；直接回车取消，空 Key/Token 不保存。当前若提示已有百炼文件，仅在确定要替换时输入 `REPLACE`，无需读取旧文件或将内容发来。脚本使用 Windows PowerShell 5.1，请保留命令中的 `powershell.exe`，不要改用 `pwsh`。
 
-普通保存命令产生 `SchemaVersion=2` 和明确的 `AuthMode`；现存 v1 文件保持原样，查看保存状态不会解密或迁移。加载器兼容 v1/v2/v3，但 M0 百炼验证要求 v3 的北京业务空间 ID、`qwen3-rerank` 与 1024 维配置。火山新版 API Key 与旧 App ID/Token 仍分别处理。
+普通保存命令产生 `SchemaVersion=2` 和明确的 `AuthMode`；现存 v1 文件保持原样，查看保存状态不会解密或迁移。加载器兼容 v1/v2/v3；当前运行配置要求 v3 的北京业务空间元数据、`qwen3-vl-rerank` 与 1024 维。旧 `qwen3-rerank` 元数据会被明确拒绝，文件不自动改写。火山新版 API Key 与旧 App ID/Token 仍分别处理。
 
 若运行百炼离线预检时提示需要 `-UpdateMetadata`，在项目根目录执行下面的本机命令，按提示输入**业务空间 ID**。它保留已加密的 Key，仅更新百炼模型元数据和本地加密记录；不会访问百炼、修改业务数据库或启用问答。不要把业务空间 ID 或 Key 贴到聊天。
+
+切换重排模型前先停写、备份 `.local/runtime/models/` 内的加密凭证及 `.local/runtime/validation/` 中的本地报告，并记录文件权限；更新失败或需回退时保持服务关闭并原样恢复备份及 ACL。运行以下显式元数据更新后，旧模型验证报告因配置指纹变化不再代表当前模型，需另获真实请求授权才能重新验收。不要把备份提交到 Git。
 
 ```powershell
 Set-Location D:\code\CiteRAG

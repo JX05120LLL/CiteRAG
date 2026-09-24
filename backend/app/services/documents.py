@@ -63,6 +63,7 @@ class DocumentService:
         hashes = [source.sha256 for source in sources]
         duplicate = await self.session.scalar(select(Document.id).where(
             Document.kb_id == kb_id, Document.sha256.in_(hashes),
+            Document.status != "deleted",
         ).limit(1))
         if len(set(hashes)) != len(hashes) or duplicate:
             raise ServiceError(409, "duplicate_document", "该库已有相同内容，请查看原资料与任务")
@@ -73,7 +74,7 @@ class DocumentService:
         await no_active_job(self.session, kb_id)
         count = await self.session.scalar(select(func.count()).select_from(Document).join(
             KnowledgeBase,
-        ).where(KnowledgeBase.owner_id == owner))
+        ).where(KnowledgeBase.owner_id == owner, Document.status != "deleted"))
         if count + len(sources) > 100:
             raise ServiceError(409, "capacity_exceeded", "本地安装最多保存 100 份资料")
         documents = []
@@ -105,10 +106,12 @@ class DocumentService:
             return job
         if job.status not in {"failed", "interrupted"}:
             raise ServiceError(409, "job_not_retryable", "任务已完成，无需重试")
-        if job.error_code == "rebuild_required":
+        cleaning = (job.cleanup_pending and job.retired_workspace is not None
+                    and job.retired_workspace != kb.active_workspace)
+        if job.error_code == "rebuild_required" and not cleaning:
             raise ServiceError(409, "rebuild_required", "引擎状态不能安全重试，请从原文重建")
         await no_active_job(self.session, kb.id)
-        if job.operation == "rebuild" and job.retired_workspace is not None and (
+        if not cleaning and job.operation == "rebuild" and job.retired_workspace is not None and (
             job.retired_workspace != kb.active_workspace
         ):
             raise ServiceError(409, "stale_job", "旧重建任务已被新的重建替代，不能再次重试")
@@ -119,6 +122,15 @@ class DocumentService:
             raise ServiceError(409, "rebuild_required", "任务属于已退出使用的空间，请查看当前资料")
         job.status, job.error_code, job.message = "queued", None, "重试已排队，尚未确认入库"
         job.finished_at = None
+        if cleaning:
+            job.stage = "cleanup"
+            kb.status = "maintaining"
+        elif job.operation in {"delete", "replace"}:
+            kb.status = "maintaining"
+            old = await self.session.get(Document, UUID(job.document_ids[0]),
+                                         with_for_update=True)
+            if old.status == "ready":
+                old.status = "deleting" if job.operation == "delete" else "replacing"
         # Retain engine_mutated: a failed retry can never release a blocked library.
         if not job.engine_mutated:
             job.stage = "accepted"
@@ -126,7 +138,7 @@ class DocumentService:
         return job
 
     async def rebuild(self, owner: UUID, kb_id: UUID, request_id: UUID):
-        await owned_kb(self.session, owner, kb_id, lock=True)
+        kb = await owned_kb(self.session, owner, kb_id, lock=True)
         prior = await self.session.scalar(select(IngestionJob).where(
             IngestionJob.kb_id == kb_id, IngestionJob.client_request_id == request_id,
         ))
@@ -138,8 +150,13 @@ class DocumentService:
         await no_active_job(self.session, kb_id)
         documents = list(await self.session.scalars(select(Document).where(
             Document.kb_id == kb_id, Document.indexed_once.is_(True),
+            Document.status.not_in(("deleted", "deleting", "replacing")),
         ).order_by(Document.created_at, Document.id)))
-        if not documents:
+        pending_retirement = await self.session.scalar(select(Document.id).where(
+            Document.kb_id == kb_id, Document.indexed_once.is_(True),
+            Document.status.in_(("deleting", "replacing")),
+        ).limit(1))
+        if not documents and not (kb.status == "blocked" and pending_retirement):
             raise ServiceError(409, "nothing_to_rebuild", "没有曾进入索引的受管原文，请先上传资料")
         job = IngestionJob(
             kb_id=kb_id, client_request_id=request_id, operation="rebuild",
@@ -147,6 +164,97 @@ class DocumentService:
             status="queued", stage="accepted", message="重建已受理，将核对原文后进入维护",
         )
         self.session.add(job)
+        await self.session.commit()
+        return job
+
+    async def delete(self, owner: UUID, document_id: UUID, request_id: UUID):
+        await self.session.scalar(select(LocalProfile).where(
+            LocalProfile.id == owner,
+        ).with_for_update())
+        document = await self.session.get(Document, document_id)
+        if document is None:
+            raise ServiceError(404, "document_not_found", "资料不存在或不可访问")
+        kb = await owned_kb(self.session, owner, document.kb_id, lock=True)
+        prior = await self.session.scalar(select(IngestionJob).where(
+            IngestionJob.kb_id == kb.id, IngestionJob.client_request_id == request_id,
+        ))
+        fingerprint = hashlib.sha256(("delete:" + document_id.hex).encode()).hexdigest()
+        if prior is not None:
+            if prior.operation != "delete" or prior.fingerprint != fingerprint:
+                raise ServiceError(409, "idempotency_conflict", "请求键已用于其他维护操作")
+            await self.session.commit()
+            return prior
+        if kb.status != "ready" or document.status != "ready":
+            raise ServiceError(409, "kb_not_ready", "资料未就绪，暂不能删除")
+        await no_active_job(self.session, kb.id)
+        kb.status, document.status = "maintaining", "deleting"
+        job = IngestionJob(kb_id=kb.id, client_request_id=request_id,
+            operation="delete", fingerprint=fingerprint, document_ids=[str(document_id)],
+            status="queued", stage="accepted", message="删除已受理，原文访问已暂停")
+        self.session.add(job)
+        await self.session.commit()
+        return job
+
+    async def replace(self, owner: UUID, document_id: UUID, request_id: UUID, source):
+        await self.session.scalar(select(LocalProfile).where(
+            LocalProfile.id == owner,
+        ).with_for_update())
+        old = await self.session.get(Document, document_id)
+        if old is None:
+            raise ServiceError(404, "document_not_found", "资料不存在或不可访问")
+        kb = await owned_kb(self.session, owner, old.kb_id, lock=True)
+        fingerprint = hashlib.sha256(json.dumps(
+            [str(document_id), source.filename, source.size, source.sha256],
+            ensure_ascii=True, separators=(",", ":"),
+        ).encode()).hexdigest()
+        prior = await self.session.scalar(select(IngestionJob).where(
+            IngestionJob.kb_id == kb.id, IngestionJob.client_request_id == request_id,
+        ))
+        if prior is not None:
+            if prior.operation != "replace" or prior.fingerprint != fingerprint:
+                raise ServiceError(409, "idempotency_conflict", "同一替换请求不能更换原文")
+            await self.session.commit()
+            return prior, False
+        if kb.status != "ready" or old.status != "ready":
+            raise ServiceError(409, "kb_not_ready", "资料未就绪，暂不能替换")
+        await no_active_job(self.session, kb.id)
+        if await self.session.scalar(select(Document.id).where(
+            Document.kb_id == kb.id, Document.sha256 == source.sha256,
+            Document.status != "deleted",
+        ).limit(1)):
+            raise ServiceError(409, "duplicate_document", "该库已有相同内容")
+        identifier = uuid4()
+        replacement = Document(id=identifier, kb_id=kb.id, filename=source.filename,
+            storage_key=source.storage_key, sha256=source.sha256, size=source.size,
+            status="pending", source_key="source_" + identifier.hex,
+            engine_doc_id="doc_" + identifier.hex)
+        self.session.add(replacement)
+        kb.status, old.status = "maintaining", "replacing"
+        job = IngestionJob(kb_id=kb.id, client_request_id=request_id,
+            operation="replace", fingerprint=fingerprint,
+            document_ids=[str(document_id), str(identifier)], status="queued",
+            stage="accepted", message="替换已受理，旧原文访问已暂停")
+        self.session.add(job)
+        await self.session.commit()
+        return job, True
+
+    async def cleanup(self, owner: UUID, job_id: UUID):
+        job = await owned_job(self.session, owner, job_id)
+        kb = await owned_kb(self.session, owner, job.kb_id, lock=True)
+        await self.session.refresh(job)
+        if not job.cleanup_pending:
+            raise ServiceError(409, "nothing_to_cleanup", "该任务没有待清理旧空间")
+        if job.status in ACTIVE and job.stage == "cleanup":
+            await self.session.commit()
+            return job
+        if (job.status != "succeeded" or job.retired_workspace is None
+            or job.retired_workspace == kb.active_workspace or kb.status != "ready"):
+            raise ServiceError(409, "cleanup_unavailable", "旧空间尚不能安全清理")
+        await no_active_job(self.session, kb.id)
+        kb.status = "maintaining"
+        job.status, job.stage = "queued", "cleanup"
+        job.message = "正在物理清理已退出使用的旧空间"
+        job.finished_at = None
         await self.session.commit()
         return job
 
@@ -159,6 +267,8 @@ class DocumentService:
         document, kb = pair
         if kb.status in {"maintaining", "blocked"}:
             raise ServiceError(409, "kb_" + kb.status, "知识库维护或待修复，暂不可读取原文")
+        if document.status in {"deleting", "replacing", "deleted"}:
+            raise ServiceError(404, "document_not_found", "资料不存在或不可访问")
         return document
 
     async def blocks(self, owner: UUID, document_id: UUID):

@@ -34,6 +34,8 @@ export interface AppState {
   selectedKbId: string | null;
   selectedChatId: string | null;
   chatMessages: ChatMessage[];
+  chatStreamText?: string;
+  chatStreamAttemptId?: string | null;
   chatDraft: string;
   chatPending: boolean;
   chatError: ApiError | null;

@@ -2,6 +2,7 @@
 
 import asyncio
 import re
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any, Protocol
 from uuid import UUID, uuid4
@@ -21,6 +22,7 @@ from app.rag.answer_adapter import AnswerError, checked_answer
 from app.rag.query_adapter import QueryError, RetrievedChunk
 from app.rag.source_mapping import locate_chunk
 from app.services.conversation_context import prepare_context
+from app.services.conversation_retention import active_conversation
 from app.services.errors import ServiceError
 
 
@@ -52,6 +54,7 @@ class AnswerService:
     async def _owned_conversation(self, owner: UUID, conversation_id: UUID, *, lock=False):
         query = select(Conversation).where(
             Conversation.id == conversation_id, Conversation.owner_id == owner,
+            active_conversation(),
         )
         conversation = await self.session.scalar(query.with_for_update() if lock else query)
         if conversation is None:
@@ -90,6 +93,7 @@ class AnswerService:
         self, owner: UUID, conversation_id: UUID, request_id: UUID, question: str,
         retriever: Retriever, answerer: Answerer, *, mode: str = "semantic",
         exact: dict | None = None,
+        on_accepted: Callable[[dict], Awaitable[None]] | None = None,
     ) -> dict:
         conversation, kb = await self._owned_conversation(owner, conversation_id, lock=True)
         existing = await self.session.scalar(select(ConversationMessage).where(
@@ -131,6 +135,8 @@ class AnswerService:
         await self.session.flush()
         self.session.add(attempt)
         await self.session.commit()
+        if on_accepted is not None:
+            await on_accepted(answer_view(message, attempt))
         return await self._finish_attempt(owner, conversation_id, kb, message, attempt,
                                           retriever, answerer, mode, exact)
 

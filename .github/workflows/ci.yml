@@ -198,6 +198,7 @@ jobs:
                   assert response.json() == {
                       'status': 'partial', 'mode': 'local_single_user',
                       'database': 'available', 'rag': 'not_configured', 'models': 'not_configured',
+                      'backup': 'disabled', 'retention': 'available',
                   }
                   for path in ('/api/knowledge-bases', '/api/conversations'):
                       response = api.get(path)

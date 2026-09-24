@@ -10,6 +10,7 @@ from app.models import (
     ConversationSummary,
     KnowledgeBase,
 )
+from app.services.conversation_retention import active_conversation
 from app.services.errors import ServiceError
 
 
@@ -37,7 +38,8 @@ class ConversationService:
             await self.session.scalars(
                 select(Conversation)
                 .join(KnowledgeBase, Conversation.kb_id == KnowledgeBase.id)
-                .where(Conversation.owner_id == owner_id, KnowledgeBase.owner_id == owner_id)
+                .where(Conversation.owner_id == owner_id, KnowledgeBase.owner_id == owner_id,
+                       active_conversation())
                 .order_by(Conversation.created_at.desc(), Conversation.id.desc())
                 .offset(offset)
                 .limit(limit)
@@ -52,6 +54,7 @@ class ConversationService:
                 Conversation.id == conversation_id,
                 Conversation.owner_id == owner_id,
                 KnowledgeBase.owner_id == owner_id,
+                active_conversation(),
             )
         )
         if conversation is None:
@@ -68,6 +71,7 @@ class ConversationService:
         # Lock the conversation before inspecting attempts, matching ask's lock order.
         conversation = await self.session.scalar(select(Conversation).where(
             Conversation.id == conversation_id, Conversation.owner_id == owner_id,
+            active_conversation(),
         ).with_for_update())
         if conversation is None:
             raise ServiceError(404, "conversation_not_found", "聊天不存在或不可访问")

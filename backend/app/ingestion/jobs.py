@@ -14,12 +14,14 @@ from app.services.errors import ServiceError
 
 
 class IngestionRunner:
-    def __init__(self, database, store, adapter, assert_owned, *, enabled: bool):
+    def __init__(self, database, store, adapter, assert_owned, *, enabled: bool,
+                 backup_gate=None):
         self.database = database
         self.store = store
         self.adapter = adapter
         self.assert_owned = assert_owned
         self.enabled = enabled
+        self.backup_gate = backup_gate
         self._wake = asyncio.Event()
         self._task = None
         self.available = True
@@ -79,7 +81,13 @@ class IngestionRunner:
                         IngestionJob.created_at, IngestionJob.id,
                     ).limit(1))
                 if identifier is not None:
-                    await self.process(identifier)
+                    if self.backup_gate is not None:
+                        await self.backup_gate.wait_and_enter()
+                    try:
+                        await self.process(identifier)
+                    finally:
+                        if self.backup_gate is not None:
+                            await self.backup_gate.leave()
                     continue
                 try:
                     await asyncio.wait_for(self._wake.wait(), timeout=2)

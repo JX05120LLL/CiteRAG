@@ -38,6 +38,8 @@ export interface ChatMessage {
   hidden?: boolean;
 }
 
+export type AnswerProgress = { type: 'accepted'; message: ChatMessage } | { type: 'delta'; text: string };
+
 export interface ManagedDocument {
   id: string;
   filename: string;
@@ -86,6 +88,11 @@ export interface SystemHealth {
   mode: 'local_single_user';
   database: 'available' | 'not_configured' | 'unavailable';
   rag: CapabilityState;
+  backup?: 'available' | 'running' | 'unavailable' | 'disabled';
+  backup_error_code?: 'engine_configuration_unavailable' | 'backup_verification_failed' |
+    'backup_interrupted' | 'backup_failed';
+  retention?: 'available' | 'unavailable' | 'disabled';
+  last_backup_at?: string;
   models: CapabilityState;
   models_info?: ModelsInfo;
   rag_info?: RagInfo;
@@ -289,6 +296,89 @@ export function createApi(fetcher: typeof fetch = globalThis.fetch) {
     } finally { clearTimeout(timeout); }
   }
 
+  async function askMessageStream(id: string, text: string, key: string,
+      mode: 'semantic' | 'exact' = 'semantic', exact?: ExactFilter,
+      onProgress?: (progress: AnswerProgress) => void): Promise<ChatMessage> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 120000);
+    try {
+      const response = await fetcher(`/api/conversations/${encodeURIComponent(id)}/messages/stream`, {
+        method: 'POST', credentials: 'omit',
+        headers: { Accept: 'text/event-stream', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ client_message_id: key, text, mode,
+          ...(mode === 'exact' ? { exact } : {}) }), signal: controller.signal,
+      });
+      if (!response.ok) {
+        let value: unknown = null;
+        try { value = await response.json(); } catch { /* Failed responses may have no JSON body. */ }
+        const code = isRecord(value) && isRecord(value.detail) && typeof value.detail.code === 'string'
+          ? value.detail.code : '';
+        throw new ApiError(response.status === 409 ? 'conflict' : response.status === 503 ? 'unavailable'
+          : response.status === 403 ? 'forbidden' : response.status === 404 ? 'not-found' : 'http', code);
+      }
+      if (!response.headers.get('Content-Type')?.startsWith('text/event-stream') || !response.body)
+        throw new ApiError('invalid-response');
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let accepted: ChatMessage | null = null;
+      let streamed = '';
+      let sequence = 0;
+      let result: ChatMessage | null = null;
+      while (true) {
+        const chunk = await reader.read();
+        buffer += chunk.done ? decoder.decode() : decoder.decode(chunk.value, { stream: true });
+        buffer = buffer.replaceAll('\r\n', '\n');
+        if (buffer.length > 65536) throw new ApiError('invalid-response');
+        let boundary: number;
+        while ((boundary = buffer.indexOf('\n\n')) >= 0) {
+          const frame = buffer.slice(0, boundary);
+          buffer = buffer.slice(boundary + 2);
+          if (frame.startsWith(':')) continue;
+          const lines = frame.split('\n');
+          if (lines.length !== 2 || !lines[0].startsWith('event: ') || !lines[1].startsWith('data: '))
+            throw new ApiError('invalid-response');
+          let data: unknown;
+          try { data = JSON.parse(lines[1].slice(6)); } catch { throw new ApiError('invalid-response'); }
+          const event = lines[0].slice(7);
+          if (event === 'accepted') {
+            const message = chatMessage(data);
+            if (accepted || message.status !== 'running' || message.saved ||
+                message.client_message_id !== key) throw new ApiError('invalid-response');
+            accepted = message;
+            onProgress?.({ type: 'accepted', message });
+          } else if (event === 'delta') {
+            if (!isRecord(data) || typeof data.text !== 'string' || typeof data.attempt_id !== 'string' ||
+                data.saved !== true || data.seq !== sequence + 1 ||
+                (accepted && data.attempt_id !== accepted.attempt_id)) throw new ApiError('invalid-response');
+            sequence++;
+            streamed += data.text;
+            if (streamed.length > 1500) throw new ApiError('invalid-response');
+            onProgress?.({ type: 'delta', text: data.text });
+          } else if (event === 'saved') {
+            const final = chatMessage(data);
+            if (!final.saved || final.status === 'running' || final.client_message_id !== key ||
+                (accepted && final.attempt_id !== accepted.attempt_id) ||
+                (sequence > 0 && streamed !== final.text)) throw new ApiError('invalid-response');
+            result = final;
+          } else if (event === 'pending') {
+            throw new ApiError('conflict', 'answer_in_progress');
+          } else if (event === 'error') {
+            if (!isRecord(data) || typeof data.code !== 'string' || typeof data.status !== 'number')
+              throw new ApiError('invalid-response');
+            throw new ApiError(data.status === 409 ? 'conflict' : data.status === 404 ? 'not-found'
+              : data.status === 503 ? 'unavailable' : 'http', data.code);
+          } else throw new ApiError('invalid-response');
+          if (result) return result;
+        }
+        if (chunk.done) throw new ApiError('network');
+      }
+    } catch (error) {
+      if (error instanceof ApiError) throw error;
+      throw new ApiError('network');
+    } finally { clearTimeout(timeout); }
+  }
+
   return {
     knowledgeBases: async (): Promise<KnowledgeBase[]> => collection(await request('/api/knowledge-bases'), isKnowledgeBase),
     createKnowledgeBase: async (name: string, clientRequestId: string): Promise<KnowledgeBase> =>
@@ -353,6 +443,7 @@ export function createApi(fetcher: typeof fetch = globalThis.fetch) {
                        mode: 'semantic' | 'exact' = 'semantic', exact?: ExactFilter): Promise<ChatMessage> =>
       chatMessage(await request(`/api/conversations/${encodeURIComponent(id)}/messages`, 'POST',
         { client_message_id: key, text, mode, ...(mode === 'exact' ? { exact } : {}) }, 60000)),
+    askMessageStream,
     retryAnswer: async (chatId: string, messageId: string, attemptId: string): Promise<ChatMessage> =>
       chatMessage(await request(`/api/conversations/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}/retry`,
         'POST', { attempt_id: attemptId }, 60000)),
@@ -361,12 +452,25 @@ export function createApi(fetcher: typeof fetch = globalThis.fetch) {
       if (!isRecord(value) || value.status !== 'partial' || value.mode !== 'local_single_user' ||
           !['available', 'not_configured', 'unavailable'].includes(String(value.database)) ||
           !isCapabilityState(value.rag) || !isCapabilityState(value.models) ||
+          (value.backup !== undefined && !['available', 'running', 'unavailable', 'disabled'].includes(String(value.backup))) ||
+          (value.backup_error_code !== undefined && ![
+            'engine_configuration_unavailable', 'backup_verification_failed',
+            'backup_interrupted', 'backup_failed',
+          ].includes(String(value.backup_error_code))) ||
+          (value.retention !== undefined && !['available', 'unavailable', 'disabled'].includes(String(value.retention))) ||
+          (value.last_backup_at !== undefined && !isVerificationTime(value.last_backup_at)) ||
           (value.models_info !== undefined && !isModelsInfo(value.models_info)) ||
           (value.rag_info !== undefined && !isRagInfo(value.rag_info))) throw new ApiError('invalid-response');
       return {
         status: 'partial', mode: 'local_single_user',
         database: value.database as SystemHealth['database'],
         rag: value.rag, models: value.models,
+        ...(value.backup === undefined ? {} : { backup: value.backup as SystemHealth['backup'] }),
+        ...(value.backup_error_code === undefined ? {} : {
+          backup_error_code: value.backup_error_code as SystemHealth['backup_error_code'],
+        }),
+        ...(value.retention === undefined ? {} : { retention: value.retention as SystemHealth['retention'] }),
+        ...(value.last_backup_at === undefined ? {} : { last_backup_at: value.last_backup_at }),
         ...(value.models_info === undefined ? {} : { models_info: value.models_info }),
         ...(value.rag_info === undefined ? {} : { rag_info: value.rag_info }),
       };

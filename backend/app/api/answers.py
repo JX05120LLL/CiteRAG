@@ -1,10 +1,15 @@
 """Local text answer endpoints; model calls are explicitly disabled by default."""
 
+import asyncio
+import json
+from contextlib import suppress
 from typing import Annotated, Literal
 from unicodedata import category
 from uuid import UUID
 
 from fastapi import APIRouter, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, StringConstraints, field_validator, model_validator
 
 from app.api.dependencies import LocalOwner, Session
@@ -86,6 +91,73 @@ async def ask(conversation_id: UUID, body: AskRequest, request: Request,
         owner, conversation_id, body.client_message_id, body.text, retriever, answerer,
         mode=body.mode, exact=body.exact.model_dump(exclude_none=True) if body.exact else None,
     )
+
+
+def _event(name: str, value: dict) -> str:
+    data = json.dumps(jsonable_encoder(value), ensure_ascii=False, separators=(",", ":"))
+    return f"event: {name}\ndata: {data}\n\n"
+
+
+@router.post("/conversations/{conversation_id}/messages/stream")
+async def ask_stream(conversation_id: UUID, body: AskRequest, request: Request,
+                     owner: LocalOwner):
+    if not request.app.state.answer_enabled:
+        raise ServiceError(503, "answer_disabled", "文字检索与模型回答尚未启用")
+    runtime = request.app.state.rag_runtime
+    retriever = request.app.state.query_adapter or LightRAGQueryAdapter(runtime)
+    answerer = request.app.state.answer_adapter or LightRAGAnswerAdapter(runtime)
+    database = request.app.state.database
+
+    async def stream():
+        queue: asyncio.Queue[tuple[str, dict]] = asyncio.Queue()
+
+        async def accepted(view: dict):
+            await queue.put(("accepted", view))
+
+        async def produce():
+            try:
+                async with database.sessions() as session:
+                    view = await AnswerService(session).ask(
+                        owner, conversation_id, body.client_message_id, body.text,
+                        retriever, answerer, mode=body.mode,
+                        exact=body.exact.model_dump(exclude_none=True) if body.exact else None,
+                        on_accepted=accepted,
+                    )
+                if view["status"] == "running":
+                    await queue.put(("pending", view))
+                    return
+                # Only committed and checked text is exposed to the browser.
+                for seq, offset in enumerate(range(0, len(view["text"]), 32), start=1):
+                    await queue.put(("delta", {
+                        "attempt_id": str(view["attempt_id"]), "seq": seq,
+                        "text": view["text"][offset:offset + 32], "saved": True,
+                    }))
+                await queue.put(("saved", view))
+            except ServiceError as error:
+                await queue.put(("error", {"status": error.status, "code": error.code}))
+            except Exception:
+                await queue.put(("error", {"status": 503, "code": "answer_unavailable"}))
+
+        producer = asyncio.create_task(produce(), name="stream-answer")
+        try:
+            while True:
+                try:
+                    name, value = await asyncio.wait_for(queue.get(), timeout=15)
+                except TimeoutError:
+                    yield ": keepalive\n\n"
+                    continue
+                yield _event(name, value)
+                if name in {"saved", "pending", "error"}:
+                    return
+        finally:
+            if not producer.done():
+                producer.cancel()
+            with suppress(asyncio.CancelledError):
+                await producer
+
+    return StreamingResponse(stream(), media_type="text/event-stream", headers={
+        "Cache-Control": "no-store", "X-Accel-Buffering": "no",
+    })
 
 
 @router.get("/conversations/{conversation_id}/messages")

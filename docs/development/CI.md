@@ -1,5 +1,7 @@
 # GitHub CI
 
+2026-09-24 本轮补记：公开基础冒烟现校验 `0006` 摘要表，以及无配置时的 `backup=disabled`、`retention=available` 状态；仍不跑专用 SSE、180 天清理或双库恢复测试，也不调用真实模型。本机对当前工作流执行独立临时 PostgreSQL 冒烟已通过。远程最近 CI #35994408491 成功仅覆盖旧 HEAD `d4c951a`，本轮代码未提交/推送，无新远程结果。实际业务库本轮不可达，旧 `0002` 只作历史核查。下方早期表述保留对应切片的当时范围。
+
 M1-3 补记：公开工作流随 `0005_answer_attempts` 校验消息/回答表存在，并检查默认问答关闭返回 `answer_disabled`；仍只用临时 PostgreSQL 和合成资料，不调用真实模型。此前远端成功运行只覆盖 `fbafd86`；新增改动的运行结果应按对应提交核对，本机冒烟结果另见 [M1 验证记录](M1-VALIDATION.md)。
 
 工作流位于 [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml)，在推送、Pull Request 和手动触发时运行。接手实查 `fbafd86` 对应的 [CI #35957495928](https://github.com/JX05120LLL/CiteRAG/actions/runs/35957495928) 三个作业均成功；该历史结果仅覆盖 M1-1，不覆盖后续 M1-2/M1-3 代码。其他运行见 [Actions](https://github.com/JX05120LLL/CiteRAG/actions)。

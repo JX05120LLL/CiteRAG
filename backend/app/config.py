@@ -5,7 +5,15 @@ from ipaddress import ip_address
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationInfo, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
 
@@ -32,8 +40,24 @@ class Settings(BaseModel):
     api_workers: int = Field(default=1, ge=1, le=1)
     ingestion_enabled: bool = False
     answer_enabled: bool = False
+    backup_enabled: bool = False
+    backup_pg_bin: Path | None = None
+    backup_root: Path = PROJECT_ROOT / ".local" / "backups"
     rag_database_record: Path = LOCAL_RUNTIME_ROOT / "rag-postgres" / "credential.xml"
     rag_workspace_root: Path = LOCAL_RUNTIME_ROOT / "rag-workspaces"
+
+    @model_validator(mode="after")
+    def valid_backup(self):
+        if self.backup_root.resolve() != (PROJECT_ROOT / ".local" / "backups").resolve():
+            raise ValueError("Backup destination is fixed inside the local private directory")
+        if self.backup_enabled:
+            suffix = ".exe" if os.name == "nt" else ""
+            if (self.backup_pg_bin is None or not all(
+                (self.backup_pg_bin / (name + suffix)).is_file()
+                for name in ("pg_dump", "pg_restore")
+            )):
+                raise ValueError("Backup requires PostgreSQL client tools")
+        return self
 
     @field_validator("database_url")
     @classmethod
@@ -96,6 +120,8 @@ class Settings(BaseModel):
             "CITERAG_API_WORKERS": "api_workers",
             "CITERAG_INGESTION_ENABLED": "ingestion_enabled",
             "CITERAG_ANSWER_ENABLED": "answer_enabled",
+            "CITERAG_BACKUP_ENABLED": "backup_enabled",
+            "CITERAG_BACKUP_PG_BIN": "backup_pg_bin",
             "CITERAG_RAG_DATABASE_RECORD": "rag_database_record",
             "CITERAG_RAG_WORKSPACE_ROOT": "rag_workspace_root",
         }

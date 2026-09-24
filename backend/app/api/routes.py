@@ -44,6 +44,15 @@ async def status(request: Request):
         "database": database_status,
     }
     result.update(await load_capability_status(request.app.state))
+    backup = request.app.state.backup_runner
+    result["backup"] = backup.state if backup is not None else "disabled"
+    if backup is not None and backup.last_success_at is not None:
+        result["last_backup_at"] = backup.last_success_at.isoformat()
+    if backup is not None and backup.error_code is not None:
+        result["backup_error_code"] = backup.error_code
+    retention = request.app.state.retention_runner
+    result["retention"] = ("disabled" if retention is None else
+                           "available" if retention.available else "unavailable")
     return result
 
 

@@ -19,11 +19,14 @@ from app.config import LOCAL_RUNTIME_ROOT, Settings
 from app.database import Database
 from app.ingestion.jobs import IngestionRunner
 from app.ingestion.storage import PrivateSourceStore
+from app.maintenance.gate import BackupGate
+from app.maintenance.runner import DailyBackupRunner
 from app.models import AnswerAttempt, Conversation, KnowledgeBase, LocalProfile
 from app.rag.engine import assert_isolated_configuration
 from app.rag.ingestion_adapter import LightRAGIngestionAdapter
 from app.rag.owner import ApiOwner, OwnerLost
 from app.rag.runtime import RagRuntime
+from app.services.conversation_retention import RetentionRunner
 from app.services.errors import ServiceError
 
 
@@ -83,6 +86,7 @@ def create_app(
                 runner = IngestionRunner(
                     db, store, adapter, application.state.owner.assert_owned,
                     enabled=settings.ingestion_enabled,
+                    backup_gate=application.state.backup_gate,
                 )
                 application.state.ingestion_runner = runner
                 stack.push_async_callback(runner.close)
@@ -99,6 +103,19 @@ def create_app(
                     ).values(status="interrupted", error_code="server_restarted",
                              finished_at=datetime.now(UTC)))
                     await session.commit()
+                retention = RetentionRunner(db, application.state.owner.assert_owned,
+                                            application.state.backup_gate)
+                stack.push_async_callback(retention.close)
+                await retention.start()
+                application.state.retention_runner = retention
+                if settings.backup_enabled:
+                    backup = DailyBackupRunner(
+                        settings, runtime, application.state.owner.assert_owned,
+                        application.state.backup_gate,
+                    )
+                    stack.push_async_callback(backup.close)
+                    await backup.start()
+                    application.state.backup_runner = backup
             yield
             application.state.owner = None
 
@@ -111,13 +128,17 @@ def create_app(
     application.state.source_root = LOCAL_RUNTIME_ROOT / "sources"
     application.state.source_store = None
     application.state.ingestion_runner = None
+    application.state.retention_runner = None
     application.state.ingestion_adapter = None
+    application.state.backup_gate = BackupGate()
+    application.state.backup_runner = None
     application.state.answer_enabled = settings.answer_enabled
     application.state.query_adapter = None
     application.state.answer_adapter = None
 
     @application.middleware("http")
     async def request_boundaries(request: Request, call_next):
+        admitted = False
         try:
             require_local_request(request, settings)
             owner = application.state.owner
@@ -125,6 +146,9 @@ def create_app(
                 if owner is None:
                     raise OwnerLost("Application startup has not completed")
                 owner.assert_owned()
+            if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+                await application.state.backup_gate.enter()
+                admitted = True
             response = await call_next(request)
             if owner is not None:
                 owner.assert_owned()
@@ -132,6 +156,23 @@ def create_app(
             response = error_response(503, "owner_unavailable", "服务所有权已丢失，请稍后重试")
         except ServiceError as error:
             response = error_response(error.status, error.code, error.message)
+        except BaseException:
+            if admitted:
+                await application.state.backup_gate.leave()
+            raise
+        if admitted:
+            iterator = getattr(response, "body_iterator", None)
+            if iterator is None:
+                await application.state.backup_gate.leave()
+            else:
+                async def gated_body():
+                    try:
+                        async for part in iterator:
+                            yield part
+                    finally:
+                        await application.state.backup_gate.leave()
+
+                response.body_iterator = gated_body()
         response.headers["Cache-Control"] = "no-store"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"

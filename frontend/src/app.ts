@@ -17,6 +17,7 @@ export async function mountApp(root: HTMLElement, api: ApiClient): Promise<void>
     createDraft: { name: '', pending: false, error: null, requestId: null, requestName: null, uncertain: false },
     renameDraft: null, knowledgeNotice: null,
     selectedKbId: null, selectedChatId: null, chatMessages: [], chatDraft: '',
+    chatStreamText: '', chatStreamAttemptId: null,
     chatPending: false, chatError: null, chatRequestKey: null, chatRequestText: null,
     chatMode: 'semantic', exactFilter: {},
   };
@@ -166,7 +167,8 @@ export async function mountApp(root: HTMLElement, api: ApiClient): Promise<void>
   }
 
   async function sendChat() {
-    if (!state.selectedChatId || state.chatPending) return;
+    if (!state.selectedChatId || state.chatPending ||
+        state.chatMessages.some((item) => item.status === 'running')) return;
     const question = state.chatDraft.trim();
     if (!question || question.length > 1000) return;
     const exact = Object.fromEntries(Object.entries(state.exactFilter)
@@ -182,8 +184,18 @@ export async function mountApp(root: HTMLElement, api: ApiClient): Promise<void>
     state.chatError = null;
     render();
     try {
-      const message = await api.askMessage(state.selectedChatId, question, state.chatRequestKey,
-        state.chatMode, state.chatMode === 'exact' ? exact : undefined);
+      const message = await api.askMessageStream(state.selectedChatId, question, state.chatRequestKey,
+        state.chatMode, state.chatMode === 'exact' ? exact : undefined, (progress) => {
+          if (progress.type === 'accepted') {
+            state.chatMessages = [...state.chatMessages.filter((item) =>
+              item.message_id !== progress.message.message_id), progress.message];
+            state.chatStreamAttemptId = progress.message.attempt_id;
+            state.chatStreamText = '';
+          } else if (state.chatStreamAttemptId) {
+            state.chatStreamText = (state.chatStreamText ?? '') + progress.text;
+          }
+          render();
+        });
       state.chatMessages = [...state.chatMessages.filter((item) => item.message_id !== message.message_id), message];
       state.chatDraft = '';
       state.chatRequestKey = null;
@@ -192,17 +204,45 @@ export async function mountApp(root: HTMLElement, api: ApiClient): Promise<void>
       state.chatError = error instanceof ApiError ? error : new ApiError('http');
       try { state.chatMessages = await api.conversationMessages(state.selectedChatId); }
       catch { /* Keep the original network error visible; an uncertain write may have committed. */ }
-      if (state.chatMessages.some((item) => item.client_message_id === state.chatRequestKey)) {
+      const savedInput = state.chatMessages.find((item) =>
+        item.client_message_id === state.chatRequestKey);
+      if (savedInput) {
+        if (savedInput.status === 'running')
+          void followSavedAnswer(state.selectedChatId, savedInput.message_id, chatGeneration);
         state.chatDraft = '';
         state.chatRequestKey = null;
         state.chatRequestText = null;
       }
-    } finally { state.chatPending = false; render(); }
+    } finally {
+      state.chatStreamText = '';
+      state.chatStreamAttemptId = null;
+      state.chatPending = false;
+      render();
+    }
+  }
+
+  async function followSavedAnswer(chatId: string, messageId: string, expectedGeneration: number) {
+    for (let attempt = 0; attempt < 30; attempt++) {
+      await new Promise<void>((resolve) => { window.setTimeout(resolve, 1000); });
+      if (expectedGeneration !== chatGeneration || state.selectedChatId !== chatId) return;
+      try {
+        const messages = await api.conversationMessages(chatId);
+        if (expectedGeneration !== chatGeneration || state.selectedChatId !== chatId) return;
+        state.chatMessages = messages;
+        if (messages.some((item) => item.message_id === messageId && item.status !== 'running')) {
+          state.chatError = null;
+          render();
+          return;
+        }
+        render();
+      } catch { /* Keep the saved question visible and retry a bounded read. */ }
+    }
   }
 
   async function retryChat(messageId: string) {
     const chatId = state.selectedChatId;
     if (!chatId || state.chatPending ||
+        state.chatMessages.some((item) => item.status === 'running') ||
         !state.chatMessages.some((item) => item.message_id === messageId &&
           !item.hidden && !item.stale && ['failed', 'interrupted'].includes(item.status))) return;
     const key = retryKeys.get(messageId) ?? crypto.randomUUID();

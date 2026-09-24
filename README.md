@@ -6,7 +6,7 @@ A local, single-user multimodal knowledge assistant, designed around answers wit
 
 本地单用户多模态知识助手。使用者直接管理自己的知识库，通过文字、实时语音和图片提问，核查回答来源，并保存聊天继续交流。首版无需注册、登录或创建管理员。
 
-**当前阶段：M0 未完成；M1-1 已提交，M1-2、M1-3 及 M1-4 的主要本机实现已完成，完整 M1 尚未验收。** 四类文字资料、受管入库、普通/精确问答、真实来源、固定库聊天、近期窗口/摘要及资料删除/替换与旧空间清理已接通；聊天改名/删除、分页与同消息回答重试也已实现。入库与问答默认分别关闭（`CITERAG_INGESTION_ENABLED=false`、`CITERAG_ANSWER_ENABLED=false`），不会自动发起模型请求；本轮仅使用本地模型替身。真正的 SSE 流式回答等缺项及分层证据见 [M1 计划](docs/development/M1-IMPLEMENTATION.md)和 [M1 验证](docs/development/M1-VALIDATION.md)。
+**当前阶段：M0 未完成；M1-1 至 M1-4 的本机主链路已实现，完整 M1 尚未验收。** 四类文字资料、受管入库、普通/精确问答、真实来源、固定库聊天、近期窗口/摘要、删除/替换与旧空间清理已接通。本轮新增核验后 SSE 分段展示及保存状态、断线按已保存记录恢复、180 天聊天保留和可选的每日成套备份；离线双库＋私有文件恢复会先把受管库设为 blocked，待核对删除记录后重建。SSE 目前在完整模型结果校验和提交后才展示正文，尚无模型 token 级首响。入库、问答和每日备份默认关闭；本轮测试使用本地模型替身，真实供应商请求为 0。分层证据和剩余条件见 [M1 计划](docs/development/M1-IMPLEMENTATION.md)与 [M1 验证](docs/development/M1-VALIDATION.md)。
 
 五模型与真实百炼双库验收沿用 M0 证据；超长 Embedding 输入边界仍暂缓未通过。本轮新增真实模型请求为 0。接手本轮 8000 API、5174 前端和 55432 业务库不可达，未读取实际 schema；上轮核查为 `0002_local_single_user`、旧 API 无新接口，不能当作当前在线事实。新增 `0004`—`0006` 只在隔离库升级；实际业务库未迁移、旧 API 未重启。原生 TypeScript、A 版 UI 与「回响」Logo 保留。
 

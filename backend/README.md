@@ -1,6 +1,6 @@
 # CiteRAG 后端
 
-Python 3.12、FastAPI、SQLAlchemy 2、Alembic 与 PostgreSQL 17。本地单用户，无管理员、注册或登录。M1-1 知识库管理已提交；M1-2 至 M1-4 的受管资料、问答与来源、持久聊天、近期摘要、删除/替换及 blocked 修复已在本机实现。入库与问答默认关闭，真正的 SSE 增量流仍待实现；图片和语音留后续。M0 超长 Embedding 输入边界暂缓未通过，M0 与完整 M1 均未完成。
+Python 3.12、FastAPI、SQLAlchemy 2、Alembic 与 PostgreSQL 17。本地单用户，无管理员、注册或登录。M1-1 至 M1-4 的受管资料、问答来源、聊天摘要及资料生命周期主链路已在本机实现；另有核验并提交后才发送正文的 SSE、180 天聊天保留与可选的每日双库加私有文件备份。SSE 不承诺模型 token 级首响。入库、问答和自动备份默认关闭；图片和语音留后续。M0 超长 Embedding 输入边界暂缓未通过，M0 与完整 M1 均未完成。
 
 本轮只在隔离测试库升级到 `0006_m1_lifecycle`。实际业务库本轮不可达；上轮只读核查为 `0002_local_single_user`，旧 API 无新接口，不能当作当前在线证据。未迁移业务或重启旧 API。默认关闭模型入库与问答；新接口需停写备份业务库、引擎库及私有原文后显式迁移并重启，进度见 [M1 记录](../docs/development/M1-VALIDATION.md)。
 
@@ -28,6 +28,8 @@ uv run --no-env-file uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers
 | `CITERAG_API_WORKERS` | 只能为 `1`；`WEB_CONCURRENCY` 也不能大于 1。 |
 | `CITERAG_INGESTION_ENABLED` | 默认 `false`；允许原文受理和解析，完成后等待。设置 `true` 会让受管队列调用模型入库，须先完成本次真实请求范围/预算授权；保存凭证或已有成功报告不等于授权。 |
 | `CITERAG_ANSWER_ENABLED` | 默认 `false`；关闭模型检索与回答。设置 `true` 会发送问题及检索证据给模型，须先说明类别、次数上限、费用和数据影响并另获授权。 |
+| `CITERAG_BACKUP_ENABLED` | 默认 `false`；启用每日停写备份，需先确认两库和私有文件同源及可恢复。不会自动补齐旧业务库迁移。 |
+| `CITERAG_BACKUP_PG_BIN` | 默认无；启用备份时指向含 `pg_dump`、`pg_restore` 的 PostgreSQL 客户端目录。备份固定保存在私有 `.local/backups/`，只轮换成功的最近七日。 |
 
 配置独立业务库后显式迁移，再用上面的命令启动：
 
@@ -50,7 +52,7 @@ API 仅监听回环地址，并验证真实连接来源、Host、Origin 和跨�
 ## 当前 HTTP 契约
 
 - `GET /api/health`：`{status, database_configured}`，进程存活与是否配置数据库，不证明知识引擎已就绪。
-- `GET /api/status`：`{status, mode, database, rag, models}`；`mode` 为 `local_single_user`，不返回连接信息。
+- `GET /api/status`：`{status, mode, database, rag, models, backup, retention}`；`mode` 为 `local_single_user`，不返回连接信息。备份失败只显示类别码。
 - `GET /api/knowledge-bases`：`{items:[{id,name,status}]}`，列出本地归属下全部库状态，不自动创建演示库。
 - `POST /api/knowledge-bases`：`{name,client_request_id}` → 201 `{id,name,status}`，客户端创建键必须为 UUID。名称去首尾空白后为 1–120 字符，拒绝控制字符及额外字段。新库为 `empty`，创建不初始化引擎或发模型请求。同一本地归属、同键、同初始名称重放返回已有库；不同名称使用同键返回 `409 idempotency_conflict`。数据库事务串行去重和容量检查，最多 5 库，超额 `409 capacity_exceeded`；满额不影响已有请求重放。
 - `PATCH /api/knowledge-bases/{id}`：`{name}` → 200 `{id,name,status}`，只修改本地归属下的显示名称；不改变状态、空间或创建幂等记录。改名后的原始创建请求重放返回当前名称，不恢复旧名。不存在或未归属资料返回 404。
@@ -59,6 +61,7 @@ API 仅监听回环地址，并验证真实连接来源、Host、Origin 和跨�
 - `GET /api/conversations/{id}`：只读取本地归属及正确知识库绑定的聊天，未归属旧记录返回 404。
 - `PATCH /api/conversations/{id}`：修改本人聊天标题；`DELETE`：拒绝仍有活动回答的聊天，并删除消息、尝试和摘要。
 - `POST /api/conversations/{id}/messages`：同一聊天固定知识库，返回经本轮来源核验的回答；默认 `answer_disabled`。`GET` 读取历史，删除/替换后遮蔽旧知识回答与来源。
+- `POST /api/conversations/{id}/messages/stream`：SSE `accepted`、`delta`、`saved`、`pending`、`error` 与心跳。`accepted` 表示用户输入已持久化；`delta` 只发送经来源校验且已提交的回答片段，`saved` 为最终保存确认。浏览器断流后按原消息键读取已保存结果，不自动重发模型请求。聊天超过最后一条用户输入 180 天（空聊天从创建算）后不再可访问，后台定时批量清理。
 - `POST /api/conversations/{id}/messages/{message_id}/retry`：`{attempt_id}`，仅失败/中断且库 revision/活动空间未变时，在原消息下创建新尝试；同键重放不重复生成。
 - `POST /api/knowledge-bases/{id}/documents`：multipart `files`（1–5 份）和 UUID `client_request_id`，可靠保存后返回 202 任务；202 不表示解析或索引成功。同键同载荷重放同一任务，同库相同内容拒绝。
 - `GET /api/knowledge-bases/{id}/documents`、`GET /api/knowledge-bases/{id}/jobs`、`GET /api/jobs/{id}`：持久资料/任务状态，区分受理、解析、索引、核验及失败；不暴露存储路径或引擎空间。
@@ -70,7 +73,11 @@ API 仅监听回环地址，并验证真实连接来源、Host、Origin 和跨�
 
 原文固定在私有 `.local/runtime/sources/`，随机存储键与 SHA-256；单文件 20 MiB。UTF-8 TXT/MD 使用实际行号，文字 PDF 最多 100 页并保留实际页码，DOCX 限普通段落/简单表格行。解析在 20 秒/384 MiB 子进程中运行，输出最多 500 万字符/5 万块；拒绝扫描/加密、乱码、危险 ZIP、合并表格、嵌入对象、字段及非空页眉页脚等可能丢失正文的结构。新增依赖锁定 pypdf 6.19.0、python-docx 1.2.0、python-multipart 0.0.32。
 
-同库仅一个活动任务、全安装串行修改引擎；进入修改前提交 maintaining/revision。预检失败保留原 ready，修改后失败或中断保持 blocked。只有核对引擎文档状态、正文、片段和检索来源后才 ready；重启不自动重放不确定引擎写入。删除/替换在新空间核验并切换后，清理旧 LightRAG 存储和原文；清理失败保持 blocked，可显式重试或重建。真正的 SSE 增量回答和真实模型端到端仍未交付。
+同库仅一个活动任务、全安装串行修改引擎；进入修改前提交 maintaining/revision。预检失败保留原 ready，修改后失败或中断保持 blocked。只有核对引擎文档状态、正文、片段和检索来源后才 ready；重启不自动重放不确定引擎写入。删除/替换在新空间核验并切换后，清理旧 LightRAG 存储和原文；清理失败保持 blocked，可显式重试或重建。SSE 只流经核验的保存结果，真实模型端到端仍未交付。
+
+## 成套备份与恢复
+
+当前没有数据库迁移新增，旧业务数据不被自动清空或认领。实际环境启用前，先停写，分别备份业务库、引擎库、私有 `.local/runtime/` 和配置，再校验备份可读；恢复使用**两个全新空库和空私有目录**。离线工具 `python -m app.maintenance.backup backup|verify|restore` 在 API owner 锁释放后操作，需从私密环境提供两库连接信息及 PostgreSQL 工具目录，不在命令行或文档写连接串。恢复会将受管库保持 `blocked`：先比对快照后的删除记录和原文，再显式重建或完成清理，不能直接开放旧空间问答。自动备份仅在显式开启时按日执行，停写门禁等待活动请求与任务完成；失败显示 `unavailable`，不把旧快照标为当天成功。备份同日已成功时不会再取新快照，升级前应使用独立离线备份目录。私有本机目录无法防护可访问同一 OS 账户的人员，异地副本和真正的灾难恢复演练仍需另行落实。
 
 提交结果不确定的原文先保留；启动持有 owner 后按数据库引用清理超过 24 小时的孤立 `.source/.partial`。保留已提交、近期和非受管文件。Windows 已验证文件刷新/原子重命名，不声称目录 fsync 或隔离同一 OS 用户。
 

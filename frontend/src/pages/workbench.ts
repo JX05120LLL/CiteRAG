@@ -47,7 +47,8 @@ function composer(state: AppState, actions: WorkbenchActions) {
   const input = el('textarea');
   const current = state.bases?.find((item) => item.id === state.selectedKbId);
   const enabled = current?.status === 'ready' && Boolean(state.selectedChatId);
-  input.disabled = !enabled || state.chatPending;
+  const busy = state.chatPending || state.chatMessages.some((item) => item.status === 'running');
+  input.disabled = !enabled || busy;
   input.rows = 2;
   input.maxLength = 1000;
   input.value = state.chatDraft;
@@ -66,7 +67,7 @@ function composer(state: AppState, actions: WorkbenchActions) {
     const select = el('select', 'name-input'); select.id = 'chat-mode-select';
     const semantic = el('option', '', '普通检索'); semantic.value = 'semantic';
     const exact = el('option', '', '编号／型号／版本精确查询'); exact.value = 'exact';
-    select.append(semantic, exact); select.value = state.chatMode; select.disabled = state.chatPending;
+    select.append(semantic, exact); select.value = state.chatMode; select.disabled = busy;
     select.addEventListener('change', () => actions.setMode(select.value as 'semantic' | 'exact'));
     mode.append(label, select);
     if (state.chatMode === 'exact') {
@@ -76,7 +77,7 @@ function composer(state: AppState, actions: WorkbenchActions) {
         const field = el('input', 'name-input');
         field.value = state.exactFilter[key] ?? ''; field.maxLength = 80;
         field.placeholder = caption; field.setAttribute('aria-label', caption);
-        field.disabled = state.chatPending;
+        field.disabled = busy;
         field.addEventListener('input', () => actions.setExact(key, field.value));
         mode.append(field);
       }
@@ -92,7 +93,7 @@ function composer(state: AppState, actions: WorkbenchActions) {
   const send = action('', 'send-button', () => { void actions.sendChat(); });
   send.append(icon('arrow'), el('span', 'sr-only', '发送'));
   send.setAttribute('aria-label', '发送');
-  send.disabled = !enabled || state.chatPending;
+  send.disabled = !enabled || busy;
   toolbar.append(photo, voice, el('span', 'composer-shortcut', 'Enter 发送'), send);
   box.append(input, toolbar);
   const hint = el('p', 'composer-note', current?.status === 'ready'
@@ -173,9 +174,14 @@ export function renderWorkbench(main: HTMLElement, state: AppState,
           : message.status === 'answered' ? message.text
           : message.status === 'insufficient_evidence' ? '当前知识库没有足够的可核查证据，暂不作答。'
           : message.status === 'interrupted' ? '知识库发生变化或服务中断，这次回答未完成。'
-          : message.status === 'running' ? '正在检索并核对来源…'
+          : message.status === 'running' && state.chatStreamAttemptId === message.attempt_id &&
+            state.chatStreamText ? state.chatStreamText
+          : message.status === 'running' ? '提问已保存，正在检索并核对来源…'
           : '回答未完成，请检查任务与服务状态。';
         item.append(el('p', 'chat-answer', answer));
+        if (message.status === 'running' && state.chatStreamText &&
+            state.chatStreamAttemptId === message.attempt_id)
+          item.append(el('p', 'metadata', '已核验的回答正在展示；完整记录已保存。'));
         if (message.stale && !message.hidden) item.append(el('p', 'metadata', '基于旧资料；新提问会重新检索当前库。'));
         if (!message.hidden && message.status === 'answered' && message.citations.length) {
           const list = el('ul', 'chat-citations');

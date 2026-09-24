@@ -43,6 +43,7 @@ class EngineManager:
         self._factory = factory
         self._assert_owner = assert_owner
         self._engines: dict[UUID, Engine] = {}
+        self._initializing: dict[UUID, Engine] = {}
         # SDK shared initialization must be serial, even between different workspaces.
         self._lock = asyncio.Lock()
         self._closed = False
@@ -55,26 +56,58 @@ class EngineManager:
             if kb_id not in self._engines:
                 workspace, directory = workspace_for(kb_id, self._root)
                 engine = self._factory(workspace, directory)
+                self._initializing[kb_id] = engine
                 try:
                     await engine.initialize_storages()
                     self._assert_owner()
-                except BaseException:
-                    # Cancellation also leaves partially initialized storage to clean up.
-                    await engine.finalize_storages()
+                except BaseException as initialization_error:
+                    try:
+                        await _finalize_protected(engine)
+                    except BaseException as cleanup_error:
+                        _raise_cleanup_group(
+                            'Engine initialization and cleanup failed',
+                            [initialization_error, cleanup_error],
+                        )
                     raise
+                finally:
+                    self._initializing.pop(kb_id, None)
                 self._engines[kb_id] = engine
             return self._engines[kb_id]
 
     async def close(self) -> None:
         async with self._lock:
+            if self._closed:
+                return
             self._closed = True
-            errors = []
-            for engine in self._engines.values():
+            engines = tuple(self._engines.values())
+            self._engines.clear()
+            errors: list[BaseException] = []
+            for engine in engines:
                 try:
-                    await engine.finalize_storages()
-                except Exception as error:
+                    await _finalize_protected(engine)
+                except BaseException as error:
                     # Finish the other instances, then report all cleanup failures.
                     errors.append(error)
-            self._engines.clear()
             if errors:
-                raise ExceptionGroup('Engine shutdown failed', errors)
+                _raise_cleanup_group('Engine shutdown failed', errors)
+
+
+async def _finalize_protected(engine: Engine) -> None:
+    """Finish one cleanup even if the caller receives another cancellation."""
+
+    task = asyncio.create_task(engine.finalize_storages())
+    cancelled = False
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            cancelled = True
+    await task
+    if cancelled:
+        raise asyncio.CancelledError
+
+
+def _raise_cleanup_group(message: str, errors: list[BaseException]) -> None:
+    if all(isinstance(error, Exception) for error in errors):
+        raise ExceptionGroup(message, errors)
+    raise BaseExceptionGroup(message, errors)

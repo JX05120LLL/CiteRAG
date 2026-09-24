@@ -5,6 +5,7 @@ from fastapi import APIRouter, Query, Request
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.api.capabilities import load_capability_status
 from app.api.dependencies import LocalOwner, Session
 from app.api.schemas import ConversationCreate, ConversationView, KnowledgeBaseView
 from app.models import KnowledgeBase, LocalProfile
@@ -29,13 +30,13 @@ async def status(request: Request):
                 database_status = "available" if owner is not None else "unavailable"
         except (SQLAlchemyError, OSError, TimeoutError):
             database_status = "unavailable"
-    return {
+    result = {
         "status": "partial",
         "mode": "local_single_user",
         "database": database_status,
-        "rag": "not_configured",
-        "models": "not_configured",
     }
+    result.update(await load_capability_status(request.app.state))
+    return result
 
 
 @router.get("/knowledge-bases")

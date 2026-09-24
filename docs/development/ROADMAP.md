@@ -1,6 +1,8 @@
 # CiteRAG 开发路线
 
-状态：**M0 进行中，未通过整体验收**。项目名称 CiteRAG、A 版桌面 UI、第二款 B「回响」无字 Logo 已确定。本轮按最新决定调整为本地单用户基础；文档中的容量、质量和性能数字均为待验收目标。详见 [M0 验证记录](M0-VALIDATION.md) 与 [范围调整计划](M0-LOCAL-SINGLE-USER.md)。
+状态（2026-09-24 最新复核）：**M0 尚未整体验收，M1 未开始**。当前 API 只读实测 `database=available`、`models=available`、`rag=available`。五模型真实连通证据保留，短文本 `text-embedding-v4` 实测 1024 维；固定 LightRAG＋独立 PostgreSQL 的真实百炼双库验收已通过，实际使用 21 次受控供应商请求，核查了来源隔离、删除、重开与清理。用户单独执行的超长输入探针虽收到输入长度相关 HTTP 400，但脱敏诊断不能证明命中单条 8192 Token 上限；该边界**未通过、暂不继续探测**，不改变 M0 门槛。项目名称 CiteRAG、A 版 UI、第二款 B「回响」无字 Logo 已确定。首版为本地单用户；文档中的容量、质量和性能数字均为待验收目标。详见 [当前交接](HANDOFF.md)、[M0 验证记录](M0-VALIDATION.md) 与 [范围调整计划](M0-LOCAL-SINGLE-USER.md)。
+
+共 **5 个阶段（M0—M4）**。M0 的工程、业务数据库、模型适配、状态页面及真实双库引擎验收已有证据，但 M0 整体仍受超长输入边界未通过所阻，M1 未开始。初始代码已同步到 `main` 的 `ed26168`，[首次 GitHub CI 三个作业均通过](https://github.com/JX05120LLL/CiteRAG/actions/runs/35708529819)；后续代码同步与 CI 以各自提交记录为准。补齐 M0 剩余验收后再进入 M1 文字闭环。
 
 ## 实施依据
 
@@ -16,15 +18,16 @@
 
 - [x] 建立 TypeScript/Vite 与 Python 3.12/FastAPI 工程，生成项目自己的依赖锁文件。
 - [x] 本地单用户工作台与 PostgreSQL 业务库：无登录，服务端本地归属，回环/Host/Origin 检查；追加迁移保留旧记录且不自动认领。隔离 PostgreSQL 和真实浏览器验证通过，见验证记录。附件、引用、房间在对应模块实现时继续验收。
-- [ ] 固定 LightRAG 提交 `59af311307c7417b342f44850b097648d47e83bd`，验证 PGKVStorage、PGVectorStorage、PGTableGraphStorage、PGDocStatusStorage。
-- [ ] 验证两个 workspace 与独立工作目录不串库，拒绝全局 workspace 覆盖。
-- [ ] 验证引擎初始化、关闭及单 API owner 约束；不直接增加 API 进程或副本。
+- [x] GitHub CI：推送/PR/手动触发，检查提交文件范围、前端类型/构建、后端静态检查及临时 PostgreSQL/API 冒烟。专用测试文件与辅助脚本仅保留在本机，CI 不调用真实模型。
+- [x] 固定 LightRAG 提交 `59af311307c7417b342f44850b097648d47e83bd`，验证 PGKVStorage、PGVectorStorage、PGTableGraphStorage、PGDocStatusStorage。真实双库入库后检查存储行，见验证记录。
+- [x] 验证两个 workspace 与独立工作目录不串库，拒绝全局 workspace 覆盖。真实百炼双库检索、来源隔离及清理通过。
+- [x] 验证引擎初始化、关闭及单 API owner 约束；不直接增加 API 进程或副本。真实 PostgreSQL 争锁/失锁、双库重开通过。
 - [ ] 实测 Embedding 维度与输入上限，验证真实重排调用及结果协议。
-- [ ] 使用合法样例完成模型连通性、来源映射和失败路径检查，记录版本、配置与结果。
+- [x] 使用合法合成样例完成模型连通性、来源映射和失败路径检查，记录版本、配置与结果。真实成功链路与离线失败路径分层验证，见验证记录。
 
 M0 通过后再推进文字闭环；仅有界面或 mock 结果不算引擎接入通过。
 
-2026-09-22 基础记录：固定 LightRAG 安装来源及四种 PG 存储类导入已有验证；workspace/目录与 SDK 生命周期为应用契约测试，真实引擎检索尚未验证。单 API owner 有真实 PostgreSQL 争锁、释放与失锁后退出检查，仍需真实引擎生命周期验证。此次范围调整后的迁移、归属与前端结果单独记录，不以旧账号方案计数代替。具体命令、结果及缺项见 [M0 验证记录](M0-VALIDATION.md)。
+2026-09-24 进度：固定 LightRAG 来源、四种 PG 存储类和独立引擎库已有真实验证。先用**真实 PostgreSQL＋本地替身模型**完成双库入库、检索、来源隔离、重排回调、存储行检查、删除、重开和定向清理；该测试先发现候选数少于 `top_n` 时重排被跳过，桥接层已修复并先红后绿验证。随后用户授权的一次**真实百炼＋LightRAG**双库验收以 21 次受控请求通过，`rag=available`，来源、删除、重开及清理标志均为真。单 API owner 有真实 PostgreSQL 争锁、释放与失锁退出检查。五模型报告可用，短文本 Embedding 的 1024 维真实结果保留；**超长输入边界暂缓且仍未通过，M0 未完成。**具体证据及缺项见 [M0 验证记录](M0-VALIDATION.md)。
 
 ## 后续阶段
 
@@ -37,9 +40,9 @@ M0 通过后再推进文字闭环；仅有界面或 mock 结果不算引擎接�
 
 ## 按阶段补齐资料与配置
 
-2026-09-22 已确认按 LiveRAG 默认模型选择：百炼 `qwen-flash`（最终回答）、`qwen-plus`（引擎）、`qwen-max`（会话摘要）、`text-embedding-v4`（目标 1024 维）；语音使用火山 `bigmodel`、MiniMax `speech-02-turbo` 与本地 Silero VAD。先准备百炼 API Key，语音凭证可留到 M2。详见 [申请清单](LOCAL-DEVELOPMENT.md#模型服务准备2026-09-22-确认)。
+2026-09-23 当前模型：百炼 `qwen-flash`（最终回答）、`qwen-plus`（引擎）、`qwen-max`（会话摘要）、`text-embedding-v4`（实测 1024 维）、`qwen3-rerank`（重排）的受控真实调用均已成功。语音仍按 M2 使用火山 ASR、MiniMax `speech-02-turbo` 与本地 Silero VAD；保存的语音凭证尚未实测，不能提前标记可用。详见 [模型准备](LOCAL-DEVELOPMENT.md#模型服务准备2026-09-22-确认)。
 
-LiveRAG 默认配置未覆盖真实重排和 VLM：模型待确认，CiteRAG 的相关范围与验收条件保留；不能因重排只有开关而勾选 M0 通过，也不提前调用未配置服务。
+LiveRAG 默认配置未覆盖真实重排和 VLM。CiteRAG 已选并真实验证百炼 `qwen3-rerank` 的独立调用，真实 LightRAG 双库检索也记录了重排请求；VLM 留到 M3 前确认。重排连通与双库验收不替代尚未通过的 Embedding 超长输入边界。
 
 | 阶段 | 需准备的资料与配置 |
 |---|---|

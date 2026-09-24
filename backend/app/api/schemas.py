@@ -4,6 +4,10 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, StringConstraints
 
+from app.validation import CapabilityState
+
+__all__ = ["CapabilityState", "ConversationCreate", "ConversationView", "KnowledgeBaseView"]
+
 
 class ConversationCreate(BaseModel):
     kb_id: UUID

@@ -228,6 +228,7 @@ dependencies = [
     { name = "alembic" },
     { name = "asyncpg" },
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "pydantic" },
     { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "uvicorn", extra = ["standard"] },
@@ -241,7 +242,6 @@ rag = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "httpx" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "ruff" },
@@ -252,6 +252,7 @@ requires-dist = [
     { name = "alembic", specifier = ">=1.14,<2" },
     { name = "asyncpg", specifier = ">=0.30,<1" },
     { name = "fastapi", specifier = ">=0.115,<1" },
+    { name = "httpx", specifier = ">=0.28,<1" },
     { name = "lightrag-hku", marker = "extra == 'rag'", git = "https://github.com/HKUDS/LightRAG.git?rev=59af311307c7417b342f44850b097648d47e83bd" },
     { name = "pgvector", marker = "extra == 'rag'", specifier = ">=0.4,<0.5" },
     { name = "pydantic", specifier = ">=2.10,<3" },
@@ -262,7 +263,6 @@ provides-extras = ["rag"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "httpx", specifier = ">=0.28,<1" },
     { name = "pytest", specifier = ">=8.3,<10" },
     { name = "pytest-asyncio", specifier = ">=0.25,<2" },
     { name = "ruff", specifier = ">=0.11,<1" },

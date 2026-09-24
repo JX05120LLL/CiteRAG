@@ -15,6 +15,7 @@ from app.config import Settings
 from app.database import Database
 from app.rag.engine import assert_isolated_configuration
 from app.rag.owner import ApiOwner, OwnerLost
+from app.rag.runtime import RagRuntime
 from app.services.errors import ServiceError
 
 
@@ -50,6 +51,12 @@ def create_app(
                     ApiOwner(settings.database_url.get_secret_value(), on_lost=on_owner_lost)
                 )
                 await db.verify_schema()
+            runtime = RagRuntime(settings)
+            application.state.rag_runtime = runtime
+            stack.push_async_callback(runtime.close)
+            if application.state.owner is not None:
+                await runtime.start(application.state.owner.assert_owned)
+            application.state.rag_probe = runtime.probe
             if lifespan_hook is not None:
                 await stack.enter_async_context(lifespan_hook(application))
             yield
@@ -59,6 +66,8 @@ def create_app(
     application.state.settings = settings
     application.state.database = database or Database.from_settings(settings)
     application.state.owner = None
+    application.state.rag_runtime = None
+    application.state.rag_probe = None
 
     @application.middleware("http")
     async def request_boundaries(request: Request, call_next):

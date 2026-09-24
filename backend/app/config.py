@@ -2,11 +2,15 @@
 
 import os
 from ipaddress import ip_address
+from pathlib import Path
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationInfo, field_validator
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+LOCAL_RUNTIME_ROOT = (PROJECT_ROOT / ".local" / "runtime").resolve()
 
 
 def is_loopback_ip(value: str) -> bool:
@@ -21,11 +25,13 @@ def is_loopback_host(value: str) -> bool:
 
 
 class Settings(BaseModel):
-    model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
+    model_config = ConfigDict(frozen=True, hide_input_in_errors=True, validate_default=True)
 
     database_url: SecretStr | None = None
     allowed_origins: tuple[str, ...] = ("http://localhost:5173", "http://127.0.0.1:5173")
     api_workers: int = Field(default=1, ge=1, le=1)
+    rag_database_record: Path = LOCAL_RUNTIME_ROOT / "rag-postgres" / "credential.xml"
+    rag_workspace_root: Path = LOCAL_RUNTIME_ROOT / "rag-workspaces"
 
     @field_validator("database_url")
     @classmethod
@@ -66,12 +72,28 @@ class Settings(BaseModel):
                 raise ValueError("Only loopback browser origins are supported")
         return values
 
+    @field_validator("rag_database_record", "rag_workspace_root")
+    @classmethod
+    def validate_local_runtime_path(cls, value: Path, info: ValidationInfo) -> Path:
+        resolved = value.resolve()
+        if not resolved.is_relative_to(LOCAL_RUNTIME_ROOT):
+            raise ValueError("RAG paths must stay under the project local runtime directory")
+        expected = {
+            "rag_database_record": LOCAL_RUNTIME_ROOT / "rag-postgres" / "credential.xml",
+            "rag_workspace_root": LOCAL_RUNTIME_ROOT / "rag-workspaces",
+        }[info.field_name]
+        if resolved != expected:
+            raise ValueError("RAG runtime paths are fixed for the local installation")
+        return resolved
+
     @classmethod
     def from_env(cls) -> "Settings":
         values: dict = {}
         names = {
             "CITERAG_DATABASE_URL": "database_url",
             "CITERAG_API_WORKERS": "api_workers",
+            "CITERAG_RAG_DATABASE_RECORD": "rag_database_record",
+            "CITERAG_RAG_WORKSPACE_ROOT": "rag_workspace_root",
         }
         for env_name, field_name in names.items():
             if os.environ.get(env_name):

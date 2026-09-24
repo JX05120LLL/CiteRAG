@@ -8,7 +8,7 @@ web
 
 ## Stack
 
-原生 TypeScript + HTML/CSS，Vite 仅作构建工具；不采用 React/Vue。后端采用 FastAPI、LightRAG、PostgreSQL，实时语音按后续阶段接入 LiveKit。当前进入 M0 工程及本地数据归属基础开发；真实知识引擎和模型尚未通过接入验收，未部署产品。
+原生 TypeScript + HTML/CSS，Vite 仅作构建工具；不采用 React/Vue。后端采用 FastAPI、LightRAG、PostgreSQL，实时语音按后续阶段接入 LiveKit。M0 工程、本地归属与业务数据库基础已验证，GitHub CI 已通过；真实知识引擎和模型尚未通过接入验收，M1 未开始，未部署产品。
 
 ## Users
 

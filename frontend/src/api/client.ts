@@ -16,8 +16,25 @@ export interface SystemHealth {
   status: 'partial';
   mode: 'local_single_user';
   database: 'available' | 'not_configured' | 'unavailable';
-  rag: 'not_configured';
-  models: 'not_configured';
+  rag: CapabilityState;
+  models: CapabilityState;
+  models_info?: ModelsInfo;
+  rag_info?: RagInfo;
+}
+
+export type CapabilityState = 'not_configured' | 'unverified' | 'available' | 'unavailable';
+
+export interface ModelsInfo {
+  region: string;
+  model_names: string[];
+  last_verified_at?: string;
+}
+
+export interface RagInfo {
+  lightrag_commit: string;
+  postgresql_major?: number;
+  vector_version?: string;
+  last_verified_at?: string;
 }
 
 export type ErrorKind = 'forbidden' | 'unavailable' | 'http' | 'network' | 'invalid-response';
@@ -44,6 +61,34 @@ export class ApiError extends Error {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isCapabilityState(value: unknown): value is CapabilityState {
+  return value === 'not_configured' || value === 'unverified' || value === 'available' || value === 'unavailable';
+}
+
+function isVerificationTime(value: unknown): value is string {
+  return typeof value === 'string' && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|\+00:00)$/.test(value) && !Number.isNaN(Date.parse(value));
+}
+
+function hasOnlyKeys(value: Record<string, unknown>, allowed: string[]): boolean {
+  return Object.keys(value).every((key) => allowed.includes(key));
+}
+
+function isModelsInfo(value: unknown): value is ModelsInfo {
+  return isRecord(value) && hasOnlyKeys(value, ['region', 'model_names', 'last_verified_at']) &&
+    typeof value.region === 'string' && /^[a-z0-9-]{1,32}$/.test(value.region) &&
+    Array.isArray(value.model_names) && value.model_names.length >= 1 && value.model_names.length <= 10 &&
+    value.model_names.every((name: unknown) => typeof name === 'string' && /^[a-zA-Z0-9._-]{1,64}$/.test(name)) &&
+    (value.last_verified_at === undefined || isVerificationTime(value.last_verified_at));
+}
+
+function isRagInfo(value: unknown): value is RagInfo {
+  return isRecord(value) && hasOnlyKeys(value, ['lightrag_commit', 'postgresql_major', 'vector_version', 'last_verified_at']) &&
+    typeof value.lightrag_commit === 'string' && /^[0-9a-f]{40}$/.test(value.lightrag_commit) &&
+    (value.postgresql_major === undefined || (Number.isInteger(value.postgresql_major) && Number(value.postgresql_major) > 0)) &&
+    (value.vector_version === undefined || (typeof value.vector_version === 'string' && /^\d+(?:\.\d+){1,2}$/.test(value.vector_version))) &&
+    (value.last_verified_at === undefined || isVerificationTime(value.last_verified_at));
 }
 
 function collection<T>(value: unknown, valid: (item: Record<string, unknown>) => boolean): T[] {
@@ -84,8 +129,16 @@ export function createApi(fetcher: typeof fetch = globalThis.fetch) {
       const value = await request('/api/status');
       if (!isRecord(value) || value.status !== 'partial' || value.mode !== 'local_single_user' ||
           !['available', 'not_configured', 'unavailable'].includes(String(value.database)) ||
-          value.rag !== 'not_configured' || value.models !== 'not_configured') throw new ApiError('invalid-response');
-      return value as unknown as SystemHealth;
+          !isCapabilityState(value.rag) || !isCapabilityState(value.models) ||
+          (value.models_info !== undefined && !isModelsInfo(value.models_info)) ||
+          (value.rag_info !== undefined && !isRagInfo(value.rag_info))) throw new ApiError('invalid-response');
+      return {
+        status: 'partial', mode: 'local_single_user',
+        database: value.database as SystemHealth['database'],
+        rag: value.rag, models: value.models,
+        ...(value.models_info === undefined ? {} : { models_info: value.models_info }),
+        ...(value.rag_info === undefined ? {} : { rag_info: value.rag_info }),
+      };
     },
   };
 }

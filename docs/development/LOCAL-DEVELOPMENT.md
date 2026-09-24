@@ -6,7 +6,7 @@
 
 本节记录维护者现有工作站，不是克隆后的默认环境。`.local/` 与 `scripts/` 中的本机辅助工具不随仓库发布；新克隆用户跳到“先选择当前场景”，按后文通用开发与数据库初始化步骤操作，并将示例目录改为实际克隆路径。
 
-当前 `D:\code\CiteRAG` 已建立持久的项目专用 PostgreSQL 17.9 实例，执行业务库迁移到 `0002_local_single_user`。前端使用 `http://127.0.0.1:5174`，API 使用 `127.0.0.1:8000`，专用数据库仅监听 `127.0.0.1:55432`；没有改动原有 5432 数据库服务。
+当前 `D:\code\CiteRAG` 已建立持久的项目专用 PostgreSQL 17.9 业务实例，迁移到 `0002_local_single_user`；另有独立的 PostgreSQL 17/pgvector 0.8.1 引擎实例。前端使用 `http://127.0.0.1:5174`，API 使用 `127.0.0.1:8000`，业务库仅监听 `127.0.0.1:55432`，引擎库仅绑定 `127.0.0.1:55433`；没有改动原有 5432 数据库服务。
 
 **当前只需刷新前端页面验收，不要再执行下面的无数据库启动命令。** 重启电脑或服务停止后，在 PowerShell 执行本机启动脚本：
 
@@ -18,7 +18,7 @@ powershell.exe -NoProfile -File D:\code\CiteRAG\.local\runtime\start.ps1
 
 数据、诊断日志和本机脚本位于 Git 忽略的 `.local/runtime/`。新生成的数据库凭证使用 Windows DPAPI 当前用户保护，目录仅允许当前 Windows 用户和 SYSTEM 访问，启动时只向子进程注入环境变量。不要删除此目录、上传其内容，或复制凭证给其他 Windows 用户；本机配置不随 Git 分发，新机器仍需按后文初始化。
 
-验收应看到：工作台“还没有知识库”与“暂无聊天”，系统状态“业务数据库：可用”。知识引擎和模型服务继续显示“尚未配置”，建库、上传与问答仍未开放；本次配置不代表 M0 整体通过。
+当前验收应看到：工作台“还没有知识库”与“暂无聊天”，系统状态“业务数据库：可用”“模型服务：可用”“知识引擎：可用”。模型和引擎“可用”指当前配置分别匹配五模型与真实双库验证报告，不代表每次打开页面都重新调用模型；建库、上传与问答仍未开放，Embedding 超长输入边界暂缓未通过，M0 尚未整体验收。若本机配置、报告或引擎连接改变，以页面实际四态结果为准。
 
 ## 先选择当前场景
 
@@ -40,22 +40,24 @@ powershell.exe -NoProfile -File D:\code\CiteRAG\.local\runtime\start.ps1
 
 ## 模型服务准备（2026-09-22 确认）
 
-模型选型按 LiveRAG 固定版本默认值执行，完整分工见 [架构模型基线](../多模态知识助手_技术选型与架构设计_v0.1.md#12-模型基线与配置)。目前是准备服务权限与凭证，真实模型适配和调用尚未完成。
+模型分工与本项目固定版本见 [架构模型基线](../多模态知识助手_技术选型与架构设计_v0.1.md#12-模型基线与配置)。百炼 HTTP 适配器已完成离线协议测试，五项必要模型的受限真实调用已通过，Embedding 实测 1024 维；LightRAG 真实双库入库/检索验收也已通过，超长输入边界暂缓且仍未通过。
+
+2026-09-23 准备进度：用户已告知百炼、火山和 MiniMax 凭证均已保存。百炼元数据已升级到当前配置，五项必要模型的受限真实验证通过；火山 ASR 与 MiniMax TTS 仍按 M2 验证。下列保存与升级工具本身不触发付费调用。
 
 | 申请顺序 | 平台与能力 | 模型及需准备的信息 |
 |---|---|---|
 | 先准备，供 M0/M1 | 阿里云百炼：文本与向量 | `qwen-plus`（LightRAG 引擎）、`text-embedding-v4`（目标 1024 维）、`qwen-flash`（最终回答）、`qwen-max`（会话摘要）；准备对应地域和空间的 API Key，核对模型访问权限 |
-| M2 前准备 | 火山引擎豆包语音：流式识别 | LiveRAG 默认 `BigModelSTT` / `bigmodel`；该接法需要语音应用 App ID、Access Token，核对服务资源及鉴权形式 |
+| M2 前准备 | 火山引擎豆包语音：流式识别 | 沿用 LiveRAG 的流式 ASR 分工；旧插件使用 App ID + Access Token，用户新申请的是新版 API Key。后续适配新版鉴权并核对模型版本/资源 ID，不能把 API Key 当作旧 Token |
 | M2 前准备 | MiniMax：语音合成 | `speech-02-turbo`；准备语音合成服务 API Key，并在接入时核对音色、账号区域与接口 |
 | 无需云 Key | 本地 VAD | Silero VAD，语音阶段安装及验证 |
 
 百炼可以用同一地域/空间下具有对应权限的 API Key 调用多个模型，无须按模型分别申请 Key。若沿用 LiveRAG 的默认百炼接入域名，选择华北2（北京）；已有其他地域账号时先记录地域，接入时匹配端点，不混用跨地域 Key。参见 [百炼 API Key 官方说明](https://help.aliyun.com/zh/model-studio/get-api-key) 和 [地域说明](https://help.aliyun.com/zh/model-studio/regions/)。只需申请模型 API 能力，知识库与检索仍由本地 CiteRAG/LightRAG 管理。
 
-火山语音沿用参考项目的语音应用鉴权路线，开通的是流式语音识别服务；实际接入按账号的控制台与官方协议核对，参见 [语音流式识别说明](https://www.volcengine.com/docs/6561/1395846?lang=zh)。不要把普通文本模型服务的凭证当作语音凭证。
+火山开通的是流式语音识别服务；模型分工沿用参考项目，鉴权按实际账号的新旧控制台核对。新版 API Key 与旧版 App ID/Access Token 是两种不同接法，参见 [流式语音识别 API](https://www.volcengine.com/docs/6561/1354869?lang=zh)。CiteRAG 当前只补充了新版凭证的本机录入，语音请求适配与真实识别仍留在 M2；不要把普通文本模型服务的凭证当作语音凭证。
 
-LiveRAG 本版未接入具体重排模型和 VLM。CiteRAG 原候选 `gte-rerank-v2` 与 Qwen3-VL 暂列待确认，当前不要求额外开通；重排验收仍是 M0 条件，图片仍按 M3 范围推进。
+LiveRAG 本版未接入具体重排模型和 VLM。CiteRAG M0 已选 `qwen3-rerank`，独立真实调用和 LightRAG 双库检索链路调用均已验证。VLM 留到 M3。双库验收结果不代替 Embedding 超长输入边界，当前进度见 [交接文档](HANDOFF.md)。
 
-申请完成后只告知平台、地域、可用模型、服务是否开通及本轮测试预算上限。Key、Access Token 等凭证留在本机，不发到聊天、源码、文档或截图。当前后台仅接通业务数据库，模型适配器和从凭证存储加载模型的链路尚未完成，保存 Key 不会自动完成模型接入；不要复制历史 LiveRAG 的 `.env`。
+申请完成后只告知平台、地域、可用模型、服务是否开通及本轮测试预算上限。Key、Access Token 等凭证留在本机，不发到聊天、源码、文档或截图。当前后台已有模型适配器与受控加载链路，但保存 Key 不会自动发起调用或标记模型可用；不要复制历史 LiveRAG 的 `.env`。
 
 ### 维护者工作站：在本机录入模型凭证
 
@@ -72,13 +74,55 @@ powershell.exe -NoProfile -File D:\code\CiteRAG\scripts\configure_models.ps1
 火山语音和 MiniMax 准备好后分别执行：
 
 ```powershell
-powershell.exe -NoProfile -File D:\code\CiteRAG\scripts\configure_models.ps1 -Provider volcengine
+powershell.exe -NoProfile -File D:\code\CiteRAG\scripts\configure_models.ps1 -Provider volcengine -AuthMode api-key
 powershell.exe -NoProfile -File D:\code\CiteRAG\scripts\configure_models.ps1 -Provider minimax
 ```
 
-火山会先询问语音应用 App ID，再隐藏输入 Access Token。重复配置同一平台时，明确输入 `REPLACE` 才替换旧文件；直接回车取消，空 Key/Token 不保存。脚本使用 Windows PowerShell 5.1，请保留命令中的 `powershell.exe`，不要改用 `pwsh`。
+上面的火山命令适用于新版控制台，只隐藏输入 API Key，不询问 App ID。若确实持有旧版 App ID + Access Token，使用 `-Provider volcengine -AuthMode app-token`，才会先询问 App ID 再隐藏输入 Token。为兼容旧命令，`-AuthMode auto` 或省略该参数时，火山仍按旧版录入，百炼/MiniMax 按 API Key 录入；新版火山请显式写 `-AuthMode api-key`。
 
-凭证通过 Windows DPAPI 加密存储于 `.local/runtime/models/`，只供同一 Windows 用户在本机使用。目录与文件 ACL 仅允许当前用户和 SYSTEM，存储目录被 Git 忽略。脚本不会读取旧 Key、调用模型或重启服务；保存成功显示 `saved (not verified)`，表示已保存但未验证，网页“模型服务”状态仍不会自动变成可用。磁盘或替换失败时会保留可恢复的加密文件，不要公开这些文件。
+重复配置同一平台时，明确输入 `REPLACE` 才替换旧文件；直接回车取消，空 Key/Token 不保存。当前若提示已有百炼文件，仅在确定要替换时输入 `REPLACE`，无需读取旧文件或将内容发来。脚本使用 Windows PowerShell 5.1，请保留命令中的 `powershell.exe`，不要改用 `pwsh`。
+
+普通保存命令产生 `SchemaVersion=2` 和明确的 `AuthMode`；现存 v1 文件保持原样，查看保存状态不会解密或迁移。加载器兼容 v1/v2/v3，但 M0 百炼验证要求 v3 的北京业务空间 ID、`qwen3-rerank` 与 1024 维配置。火山新版 API Key 与旧 App ID/Token 仍分别处理。
+
+若运行百炼离线预检时提示需要 `-UpdateMetadata`，在项目根目录执行下面的本机命令，按提示输入**业务空间 ID**。它保留已加密的 Key，仅更新百炼模型元数据和本地加密记录；不会访问百炼、修改业务数据库或启用问答。不要把业务空间 ID 或 Key 贴到聊天。
+
+```powershell
+Set-Location D:\code\CiteRAG
+powershell.exe -NoProfile -File .\scripts\configure_models.ps1 -Provider dashscope -UpdateMetadata
+Set-Location .\backend
+uv run --no-env-file python -m app.cli models verify
+```
+
+最后一条是离线预检：成功时列出地域、五个模型和目标维度，并明确显示“未发送供应商请求”。五模型首次真实验证最多 5 次请求，可能产生供应商费用，须输入 `RUN`；报告只记录模型 ID、请求 ID、维度、时间、耗时及用量，不记录输入、输出或密钥。
+
+### M0 Embedding 边界复验（已暂缓，2026-09-24）
+
+旧 `models verify --real --max-requests 6` 发送 8193 个汉字并预期超限，依据不成立：百炼[同步 Embedding API](https://help.aliyun.com/zh/model-studio/text-embedding-synchronous-api/)按**单条最多 8192 Token**计数，不按字符数计数；旧第六次响应无法还原。用户随后自行执行新的单请求边界命令，脱敏结果是 HTTP 400、顶层 `InvalidParameter` 和泛化输入长度提示，**不能证明单条超过 8192 Token**。用户决定暂缓此项；边界仍未通过，M0 验收门槛不变。已成功的短文本 Embedding 和五模型连通证据保留。真实双库验收后，当前只读 API 为 `models=available`、`rag=available`。不要手工复制或编辑 `.local/runtime/validation/` 的报告。
+
+用户现在可执行的**离线**状态检查如下；它不向百炼发请求，也不改变模型报告：
+
+```powershell
+Set-Location D:\code\CiteRAG\backend
+uv run --no-env-file python -m app.cli models verify
+$status = Invoke-RestMethod http://127.0.0.1:8000/api/status
+$status.database; $status.models; $status.rag
+```
+
+目前预期是离线预检成功，API 的数据库、模型和引擎依次为 `available`、`available`、`available`。若后端未运行，先按本页启动命令启动再查状态。当前五模型报告已通过独立边界命令的前置检查；`uv run --no-env-file python -m app.cli models boundary` 只做离线前置检查，成功也**不代表边界通过**。
+
+**不要为这次边界失败重新运行六请求五模型验证。** 用户已查过百炼审计页面且没有更多错误详情；若控制台能按调用时间、模型或其显示的请求追踪信息（若有）定位，可在百炼私有工单中询问这一次 HTTP 400 的具体校验项、是否达到 `text-embedding-v4` 单条 8192 Token 上限，以及供应商 Tokenizer 的实测计数。CLI 不输出或保存失败请求 ID；不要把请求 ID、响应正文或凭证贴入聊天或文档。如果供应商仍无法给出具体证据，边界保持未通过。
+
+只有再次探测确有必要且另获授权时，才使用独立 `models boundary --real`，最多 **1 次** `text-embedding-v4` 请求；不要重复三个聊天模型、短文本 Embedding 和重排。固定非私人文本为 9216 个不同的四位数字单元（约 4.6 万字符），发送到百炼，可能产生费用，金额以供应商账单为准，不修改业务库。命令要求交互输入 `RUN`；本轮不执行：
+
+```powershell
+uv run --no-env-file python -m app.cli models boundary --real
+```
+
+候选样本的准确 Token 数无法用字符数代替。只有供应商明确返回 `[1, 8192]` 输入范围、HTTP 400 且有唯一请求 ID 才记录 `boundary_category=input_limit`；接受、泛化输入长度错误、其他上限或缺少 ID 都输出脱敏分类、退出非零并保留五模型报告。`models=available` 不等于该边界或整个 M0 已通过。
+
+### 本机凭证文件与状态
+
+凭证通过 Windows DPAPI 加密存储于 `.local/runtime/models/`，只供同一 Windows 用户在本机使用。目录与文件 ACL 仅允许当前用户和 SYSTEM，存储目录被 Git 忽略。脚本不会读取旧 Key、调用模型或重启服务；新保存的配置显示 `saved (not verified)`，网页模型状态须由与**当前配置指纹**匹配的真实验证报告确定，替换凭证后会回到待验证。磁盘或替换失败时会保留可恢复的加密文件，不要公开这些文件。
 
 只检查保存状态，不显示或解密 Key：
 
@@ -87,6 +131,14 @@ powershell.exe -NoProfile -File D:\code\CiteRAG\scripts\configure_models.ps1 -St
 ```
 
 此本机脚本的测试使用临时项目与虚构凭证，不访问本机实际凭证；脚本与其测试均不属于公开仓库的检查入口。
+
+### M0 引擎验证边界
+
+维护者本机已配置独立 Docker 引擎库 `citerag-rag-postgres`（`127.0.0.1:55433`），与业务库 `55432` 分离。若重启后状态页显示引擎“暂不可用”，先检查该容器是否运行；仅对确认属于本项目的同名容器执行 `docker start citerag-rag-postgres`，再刷新状态。当前双知识库真实入库报告已生成并与配置匹配；若报告、凭证或引擎连接发生变化，状态可能不再是“可用”，应以状态页实际结果为准。
+
+当前固定 LightRAG 初始化依赖 `o200k_base.tiktoken` 放在忽略目录 `.local/runtime/tokenizer/`，应用使用 SHA-256 `446a9538cb6c348e3516120d7c08b09f57c36495e2acfffe59a5bf8b0cfb1a2d` 校验，避免运行中隐式下载。维护者本机已准备并校验此文件；新克隆环境须从[上游固定资源](https://openaipublic.blob.core.windows.net/encodings/o200k_base.tiktoken)获取并核对哈希，不要把本机缓存或模型凭证加入 Git。
+
+在 `backend/` 执行 `uv run --no-env-file python -m app.cli rag verify` 只做离线配置检查，不调用模型或写入测试知识库。本机先用**真实独立 PostgreSQL＋本地替身模型**跑通双库入库、检索、重排回调、来源隔离、删除与重开；这部分测试没有调用百炼或写入真实 RAG 报告。随后经用户单次授权，以 `uv run --locked --no-env-file python -m app.cli rag verify --real --max-provider-requests 40 --max-input-chars 4000 --max-output-tokens 512 --confirm RUN` 运行真实百炼双库验收，**实际使用 21 次供应商请求并通过**，当前 `rag=available`。它只使用固定的 A/B 合成质保短文本，测试资料合计少于 4000 字符；每次供应商请求输入另有 **20000 字符**上限，单次 LLM 最多 512 输出 token。验证器只在独立引擎库创建并清理本次生成的两个临时 workspace。真实费用以供应商账单为准。本次授权已使用，后续任何真实模型请求都须另行明确授权；无需为查看状态重跑付费命令。**真实双库通过不等于 M0 完成，Embedding 超长输入边界仍未通过。**
 
 ## 不配置数据库也能启动
 
@@ -267,4 +319,4 @@ pnpm test
 
 API 拒绝非空 `POSTGRES_WORKSPACE`，并拒绝工作目录下的 `config.ini`，以防旧配置覆盖按库分配的空间；出于凭证保护，本轮采用“文件存在即拒绝”的更严格实现，不读取其内容。库 UUID 由服务端生成，工作目录不可由客户端指定。
 
-配置业务库后 API 使用独立数据库连接持有 owner advisory lock；第二个实例不能启动。锁连接丢失后拒绝成功响应并退出进程；这不是自动主备切换。接管前确认旧进程结束。真实模型/pgvector/双库检索及可靠来源验证完成前，M0 保持未通过。
+配置业务库后 API 使用独立数据库连接持有 owner advisory lock；第二个实例不能启动。锁连接丢失后拒绝成功响应并退出进程；这不是自动主备切换。接管前确认旧进程结束。真实模型、pgvector、双库检索及来源已有分层验收证据，但 Embedding 超长输入边界仍未通过，M0 保持未完成。

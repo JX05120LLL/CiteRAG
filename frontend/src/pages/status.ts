@@ -3,8 +3,32 @@ import { action, alert, el, heading } from '../shared/dom';
 
 const statusLabels: Record<string, string> = {
   partial: '部分能力可用', available: '可用', not_configured: '尚未配置',
-  unavailable: '暂不可用', local_single_user: '本地单用户',
+  unverified: '等待真实验证', unavailable: '暂不可用', local_single_user: '本地单用户',
 };
+
+function verificationTime(value: string): string {
+  return new Date(value).toLocaleString('zh-CN', { hour12: false });
+}
+
+function capabilityDetail(state: AppState, key: 'rag' | 'models'): string | null {
+  const health = state.health;
+  if (!health) return null;
+  if (key === 'models' && health.models_info) {
+    const info = health.models_info;
+    return [info.region, info.model_names.join('、'),
+      info.last_verified_at ? `最近验证 ${verificationTime(info.last_verified_at)}` : null]
+      .filter(Boolean).join(' · ');
+  }
+  if (key === 'rag' && health.rag_info) {
+    const info = health.rag_info;
+    return [`LightRAG ${info.lightrag_commit.slice(0, 8)}`,
+      info.postgresql_major ? `PostgreSQL ${info.postgresql_major}` : null,
+      info.vector_version ? `pgvector ${info.vector_version}` : null,
+      info.last_verified_at ? `最近验证 ${verificationTime(info.last_verified_at)}` : null]
+      .filter(Boolean).join(' · ');
+  }
+  return null;
+}
 
 export function renderStatus(main: HTMLElement, state: AppState, refresh: () => Promise<void>) {
   const content = el('section', 'management-content');
@@ -17,9 +41,15 @@ export function renderStatus(main: HTMLElement, state: AppState, refresh: () => 
   else if (state.health) {
     content.append(el('p', 'intro', statusLabels[state.health.status] ?? '状态待确认'));
     const list = el('dl', 'health-list');
+    list.setAttribute('aria-live', 'polite');
     for (const [key, title] of [['mode', '使用方式'], ['database', '业务数据库'], ['rag', '知识引擎'], ['models', '模型服务']] as const) {
       const row = el('div', 'health-row');
-      row.append(el('dt', '', title), el('dd', '', statusLabels[state.health[key]] ?? '状态待确认'));
+      const value = el('dd', '', statusLabels[state.health[key]] ?? '状态待确认');
+      if (key === 'rag' || key === 'models') {
+        const detail = capabilityDetail(state, key);
+        if (detail) value.append(el('small', 'health-detail', detail));
+      }
+      row.append(el('dt', '', title), value);
       list.append(row);
     }
     content.append(list);

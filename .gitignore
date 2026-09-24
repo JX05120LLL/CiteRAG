@@ -7,6 +7,7 @@
 
 # Workstation helper and design-generation scripts; keep local only
 /scripts/
+/docs/superpowers/
 /design/ui/common.py
 /design/ui/concept_a.py
 

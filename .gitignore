@@ -4,6 +4,7 @@
 /LightRAG/
 /output/
 /.playwright-cli/
+/frontend/.playwright-cli/
 
 # Workstation helper and design-generation scripts; keep local only
 /scripts/
@@ -11,10 +12,23 @@
 /design/ui/common.py
 /design/ui/concept_a.py
 
-# Maintainer test sources stay local; public CI checks live in the workflow
-/backend/tests/
+# Most maintainer test sources stay local; the selected CI regressions are published
+/backend/tests/*
+!/backend/tests/test_postgres_local.py
+!/backend/tests/test_ingestion_lifecycle.py
+!/backend/tests/test_query_routing.py
+!/backend/tests/test_m13_exact_api.py
+!/backend/tests/test_m13_answer_api.py
+!/backend/tests/test_m1_stream.py
+!/backend/tests/test_m14_lifecycle.py
 /frontend/**/*.test.*
 /frontend/**/*.spec.*
+!/frontend/src/api/client.test.ts
+!/frontend/src/api/stream.test.ts
+!/frontend/src/app.test.ts
+!/frontend/src/documents.test.ts
+!/frontend/src/knowledge.test.ts
+!/frontend/src/pages/status.test.ts
 
 # Credentials and local configuration
 .env

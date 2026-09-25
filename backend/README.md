@@ -1,5 +1,7 @@
 # CiteRAG 后端
 
+2026-09-25 补记：新提问可用 `mode=auto`，由 `qwen-flash` 识别检索意图，服务端转发到语义路径、已确认文档属性等值路径或当前知识库原文块的完整编号/短语字面定位。模型只可引用服务端候选 ID，或逐字复制问题中的定位词；服务端校验并保存路由供同消息重试，回答视图仅附可选 `route` 类型。多份资料命中或结果过多时澄清，不以 Top-K 充当精确结果。旧 `semantic`/`exact` 请求兼容，默认问答关闭。每次启用后的新自动提问最多增加一次路由模型请求；本轮仅在隔离 PostgreSQL 和本地替身中验证，真实模型请求 0。订单号是知识库原文定位示例，不涉及实时业务连接器。详情见 [M1 验证](../docs/development/M1-VALIDATION.md)。下文分片版本与接口说明保留原时点快照。
+
 Python 3.12、FastAPI、SQLAlchemy 2、Alembic 与 PostgreSQL 17。本地单用户，无管理员、注册或登录。M1-1 至 M1-4 的受管资料、问答来源、聊天摘要及资料生命周期主链路已在本机实现；另有核验并提交后才发送正文的 SSE、180 天聊天保留与可选的每日双库加私有文件备份。SSE 不承诺模型 token 级首响。入库、问答和自动备份默认关闭；图片和语音留后续。M0 超长 Embedding 输入边界暂缓未通过，M0 与完整 M1 均未完成。
 
 本轮只在隔离测试库升级到 `0006_m1_lifecycle`。实际业务库本轮不可达；上轮只读核查为 `0002_local_single_user`，旧 API 无新接口，不能当作当前在线证据。未迁移业务或重启旧 API。默认关闭模型入库与问答；新接口需停写备份业务库、引擎库及私有原文后显式迁移并重启，进度见 [M1 记录](../docs/development/M1-VALIDATION.md)。
@@ -91,9 +93,9 @@ uv run --no-env-file python -m compileall -q app migrations
 uv run --no-env-file alembic upgrade head --sql
 ```
 
-GitHub CI 使用独立临时 PostgreSQL 17.9，验证新库迁移、重复迁移与真实 API 响应，详见 [CI 说明](../docs/development/CI.md)。上述 `--sql` 命令只生成迁移 SQL，不连接数据库；实际数据库行为由 CI 冒烟或本地集成验证确认。
+GitHub CI 使用独立临时 PostgreSQL 17.9，验证新库迁移、重复迁移、真实 API 响应，以及公开的路由/原文定位回归测试，详见 [CI 说明](../docs/development/CI.md)。上述 `--sql` 命令只生成迁移 SQL，不连接数据库；实际数据库行为由 CI 冒烟或本地集成验证确认。
 
-`backend/tests/` 仅在维护者本机保留，不随仓库发布，新克隆无需运行 `pytest`。已有本地测试文件时，可运行 `uv run --no-env-file pytest -q`；未设置 `CITERAG_TEST_DATABASE_URL` 时真实 PostgreSQL 测试明确跳过，不用 SQLite 或内存库替代。独立测试实例准备、隐藏输入与执行方式见[本地开发的运行检查](../docs/development/LOCAL-DEVELOPMENT.md#运行检查)。本地测试还覆盖旧库升级保留、本地归属、知识库绑定及 owner 生命周期，不能用较小范围的 CI 冒烟代替。禁止把真实业务库或共享实例作为测试目标。
+选定的七个 `backend/tests/` 文件现随仓库发布，CI 全部运行；其他专用测试仍在维护者本机。公开测试命令以 [CI 工作流](../.github/workflows/ci.yml) 为准；未设置 `CITERAG_TEST_DATABASE_URL` 时 PostgreSQL 用例明确跳过，不用 SQLite 或内存库替代。独立测试实例准备与完整本机测试方式见[本地开发的运行检查](../docs/development/LOCAL-DEVELOPMENT.md#运行检查)。禁止把真实业务库或共享实例作为测试目标。
 
 M1-1 历史测试覆盖建库幂等/容量/事务；M1-2 增加受限解析、真实隔离 PostgreSQL 生命周期、SDK＋隔离引擎库＋本地模型替身和真实浏览器。三者不等于真实供应商验证；每轮结果见 [M1 验证记录](../docs/development/M1-VALIDATION.md)。
 

@@ -8,9 +8,9 @@ A local, single-user multimodal knowledge assistant, designed around answers wit
 
 **当前阶段：M0 未完成；M1-1 至 M1-4 的本机主链路已实现，完整 M1 尚未验收。** 四类文字资料、受管入库、普通/精确问答、真实来源、固定库聊天、近期窗口/摘要、删除/替换与旧空间清理已接通。最新本机改动接入回答模型 SSE 增量、只展示匹配原文的临时片段、失败后的 `partial` 持久状态和重试；完整回答仍须最终核验、状态门禁和提交后才显示来源。此前已接通断流恢复、180 天聊天保留和可选每日成套备份。入库、问答和备份默认关闭；最新验证仍使用本地模型替身，真实供应商请求为 0。分层证据和剩余条件见 [M1 计划](docs/development/M1-IMPLEMENTATION.md)与 [M1 验证](docs/development/M1-VALIDATION.md)。
 
-五模型与真实百炼双库验收沿用 M0 证据；超长 Embedding 输入边界仍暂缓未通过。本轮新增真实模型请求为 0。此前核查时 8000 API、5174 前端和 55432 业务库不可达，未读取实际 schema；更早核查为 `0002_local_single_user`、旧 API 无新接口，不能当作当前在线事实。新增 `0004`—`0007` 只在隔离库升级；实际业务库未迁移、旧 API 未重启。原生 TypeScript、A 版 UI 与「回响」Logo 保留。
+五模型与真实百炼双库验收沿用 M0 证据；超长 Embedding 输入边界仍暂缓未通过。本轮新增真实模型请求为 0。此前核查时 8000 API、5174 前端和 55432 业务库不可达，未读取实际 schema；更早核查为 `0002_local_single_user`、旧 API 无新接口，不能当作当前在线事实。新增 `0004`—`0007` 只在隔离库升级；实际业务库未迁移、旧 API 未重启。原生 TypeScript 与「回响」Logo 保留；知识库、文字工作台、资料任务详情和系统状态已有可运行 UI，A 版静态稿保留为历史资产。桌面／手机截图、控件对应接口与本轮验证边界见 [运行 UI 记录](design/ui/RUNTIME-UI.md)。
 
-最新收尾只读端口检查中，API、前端、业务库与引擎库均不可达，停止原因未定位；先前引擎库可连接只是历史快照。详情及恢复前提见 [交接](docs/development/HANDOFF.md)。
+上述不可达是前一轮的收尾快照。本轮开始时只读核对 8000 为隔离手工 API、5173 为本仓库 Vite；实际业务库未读取或迁移。本轮验证及恢复前提见 [M1 验证](docs/development/M1-VALIDATION.md)和[交接](docs/development/HANDOFF.md)。
 
 ## 从这里开始
 
@@ -21,12 +21,12 @@ A local, single-user multimodal knowledge assistant, designed around answers wit
 - [本地开发](docs/development/LOCAL-DEVELOPMENT.md)：安装、启动、配置边界与独立数据库测试。
 - [本地单用户调整](docs/development/M0-LOCAL-SINGLE-USER.md)：2026-09-22 确认的范围、数据兼容与验收计划。
 - [M0 验证记录](docs/development/M0-VALIDATION.md)：实际检查、模拟验证及尚未完成的真实接入条件。
-- [GitHub CI](docs/development/CI.md)：自动构建、静态检查与临时 PostgreSQL/API 冒烟验证；专用测试文件仅在本机保留。
-- [UI 设计说明](design/ui/README.md)：四张 1440 × 960 桌面稿及预览方法。
+- [GitHub CI](docs/development/CI.md)：自动构建、静态检查、公开合成回归测试与临时 PostgreSQL/API 冒烟验证；其余专用测试文件仅在本机保留。
+- [UI 设计与运行界面](design/ui/README.md)：当前桌面／手机截图，以及历史 A 版静态稿。
 - [正式 Logo](assets/brand/README.md)：无字图形、反白、应用图标及下载。
 - [贡献约定](CONTRIBUTING.md)：范围、验证、数据与提交要求。
 
-![CiteRAG 问答工作台设计，内容为演示](design/ui/exports/a-01-workbench.png)
+![CiteRAG 可运行文字工作台，隔离手工服务与合成资料](design/ui/exports/runtime-isolated-workbench-1440.png)
 
 ## 本地查看设计
 

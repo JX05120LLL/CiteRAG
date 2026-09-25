@@ -30,9 +30,25 @@ jobs:
           paths = subprocess.check_output(["git", "ls-files", "-z"]).decode().split("\0")
           patterns = (
               ".local/*", "output/*", "scripts/*", "LiveRAG/*", "LightRAG/*",
-              ".playwright-cli/*", "design/ui/common.py", "design/ui/concept_a.py",
+              ".playwright-cli/*", "frontend/.playwright-cli/*",
+              "design/ui/common.py", "design/ui/concept_a.py",
               "backend/tests/*", "frontend/*.test.*", "frontend/*.spec.*",
           )
+          public_tests = {
+              "backend/tests/test_postgres_local.py",
+              "backend/tests/test_ingestion_lifecycle.py",
+              "backend/tests/test_query_routing.py",
+              "backend/tests/test_m13_exact_api.py",
+              "backend/tests/test_m13_answer_api.py",
+              "backend/tests/test_m1_stream.py",
+              "backend/tests/test_m14_lifecycle.py",
+              "frontend/src/api/client.test.ts",
+              "frontend/src/api/stream.test.ts",
+              "frontend/src/app.test.ts",
+              "frontend/src/documents.test.ts",
+              "frontend/src/knowledge.test.ts",
+              "frontend/src/pages/status.test.ts",
+          }
           private_names = (
               ".env", ".env.*", "*.pem", "*.key", "*.p12", "*.pfx",
               "credentials*.json", "*.credential.xml", "*.backup.xml", "*.dpapi",
@@ -41,7 +57,7 @@ jobs:
               "secrets", "node_modules", ".venv", "__pycache__", ".pytest_cache",
               ".ruff_cache", "dist", "coverage", "test-results", "playwright-report",
           }
-          blocked = [path for path in paths if path and (
+          blocked = [path for path in paths if path and path not in public_tests and (
               any(fnmatch.fnmatchcase(path, pattern) for pattern in patterns)
               or any(fnmatch.fnmatchcase(path.rsplit("/", 1)[-1], pattern)
                      for pattern in private_names)
@@ -52,7 +68,7 @@ jobs:
           print("Repository file boundaries passed (not a full secret scan).")
 
   frontend:
-    name: Frontend build and smoke
+    name: Frontend tests, build and smoke
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     defaults:
@@ -75,6 +91,8 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Typecheck
         run: pnpm typecheck
+      - name: Frontend behavior tests
+        run: pnpm test
       - name: Build
         run: pnpm build
       - name: Verify built entry and assets
@@ -98,7 +116,7 @@ jobs:
           JS
 
   backend:
-    name: Backend and PostgreSQL smoke
+    name: Backend tests and PostgreSQL smoke
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     defaults:
@@ -120,6 +138,9 @@ jobs:
           --health-retries 10
     env:
       CITERAG_DATABASE_URL: postgresql+asyncpg://postgres@127.0.0.1:5432/citerag_ci
+      CITERAG_TEST_DATABASE_URL: postgresql+asyncpg://postgres@127.0.0.1:5432/citerag_ci
+      CITERAG_INGESTION_ENABLED: 'false'
+      CITERAG_ANSWER_ENABLED: 'false'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -134,8 +155,10 @@ jobs:
         run: uv sync --locked
       - name: Lint and compile
         run: |
-          uv run --locked --no-env-file ruff check app migrations
+          uv run --locked --no-env-file ruff check app migrations tests/test_postgres_local.py tests/test_ingestion_lifecycle.py tests/test_query_routing.py tests/test_m13_exact_api.py tests/test_m13_answer_api.py tests/test_m1_stream.py tests/test_m14_lifecycle.py
           uv run --locked --no-env-file python -m compileall -q app migrations
+      - name: Public PostgreSQL and routing regressions
+        run: uv run --locked --no-env-file pytest -q tests/test_postgres_local.py tests/test_ingestion_lifecycle.py tests/test_query_routing.py tests/test_m13_exact_api.py tests/test_m13_answer_api.py tests/test_m1_stream.py tests/test_m14_lifecycle.py
       - name: Generate migration SQL
         run: uv run --locked --no-env-file alembic upgrade head --sql > "$RUNNER_TEMP/citerag-migration.sql"
       - name: Migrate and verify local API behavior

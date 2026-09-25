@@ -26,7 +26,7 @@ class AskRequest(BaseModel):
 
     client_message_id: UUID
     text: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=1000)]
-    mode: Literal["semantic", "exact"] = "semantic"
+    mode: Literal["semantic", "exact", "auto"] = "semantic"
     exact: "ExactFilter | None" = None
 
     @field_validator("text")

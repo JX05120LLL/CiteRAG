@@ -15,7 +15,7 @@ const backupErrors: Record<string, string> = {
   backup_failed: '备份失败，需检查本机存储和数据库。',
 };
 
-function verificationTime(value: string): string {
+function verificationTime(value: string | number): string {
   return new Date(value).toLocaleString('zh-CN', { hour12: false });
 }
 
@@ -48,7 +48,11 @@ export function renderStatus(main: HTMLElement, state: AppState, refresh: () => 
     content.append(pending);
   } else if (state.healthError) content.append(alert(state.healthError.message));
   else if (state.health) {
-    content.append(el('p', 'intro', statusLabels[state.health.status] ?? '状态待确认'));
+    const summary = el('div', 'status-summary');
+    summary.append(el('strong', '', statusLabels[state.health.status] ?? '状态待确认'));
+    if (state.healthCheckedAt) summary.append(el('span', 'metadata',
+      `本次读取 ${verificationTime(state.healthCheckedAt)}`));
+    content.append(summary);
     const list = el('dl', 'health-list');
     list.setAttribute('aria-live', 'polite');
     for (const [key, title] of [['mode', '使用方式'], ['database', '业务数据库'], ['rag', '知识引擎'], ['models', '模型服务']] as const) {
@@ -80,7 +84,7 @@ export function renderStatus(main: HTMLElement, state: AppState, refresh: () => 
     }
     content.append(list);
   }
-  content.append(el('p', 'scope-note', '同一安装使用同一份本地资料。这里显示服务返回的当前状态；文字问答需单独启用，实时语音与图片提问留待后续。'));
+  content.append(el('p', 'scope-note', '同一安装使用同一份本地资料。模型服务的标记依据本机配置和验证记录，未在此页发起模型调用。文字问答需单独启用；实时语音与图片提问留待后续。'));
   const retry = action('刷新状态', 'button secondary', () => { void refresh(); });
   retry.disabled = state.healthLoading;
   content.append(retry);

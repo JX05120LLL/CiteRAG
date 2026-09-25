@@ -18,7 +18,7 @@ from app.models import (
     KnowledgeBase,
     ParsedBlockRecord,
 )
-from app.rag.answer_adapter import AnswerError, checked_answer
+from app.rag.answer_adapter import AnswerError, checked_answer, checked_route
 from app.rag.query_adapter import QueryError, RetrievedChunk
 from app.rag.source_mapping import locate_chunk
 from app.rag.streamed_answer import ExtractiveDraft
@@ -37,8 +37,33 @@ class Answerer(Protocol):
     async def answer(self, question: str, evidence: list[dict]) -> str: ...
 
 
+def matching_candidates(question: str, attributes: list[tuple[str, str]]) -> list[dict]:
+    """Expose only confirmed values present literally in the question."""
+    found = set()
+    matches: list[tuple[str, str]] = []
+    for field, value in attributes:
+        if (field not in {"doc_code", "model_code", "edition"}
+            or not isinstance(value, str) or not 1 <= len(value) <= 80
+            or (field, value) in found):
+            continue
+        match = re.search(r"(?<![A-Za-z0-9])" + re.escape(value) + r"(?![A-Za-z0-9])", question)
+        if match is None:
+            continue
+        if field == "model_code" and re.match(
+            r"\s+(?:Pro|Plus|Max|Ultra|Mini|Lite|SE|V\d+|\d+G)(?![A-Za-z0-9])",
+            question[match.end():], re.IGNORECASE,
+        ):
+            continue
+        found.add((field, value))
+        matches.append((field, value))
+    order = {"doc_code": 0, "model_code": 1, "edition": 2}
+    matches.sort(key=lambda item: (order[item[0]], -len(item[1]), item[1]))
+    return [{"id": f"C{index}", "field": field, "value": value}
+            for index, (field, value) in enumerate(matches, 1)]
+
+
 def answer_view(message: ConversationMessage, attempt: AnswerAttempt) -> dict:
-    return {
+    view = {
         "message_id": message.id, "attempt_id": attempt.id,
         "client_message_id": message.client_message_id,
         "question": message.content, "mode": message.mode, "status": attempt.status,
@@ -46,6 +71,11 @@ def answer_view(message: ConversationMessage, attempt: AnswerAttempt) -> dict:
         "kb_revision": attempt.kb_revision, "error_code": attempt.error_code,
         "created_at": message.created_at, "saved": attempt.status != "running",
     }
+    if message.mode == "auto" and isinstance(message.query_filter, dict):
+        route = message.query_filter.get("mode")
+        if route in {"semantic", "exact", "literal", "needs_clarification", "unsupported"}:
+            view["route"] = route
+    return view
 
 
 class AnswerService:
@@ -104,7 +134,7 @@ class AnswerService:
         ))
         if existing is not None:
             if (existing.content != question or existing.mode != mode
-                or existing.query_filter != exact):
+                or (mode != "auto" and existing.query_filter != exact)):
                 raise ServiceError(409, "idempotency_conflict", "同一提问请求不能更换正文")
             attempt = await self.session.scalar(select(AnswerAttempt).where(
                 AnswerAttempt.message_id == existing.id,
@@ -216,6 +246,10 @@ class AnswerService:
 
         try:
             context = await prepare_context(self.session, conversation_id, kb, answerer)
+            if mode == "auto" and exact is None:
+                exact = await self._route_auto(kb.id, question, answerer)
+                message.query_filter = exact
+                await self.session.commit()
             status, text, citations = await self._resolve(
                 kb.id, attempt.workspace, question, retriever, answerer, mode, exact, context,
                 preview if on_preview is not None else None,
@@ -272,11 +306,50 @@ class AnswerService:
         await self.session.commit()
         return answer_view(message, current_attempt)
 
+    async def _route_auto(self, kb_id: UUID, question: str, answerer: Answerer) -> dict:
+        rows = list(await self.session.execute(select(
+            Document.doc_code, Document.model_code, Document.edition,
+        ).where(
+            Document.kb_id == kb_id, Document.status == "ready", Document.indexed_once.is_(True),
+        ).limit(501)))
+        await self.session.commit()
+        attributes = [
+            (field, value)
+            for doc_code, model_code, edition in (rows if len(rows) <= 500 else [])
+            for field, value in (("doc_code", doc_code), ("model_code", model_code),
+                                 ("edition", edition))
+            if value is not None
+        ]
+        candidates = matching_candidates(question, attributes)
+        if len(candidates) > 12:
+            return {"mode": "needs_clarification"}
+        route_query = getattr(answerer, "route_query", None)
+        if route_query is None:
+            raise AnswerError("answer_unavailable")
+        return checked_route(await route_query(question, candidates), candidates, question)
+
     async def _resolve(
         self, kb_id: UUID, workspace: str, question: str,
         retriever: Retriever, answerer: Answerer, mode: str, exact: dict | None,
         context: dict, on_preview: Callable[[str], Awaitable[None]] | None = None,
     ) -> tuple[str, str, list[dict]]:
+        if mode == "auto":
+            route = exact or {}
+            routed_mode = route.get("mode")
+            if routed_mode == "exact":
+                return await self._resolve_exact(kb_id, question, route["filters"], answerer,
+                                                 context, on_preview)
+            if routed_mode == "literal":
+                return await self._resolve_literal(kb_id, question, route["phrase"], answerer,
+                                                   context, on_preview)
+            if routed_mode == "needs_clarification":
+                return ("needs_clarification",
+                        "请补充知识库中的具体编号、短语或资料名称，以便定位原文。", [])
+            if routed_mode == "unsupported":
+                return ("needs_clarification",
+                        "当前知识库不支持以检索片段计算全集统计；请缩小到具体资料或编号。", [])
+            if routed_mode != "semantic":
+                raise AnswerError("answer_unverifiable")
         if mode == "exact":
             return await self._resolve_exact(kb_id, question, exact or {}, answerer, context,
                                              on_preview)
@@ -325,6 +398,50 @@ class AnswerService:
         )
         selected = [citation for citation in citations if citation["evidence_id"] in identifiers]
         return status, text, selected
+
+    async def _resolve_literal(
+        self, kb_id: UUID, question: str, phrase: str, answerer: Answerer, context: dict,
+        on_preview: Callable[[str], Awaitable[None]] | None = None,
+    ) -> tuple[str, str, list[dict]]:
+        escaped = phrase.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        blocks = list(await self.session.scalars(select(ParsedBlockRecord).join(
+            Document, Document.id == ParsedBlockRecord.document_id,
+        ).where(
+            Document.kb_id == kb_id, Document.status == "ready", Document.indexed_once.is_(True),
+            ParsedBlockRecord.text.like(f"%{escaped}%", escape="\\"),
+        ).order_by(ParsedBlockRecord.document_id, ParsedBlockRecord.ordinal).limit(1001)))
+        await self.session.commit()
+        if len(blocks) > 1000:
+            return "needs_clarification", "定位范围过大，请提供更完整的编号或限定资料。", []
+        pattern = re.compile(r"(?<![A-Za-z0-9])" + re.escape(phrase) + r"(?![A-Za-z0-9])")
+        matches = [block for block in blocks if pattern.search(block.text)]
+        if not matches:
+            return "insufficient_evidence", "", []
+        if len({block.document_id for block in matches}) != 1:
+            return "needs_clarification", "多个资料包含该编号或短语，请指定文件或补充区分条件。", []
+        if len(matches) > 3 or sum(len(block.text) for block in matches) > 6000:
+            return "needs_clarification", "定位结果过多，请提供更具体的编号或限定资料。", []
+        document = await self.session.get(Document, matches[0].document_id)
+        if document is None or document.parsed_text is None:
+            raise QueryError("retrieval_failed")
+        evidence: list[dict] = []
+        citations: list[dict] = []
+        for block in matches:
+            if document.parsed_text[block.start:block.end] != block.text:
+                raise QueryError("retrieval_failed")
+            marker = f"E{len(evidence) + 1}"
+            evidence.append({"id": marker, "text": block.text})
+            citations.append({
+                "evidence_id": marker, "document_id": str(document.id),
+                "filename": document.filename, "locator": block.locator,
+                "excerpt": block.text,
+            })
+        await self.session.commit()
+        raw = await self._answer(answerer, question, evidence, context, on_preview)
+        status, text, identifiers = checked_answer(
+            raw, {item["id"]: item["text"] for item in evidence},
+        )
+        return status, text, [item for item in citations if item["evidence_id"] in identifiers]
 
     async def _resolve_exact(
         self, kb_id: UUID, question: str, filters: dict, answerer: Answerer, context: dict,

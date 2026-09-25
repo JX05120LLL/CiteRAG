@@ -20,6 +20,8 @@ pnpm dev
 
 ## 本轮边界
 
+2026-09-25 最新输入交互：工作台只保留一个提问框，向 `/api/conversations/{id}/messages/stream` 发送 `mode=auto`；后端识别意图后转发到语义检索、已确认属性等值定位或当前知识库原文中的编号/短语字面定位。页面不提供手动模式和精确条件。订单号可作为知识库编号查询示例；隔离浏览器截图和测试边界见 [运行 UI](../design/ui/RUNTIME-UI.md)。下面 M1-3 首片描述为历史切片。
+
 M1-3 问答首片已接通：就绪库可新建/打开固定知识库聊天，普通或确认编号/型号/版本精确提问；显示已核验的受管来源文件、真实位置与原文下载。库未就绪或维护时暂停；回复状态与失败分开显示。后端默认 `CITERAG_ANSWER_ENABLED=false`，需显式授权后才能开启真实模型问答；本机浏览器验证使用模型替身。下列 M1-1/M1-2 条目保留各自切片当时的描述。
 
 - 页面启动读取 `/api/knowledge-bases` 和 `/api/conversations`，直接进入工作台；「我的知识库」和「系统状态」入口始终可访问。
@@ -57,6 +59,6 @@ pnpm typecheck
 pnpm build
 ```
 
-GitHub CI 运行类型检查、构建及构建产物冒烟检查，见 [CI 说明](../docs/development/CI.md)。构建输出为 `dist/`，不纳入 Git；`pnpm preview` 仅用于核对构建资产，不代表后端及知识引擎已经可用。
+GitHub CI 运行 `pnpm test`、类型检查、构建及构建产物冒烟检查，见 [CI 说明](../docs/development/CI.md)。构建输出为 `dist/`，不纳入 Git；`pnpm preview` 仅用于核对构建资产，不代表后端及知识引擎已经可用。
 
-前端专用测试文件仅在维护者本机保留，不随仓库发布。已有这些文件时可额外运行 `pnpm test`；新克隆无需运行此命令。Vitest 使用受控 HTTP 响应，覆盖工作台、建库、multipart 上传、受理/解析/核验分离、响应丢失同键恢复、存储故障、文件初检、解析位置与 HTML 注入、blocked 门禁、原任务重试和重建确认。这些模拟测试不能替代真实 PostgreSQL、浏览器联调或模型接入验收。
+选定的六个前端 Vitest 文件现随仓库发布，新克隆可运行 `pnpm test`。Vitest 使用受控 HTTP 响应，覆盖工作台、建库、multipart 上传、受理/解析/核验分离、响应丢失同键恢复、存储故障、文件初检、解析位置与 HTML 注入、blocked 门禁、原任务重试和重建确认。这些模拟测试不能替代真实 PostgreSQL、浏览器联调或模型接入验收。

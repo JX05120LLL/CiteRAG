@@ -16,6 +16,9 @@ const stageLabels: Record<IngestionJob['stage'], string> = {
   indexing: '正在建立索引', verifying: '正在核验入库结果',
   cleanup: '正在清理旧空间', complete: '核验与清理通过',
 };
+const operationLabels: Record<IngestionJob['operation'], string> = {
+  upload: '资料上传任务', rebuild: '原文重建任务', delete: '资料删除任务', replace: '资料替换任务',
+};
 const failureLabels: Record<string, string> = {
   duplicate_document: '此知识库已有相同内容，请检查资料列表。',
   idempotency_conflict: '请求内容与原请求不同，请重新选择原文件。',
@@ -60,6 +63,10 @@ function locatorLabel(block: ParsedBlock): string {
   return '来源片段';
 }
 
+function documentSize(bytes: number): string {
+  return bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KiB`;
+}
+
 export function createDocumentsPanel(api: ApiClient, changed: () => void, acceptBases: (bases: KnowledgeBase[]) => void) {
   let base: KnowledgeBase | null = null;
   let documents: ManagedDocument[] | null = null;
@@ -75,13 +82,14 @@ export function createDocumentsPanel(api: ApiClient, changed: () => void, accept
   let recoveryBlocked = false;
   let rebuildConfirmed = false;
   let inspected: { document: ManagedDocument; blocks: ParsedBlock[] | null; error: ApiError | null } | null = null;
+  let inspectedJob: { id: string; job: IngestionJob | null; error: ApiError | null } | null = null;
   let generation = 0;
 
   async function refresh() {
     if (!base || busy) return;
     const current = ++generation;
     const kbId = base.id;
-    loading = true; readError = null; inspected = null; changed();
+    loading = true; readError = null; inspected = null; inspectedJob = null; changed();
     const results = await Promise.allSettled([api.documents(kbId), api.jobs(kbId), api.knowledgeBases()]);
     if (current !== generation) return;
     documents = results[0].status === 'fulfilled' ? results[0].value : null;
@@ -100,13 +108,13 @@ export function createDocumentsPanel(api: ApiClient, changed: () => void, accept
     loading = false; changed();
   }
 
-  function open(selected: KnowledgeBase) {
+  function open(selected: KnowledgeBase): Promise<void> {
     ++generation;
     base = selected; documents = jobs = null; files = []; pending = null; uncertain = busy = loading = recoveryBlocked = rebuildConfirmed = false;
-    error = readError = null; notice = null; inspected = null;
+    error = readError = null; notice = null; inspected = inspectedJob = null;
     try { pending = restorePendingIngestion(selected.id); uncertain = pending !== null; }
     catch (reason) { error = reason instanceof ApiError ? reason : new ApiError('local-storage'); recoveryBlocked = true; }
-    changed(); void refresh();
+    changed(); return refresh();
   }
 
   function mutationUnavailable(): boolean {
@@ -204,6 +212,23 @@ export function createDocumentsPanel(api: ApiClient, changed: () => void, accept
     changed();
   }
 
+  async function inspectTask(task: IngestionJob) {
+    if (!base || busy) return;
+    const current = generation;
+    const kbId = base.id;
+    inspectedJob = { id: task.id, job: null, error: null };
+    changed();
+    try {
+      const currentJob = await api.job(task.id);
+      if (currentJob.id !== task.id || currentJob.kb_id !== kbId) throw new ApiError('invalid-response');
+      if (generation === current && inspectedJob?.id === task.id) inspectedJob.job = currentJob;
+    } catch (reason) {
+      if (generation === current && inspectedJob?.id === task.id)
+        inspectedJob.error = reason instanceof ApiError ? reason : new ApiError('http');
+    }
+    changed();
+  }
+
   async function saveAttributes(document: ManagedDocument,
                                 values: {doc_code: string | null; model_code: string | null; edition: string | null}) {
     if (mutationUnavailable() || base?.status !== 'ready' || document.status !== 'ready') return;
@@ -221,13 +246,37 @@ export function createDocumentsPanel(api: ApiClient, changed: () => void, accept
     if (!base) return content;
     const back = action('返回知识库列表', 'text-button', () => { if (!busy) { base = null; ++generation; changed(); } });
     back.disabled = busy;
-    content.append(back, heading(base.name), el('p', 'metadata', kbStatuses[base.status]));
+    const headingRow = el('div', 'document-heading');
+    const title = el('div');
+    title.append(heading(base.name), el('p', 'metadata', kbStatuses[base.status]));
+    headingRow.append(title, back);
+    content.append(headingRow);
     content.append(el('p', 'intro document-intro', '原文保存在本机私有目录。解析完成不等于入库成功；入库与核验期间，该库问答暂停。'));
+    if (base.status === 'blocked') content.append(alert('此库待修复，问答与新上传均暂停。请检查下方失败任务，重试或从受管原文重建。'));
+    else if (base.status === 'maintaining') content.append(alert('此库正在维护，问答与再次上传暂停。请刷新持久任务查看进度。', 'pending'));
+    if (documents && jobs) {
+      const summary = el('div', 'stage-summary');
+      const accepted = documents.filter((item) => item.status !== 'deleted').length;
+      const parsed = documents.filter((item) => ['parsed', 'indexing', 'ready'].includes(item.status)).length;
+      const verified = base.status === 'ready'
+        ? documents.filter((item) => item.status === 'ready').length : 0;
+      for (const [label, count, hint] of [
+        ['已受理', accepted, '仅代表原文和任务已记录'],
+        ['解析完成', parsed, '已有可查看的原文位置'],
+        ['问答候选', verified, '还需问答服务启用且知识库就绪'],
+      ] as const) {
+        const step = el('div', 'stage-step');
+        step.append(el('strong', '', String(count)), el('span', '', label), el('small', '', hint));
+        summary.append(step);
+      }
+      content.append(summary);
+    }
     const form = el('form', 'document-upload');
     form.setAttribute('aria-label', '上传资料'); form.setAttribute('aria-busy', String(busy));
     const label = el('label', 'document-label', '添加资料'); label.htmlFor = 'document-files';
     const input = el('input', 'document-files'); input.type = 'file'; input.id = 'document-files'; input.multiple = true;
-    input.accept = '.txt,.md,.pdf,.docx'; input.disabled = busy || recoveryBlocked || pending?.operation === 'rebuild';
+    input.accept = '.txt,.md,.pdf,.docx'; input.disabled = mutationUnavailable() || pending?.operation === 'rebuild' ||
+      (!pending && (!!activeJob() || ['maintaining', 'blocked'].includes(base.status)));
     input.setAttribute('aria-describedby', 'document-file-hint');
     input.addEventListener('change', () => {
       files = [...(input.files ?? [])]; error = null;
@@ -256,7 +305,7 @@ export function createDocumentsPanel(api: ApiClient, changed: () => void, accept
     if (error) content.append(alert(errorText(error)));
     if (notice) content.append(alert(notice, 'success'));
     const toolbar = el('div', 'document-toolbar');
-    toolbar.append(el('h2', '', '资料与任务'));
+    toolbar.append(el('h2', '', '资料列表'));
     const reload = action(loading ? '正在刷新…' : '刷新资料与任务', 'button secondary', () => { void refresh(); });
     reload.disabled = busy || loading; toolbar.append(reload); content.append(toolbar);
     if (readError) content.append(alert(errorText(readError)));
@@ -266,7 +315,10 @@ export function createDocumentsPanel(api: ApiClient, changed: () => void, accept
       for (const document of documents) {
         const row = el('li', 'managed-document');
         const description = el('div', 'document-description');
-        description.append(el('strong', 'document-filename', document.filename), el('p', 'metadata', `${documentLabels[document.status]} · ${(document.size / 1024).toFixed(1)} KiB`));
+        const fileType = document.filename.split('.').pop()?.toUpperCase() || 'FILE';
+        description.append(el('span', 'document-type', fileType), el('strong', 'document-filename', document.filename),
+          el('p', 'metadata', `${documentSize(document.size)} · ${new Date(document.created_at).toLocaleDateString('zh-CN')}`),
+          el('span', `document-status doc-${document.status}`, documentLabels[document.status]));
         if (document.error_code) description.append(el('p', 'field-hint', failureLabels[document.error_code] ?? '资料处理未完成，请核对任务后重试。'));
         if (document.status === 'ready' && base.status === 'ready') {
           const attributes = el('form', 'document-attributes');
@@ -300,9 +352,11 @@ export function createDocumentsPanel(api: ApiClient, changed: () => void, accept
           description.append(attributes);
         }
         const controls = el('div', 'row-actions');
-        const original = el('a', 'text-button', '下载原文'); original.href = `/api/documents/${encodeURIComponent(document.id)}/original`; original.download = ''; original.rel = 'noreferrer';
+        const original = el('a', 'text-button', '下载原文'); original.href = api.originalUrl(document.id); original.download = ''; original.rel = 'noreferrer';
         const inspectButton = action('查看解析位置', 'text-button', () => { void inspect(document); });
         inspectButton.disabled = base.status === 'maintaining' || base.status === 'blocked' || !['parsed', 'ready'].includes(document.status);
+        if (inspectButton.disabled) inspectButton.title = base.status === 'blocked' || base.status === 'maintaining'
+          ? '知识库维护或待修复期间暂停原文核查' : '解析位置尚未可用';
         if (base.status === 'maintaining' || base.status === 'blocked' || ['deleting', 'replacing', 'deleted'].includes(document.status)) controls.append(el('span', 'metadata', '原文核查暂停'));
         else controls.append(original);
         if (document.status === 'ready' && base.status === 'ready') {
@@ -339,11 +393,14 @@ export function createDocumentsPanel(api: ApiClient, changed: () => void, accept
       details.append(action('收起解析位置', 'text-button', () => { inspected = null; changed(); })); content.append(details);
     }
     if (jobs) {
+      const jobsHeading = el('div', 'document-toolbar');
+      jobsHeading.append(el('h2', '', '持久任务'), el('span', 'metadata', `${jobs.length} 项`));
+      content.append(jobsHeading);
       const list = el('ol', 'ingestion-jobs');
       for (const job of jobs) {
         const item = el('li', 'ingestion-job');
         const label = job.status === 'failed' ? '处理失败' : job.status === 'interrupted' ? '处理已中断' : stageLabels[job.stage];
-        const taskName = { upload: '资料上传任务', rebuild: '原文重建任务', delete: '资料删除任务', replace: '资料替换任务' }[job.operation];
+        const taskName = operationLabels[job.operation];
         const title = el('div', 'job-heading'); title.append(el('strong', '', taskName), el('span', 'job-state', label));
         item.append(title, el('p', 'metadata', `${new Date(job.created_at).toLocaleString('zh-CN', { hour12: false })} · ${job.document_ids.length} 份资料`));
         if (job.stage === 'parsed' && job.status === 'queued') item.append(el('p', 'field-hint', '解析结果已保存，等待启用入库处理，尚未进入索引。'));
@@ -360,10 +417,44 @@ export function createDocumentsPanel(api: ApiClient, changed: () => void, accept
           const button = action('清理旧空间', 'button secondary', () => { void cleanup(job); });
           button.disabled = mutationUnavailable() || !!pending || activeJob(); item.append(button);
         }
+        item.append(action('查看任务详情', 'text-button', () => { void inspectTask(job); }));
         list.append(item);
       }
       content.append(list);
       if (!jobs.length) content.append(el('p', 'empty-documents', '尚无持久任务。任务受理后，刷新页面仍可在此查看。'));
+    }
+    if (inspectedJob) {
+      const detail = el('section', 'job-details');
+      detail.setAttribute('aria-label', '任务详情');
+      detail.append(el('h2', '', inspectedJob.job ? `任务详情 · ${operationLabels[inspectedJob.job.operation]}` : '任务详情'),
+        el('p', 'metadata', '以下状态来自对单个持久任务的本次读取。'));
+      if (inspectedJob.error) detail.append(alert(errorText(inspectedJob.error)));
+      else if (!inspectedJob.job) detail.append(el('p', 'metadata', '正在读取任务详情…'));
+      else {
+        const current = inspectedJob.job;
+        const rows: Array<[string, string]> = [
+          ['任务状态', current.status === 'failed' ? '处理失败' : current.status === 'interrupted' ? '处理已中断'
+            : current.status === 'succeeded' ? '已完成' : current.status === 'running' ? '处理中' : '等待处理'],
+          ['当前阶段', stageLabels[current.stage]],
+          ['关联资料', `${current.document_ids.length} 份`],
+          ['引擎写入', current.engine_mutated ? '已发生' : '未发生'],
+          ['可重试', current.can_retry ? '可按原任务重试' : '当前不可重试'],
+        ];
+        if (current.cleanup_pending !== undefined) rows.push(['旧空间清理', current.cleanup_pending ? '尚未完成' : '无待清理项']);
+        if (current.error_code) rows.push(['失败原因', failureLabels[current.error_code] ?? '任务未完成，请核对状态。']);
+        const list = el('dl', 'job-detail-list');
+        for (const [name, value] of rows) {
+          const row = el('div', 'job-detail-row');
+          row.append(el('dt', '', name), el('dd', '', value)); list.append(row);
+        }
+        detail.append(list);
+      }
+      const controls = el('div', 'row-actions');
+      const task = jobs?.find((item) => item.id === inspectedJob?.id);
+      if (task) controls.append(action('刷新任务详情', 'button secondary', () => { void inspectTask(task); }));
+      controls.append(action('收起任务详情', 'text-button', () => { inspectedJob = null; changed(); }));
+      detail.append(controls);
+      content.append(detail);
     }
     const repair = el('section', 'document-repair'); repair.append(el('h2', '', '从原文重建'));
     repair.append(el('p', 'field-hint', '重建期间暂停问答并遮蔽此前知识回答与证据。新空间核验后切换，再物理清理旧空间；清理失败时库保持待修复。'));

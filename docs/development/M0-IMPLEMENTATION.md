@@ -35,4 +35,4 @@
 
 ## 验证命令
 
-公开 CI 运行 Ruff、编译、TypeScript/Vite 构建、独立 PostgreSQL 迁移与接口冒烟；维护者保留专用测试文件时再运行 pytest/Vitest。本机测试、辅助脚本、浏览器截图不随仓库发布；通用命令和测试库要求见 [本地开发指南](LOCAL-DEVELOPMENT.md)。实际结果记入 [M0 验证记录](M0-VALIDATION.md)，不将旧账号测试数沿用为当前通过项。M0 全部条件未通过前 ROADMAP 保持未完成项。
+公开 CI 运行 Ruff、编译、前端 Vitest/TypeScript/Vite 构建、独立 PostgreSQL 迁移与接口冒烟，以及选定的后端路由/原文定位 pytest。其他本机测试和辅助脚本不随仓库发布；公开的合成浏览器截图仅用于布局记录。通用命令和测试库要求见 [本地开发指南](LOCAL-DEVELOPMENT.md)。实际结果记入 [M0 验证记录](M0-VALIDATION.md)，不将旧账号测试数沿用为当前通过项。M0 全部条件未通过前 ROADMAP 保持未完成项。

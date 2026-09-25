@@ -1,4 +1,4 @@
-import type { ApiError, ChatMessage, Conversation, ExactFilter, KnowledgeBase, SystemHealth } from './api/client';
+import type { ApiError, ChatMessage, Conversation, KnowledgeBase, SystemHealth } from './api/client';
 
 export type Page = 'workbench' | 'knowledge' | 'status';
 
@@ -28,6 +28,7 @@ export interface AppState {
   health: SystemHealth | null;
   healthError: ApiError | null;
   healthLoading: boolean;
+  healthCheckedAt?: number;
   createDraft: CreateKnowledgeDraft;
   renameDraft: RenameKnowledgeDraft | null;
   knowledgeNotice: string | null;
@@ -42,8 +43,6 @@ export interface AppState {
   chatError: ApiError | null;
   chatRequestKey: string | null;
   chatRequestText: string | null;
-  chatMode: 'semantic' | 'exact';
-  exactFilter: ExactFilter;
 }
 
 export const knowledgeLimit = 5;

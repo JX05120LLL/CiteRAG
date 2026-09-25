@@ -128,13 +128,10 @@ export function renderKnowledge(main: HTMLElement, state: AppState, actions: Kno
       const rename = action('改名', 'text-button', () => actions.beginRename(base));
       rename.disabled = isKnowledgePending(state) || state.renameDraft?.id === base.id;
       rename.setAttribute('aria-label', `改名：${base.name}`);
-      const remove = action('删除', 'text-button');
-      remove.disabled = true;
-      remove.setAttribute('aria-describedby', 'upload-unavailable');
       const documents = action('资料与任务', 'text-button', () => actions.openDocuments(base));
       documents.disabled = isKnowledgePending(state);
       documents.setAttribute('aria-label', `资料与任务：${base.name}`);
-      group.append(documents, rename, remove);
+      group.append(documents, rename);
       controls.append(group);
       item.append(name, el('td', 'knowledge-table-status', kbStatuses[base.status]), controls);
       body.append(item);

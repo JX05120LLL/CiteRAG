@@ -1,13 +1,16 @@
 """Answer model boundary. Only the enabled query path invokes this adapter."""
 
 import json
+import re
 from collections.abc import AsyncIterator
 from typing import Any, Protocol
+from unicodedata import category
 
 
 class AnswerRuntime(Protocol):
     async def complete_answer(self, question: str, evidence: list[dict]) -> str: ...
     async def complete_summary(self, previous: str, turns: list[dict]) -> str: ...
+    async def route_question(self, question: str, candidates: list[dict]) -> str: ...
 
 
 class AnswerError(Exception):
@@ -21,6 +24,12 @@ class LightRAGAnswerAdapter:
     async def answer(self, question: str, evidence: list[dict]) -> str:
         try:
             return await self.runtime.complete_answer(question, evidence)
+        except Exception:
+            raise AnswerError("answer_unavailable") from None
+
+    async def route_query(self, question: str, candidates: list[dict]) -> str:
+        try:
+            return await self.runtime.route_question(question, candidates)
         except Exception:
             raise AnswerError("answer_unavailable") from None
 
@@ -48,6 +57,49 @@ class LightRAGAnswerAdapter:
             return await self.runtime.complete_summary(previous, turns)
         except Exception:
             raise AnswerError("summary_unavailable") from None
+
+
+def checked_route(raw: str, candidates: list[dict], question: str) -> dict:
+    """A model can select only confirmed attributes or a literal span of the question."""
+    try:
+        data: Any = json.loads(raw)
+        if not isinstance(data, dict):
+            raise ValueError
+        mode = data.get("mode")
+        if mode in {"semantic", "needs_clarification", "unsupported"}:
+            if set(data) != {"mode"}:
+                raise ValueError
+            return {"mode": mode}
+        if mode == "literal":
+            if set(data) != {"mode", "phrase"}:
+                raise ValueError
+            phrase = data["phrase"]
+            if (not isinstance(phrase, str) or phrase != phrase.strip()
+                or not 2 <= len(phrase) <= 80 or not any(char.isalnum() for char in phrase)
+                or any(category(char).startswith("C") for char in phrase)
+                or re.search(r"(?<![A-Za-z0-9])" + re.escape(phrase) +
+                             r"(?![A-Za-z0-9])", question) is None):
+                raise ValueError
+            return {"mode": "literal", "phrase": phrase}
+        if mode != "exact" or set(data) != {"mode", "candidate_ids"}:
+            raise ValueError
+        identifiers = data["candidate_ids"]
+        if (not isinstance(identifiers, list) or not 1 <= len(identifiers) <= 3
+            or len(set(identifiers)) != len(identifiers)):
+            raise ValueError
+        known = {candidate["id"]: candidate for candidate in candidates}
+        filters = {}
+        for identifier in identifiers:
+            if not isinstance(identifier, str) or identifier not in known:
+                raise ValueError
+            candidate = known[identifier]
+            field = candidate["field"]
+            if field in filters or field not in {"doc_code", "model_code", "edition"}:
+                raise ValueError
+            filters[field] = candidate["value"]
+        return {"mode": "exact", "filters": filters}
+    except (ValueError, TypeError, KeyError):
+        raise AnswerError("answer_unverifiable") from None
 
 
 def checked_answer(raw: str, evidence: dict[str, str]) -> tuple[str, str, list[str]]:

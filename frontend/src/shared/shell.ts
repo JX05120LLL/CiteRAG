@@ -1,4 +1,5 @@
 import brandMark from '../../../assets/brand/mark.svg';
+import type { KnowledgeBase } from '../api/client';
 import type { AppState, Page } from '../state';
 import { isKnowledgePending, kbStatuses, knowledgeLimit } from '../state';
 import { action, el, icon } from './dom';
@@ -39,9 +40,6 @@ export function renderSidebar(state: AppState, navigate: (page: Page) => void,
   newChat.prepend(icon('plus'));
   newChat.disabled = state.chatPending || !state.bases?.some(
     (base) => base.id === state.selectedKbId && base.status === 'ready');
-  const search = action('搜索聊天', 'sidebar-search');
-  search.prepend(icon('search'));
-  search.disabled = true;
   const explanation = el('p', 'sidebar-hint', newChat.disabled
     ? '先选择已就绪知识库，再创建聊天。' : '选择已有聊天，或在当前知识库新建聊天。');
   const history = el('div', 'history');
@@ -81,11 +79,12 @@ export function renderSidebar(state: AppState, navigate: (page: Page) => void,
     nav.append(link);
   }
   footer.append(nav);
-  aside.append(newChat, search, explanation, history, footer);
+  aside.append(newChat, explanation, history, footer);
   return aside;
 }
 
-export function renderManagementSidebar(state: AppState, navigate: (page: Page) => void, openCreate: () => void) {
+export function renderManagementSidebar(state: AppState, navigate: (page: Page) => void,
+                                        openCreate: () => void, openDocuments: (base: KnowledgeBase) => void) {
   const aside = el('aside', 'management-sidebar');
   aside.setAttribute('aria-label', '我的知识库与管理导航');
   const heading = el('div', 'management-sidebar-heading');
@@ -104,7 +103,9 @@ export function renderManagementSidebar(state: AppState, navigate: (page: Page) 
   if (state.bases?.length) {
     for (const base of state.bases) {
       const row = el('li', 'management-kb-entry');
-      const details = el('div');
+      const details = action('', 'management-kb-button', () => { navigate('knowledge'); openDocuments(base); });
+      details.disabled = isKnowledgePending(state);
+      details.setAttribute('aria-label', `查看资料与任务：${base.name}`);
       details.append(el('span', 'knowledge-name', base.name), el('span', 'metadata', kbStatuses[base.status]));
       row.append(icon('folder'), details);
       list.append(row);
@@ -113,7 +114,7 @@ export function renderManagementSidebar(state: AppState, navigate: (page: Page) 
   const footer = el('div', 'management-sidebar-footer');
   const nav = el('nav', 'management-nav');
   nav.setAttribute('aria-label', '管理导航');
-  for (const [destination, label, symbol] of [['knowledge', '我的知识库', 'folder'], ['status', '系统状态', 'status'], ['workbench', '返回工作台', 'back']] as const) {
+  for (const [destination, label, symbol] of [['workbench', '返回工作台', 'book'], ['knowledge', '我的知识库', 'folder'], ['status', '系统状态', 'status']] as const) {
     const link = action(label, `nav-button${state.page === destination ? ' is-active' : ''}`, () => navigate(destination));
     link.prepend(icon(symbol));
     if (state.page === destination) link.setAttribute('aria-current', 'page');

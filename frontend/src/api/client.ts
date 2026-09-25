@@ -25,7 +25,8 @@ export interface ChatMessage {
   attempt_id: string;
   client_message_id: string;
   question: string;
-  mode: 'semantic' | 'exact';
+  mode: 'semantic' | 'exact' | 'auto';
+  route?: 'semantic' | 'exact' | 'literal' | 'needs_clarification' | 'unsupported';
   status: 'running' | 'answered' | 'insufficient_evidence' | 'needs_clarification' |
     'conflicting_evidence' | 'failed' | 'interrupted' | 'partial';
   text: string;
@@ -259,11 +260,12 @@ function chatMessage(value: unknown): ChatMessage {
         ['evidence_id', 'document_id', 'filename', 'excerpt'].every((key) => typeof item[key] === 'string') &&
         isRecord(item.locator) && Object.values(item.locator).every((part) =>
           typeof part === 'string' || (typeof part === 'number' && Number.isFinite(part)))) ||
-      !['semantic', 'exact'].includes(String(value.mode)) ||
+      !['semantic', 'exact', 'auto'].includes(String(value.mode)) ||
       !Number.isInteger(value.kb_revision) || Number(value.kb_revision) < 0 ||
       (value.error_code !== null && typeof value.error_code !== 'string') ||
       !isVerificationTime(value.created_at) || typeof value.saved !== 'boolean' ||
       (value.stale !== undefined && typeof value.stale !== 'boolean') ||
+      (value.route !== undefined && !['semantic', 'exact', 'literal', 'needs_clarification', 'unsupported'].includes(String(value.route))) ||
       (value.hidden !== undefined && typeof value.hidden !== 'boolean')) throw new ApiError('invalid-response');
   return value as unknown as ChatMessage;
 }
@@ -298,7 +300,7 @@ export function createApi(fetcher: typeof fetch = globalThis.fetch) {
   }
 
   async function askMessageStream(id: string, text: string, key: string,
-      mode: 'semantic' | 'exact' = 'semantic', exact?: ExactFilter,
+      mode: 'semantic' | 'exact' | 'auto' = 'semantic', exact?: ExactFilter,
       onProgress?: (progress: AnswerProgress) => void): Promise<ChatMessage> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 120000);
@@ -386,6 +388,7 @@ export function createApi(fetcher: typeof fetch = globalThis.fetch) {
   }
 
   return {
+    originalUrl: (documentId: string): string => `/api/documents/${encodeURIComponent(documentId)}/original`,
     knowledgeBases: async (): Promise<KnowledgeBase[]> => collection(await request('/api/knowledge-bases'), isKnowledgeBase),
     createKnowledgeBase: async (name: string, clientRequestId: string): Promise<KnowledgeBase> =>
       knowledgeBase(await request('/api/knowledge-bases', 'POST', { name, client_request_id: clientRequestId })),
@@ -426,6 +429,12 @@ export function createApi(fetcher: typeof fetch = globalThis.fetch) {
     conversations: async (limit = 20, offset = 0): Promise<Conversation[]> => collection(await request(
       `/api/conversations?limit=${limit}&offset=${offset}`), (item) =>
       ['id', 'owner_id', 'kb_id', 'title', 'created_at'].every((key) => typeof item[key] === 'string')),
+    conversation: async (id: string): Promise<Conversation> => {
+      const value = await request(`/api/conversations/${encodeURIComponent(id)}`);
+      if (!isRecord(value) || !['id', 'owner_id', 'kb_id', 'title', 'created_at'].every((key) =>
+        typeof value[key] === 'string')) throw new ApiError('invalid-response');
+      return value as unknown as Conversation;
+    },
     createConversation: async (kbId: string): Promise<Conversation> => {
       const value = await request('/api/conversations', 'POST', { kb_id: kbId });
       if (!isRecord(value) || !['id', 'owner_id', 'kb_id', 'title', 'created_at'].every((key) =>
@@ -446,7 +455,7 @@ export function createApi(fetcher: typeof fetch = globalThis.fetch) {
       collection<Record<string, unknown>>(await request(`/api/conversations/${encodeURIComponent(id)}/messages`),
         () => true).map(chatMessage),
     askMessage: async (id: string, text: string, key: string,
-                       mode: 'semantic' | 'exact' = 'semantic', exact?: ExactFilter): Promise<ChatMessage> =>
+                       mode: 'semantic' | 'exact' | 'auto' = 'semantic', exact?: ExactFilter): Promise<ChatMessage> =>
       chatMessage(await request(`/api/conversations/${encodeURIComponent(id)}/messages`, 'POST',
         { client_message_id: key, text, mode, ...(mode === 'exact' ? { exact } : {}) }, 60000)),
     askMessageStream,

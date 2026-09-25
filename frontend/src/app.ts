@@ -11,21 +11,44 @@ import { isKnowledgePending, knowledgeLimit } from './state';
 import { clearPendingCreation, normalizeKnowledgeName, restorePendingCreation, savePendingCreation } from './knowledge-draft';
 
 export async function mountApp(root: HTMLElement, api: ApiClient): Promise<void> {
+  const selectionKey = 'citerag.workbench.selection';
+  let restoredSelection: { kbId: string | null; chatId: string | null } = { kbId: null, chatId: null };
+  try {
+    const stored = window.sessionStorage.getItem(selectionKey);
+    if (stored) {
+      const value: unknown = JSON.parse(stored);
+      if (value && typeof value === 'object' && 'kbId' in value && 'chatId' in value &&
+          (value.kbId === null || typeof value.kbId === 'string') &&
+          (value.chatId === null || typeof value.chatId === 'string'))
+        restoredSelection = value as typeof restoredSelection;
+    }
+  } catch { /* Selection is convenience state; storage failure must not block the app. */ }
   const state: AppState = {
     bases: null, chats: null, page: 'workbench', loading: true,
     basesError: null, chatsError: null, health: null, healthError: null, healthLoading: false,
+    healthCheckedAt: undefined,
     createDraft: { name: '', pending: false, error: null, requestId: null, requestName: null, uncertain: false },
     renameDraft: null, knowledgeNotice: null,
-    selectedKbId: null, selectedChatId: null, chatMessages: [], chatDraft: '',
+    selectedKbId: restoredSelection.kbId, selectedChatId: restoredSelection.chatId, chatMessages: [], chatDraft: '',
     chatStreamText: '', chatStreamSaved: false, chatStreamAttemptId: null,
     chatPending: false, chatError: null, chatRequestKey: null, chatRequestText: null,
-    chatMode: 'semantic', exactFilter: {},
   };
   let generation = 0;
   let healthGeneration = 0;
   let chatGeneration = 0;
   let hasMoreChats = false;
+  let chatOffset = 0;
+  let listedChatIds = new Set<string>();
   const retryKeys = new Map<string, string>();
+  function openDocuments(base: KnowledgeBase) {
+    void documentsPanel.open(base).then(() => {
+      if (state.page === 'knowledge' && documentsPanel.isOpen) root.querySelector<HTMLElement>('h1')?.focus();
+    });
+  }
+  function rememberSelection() {
+    try { window.sessionStorage.setItem(selectionKey, JSON.stringify({ kbId: state.selectedKbId, chatId: state.selectedChatId })); }
+    catch { /* No persisted selection; backend remains the source of truth. */ }
+  }
   const documentsPanel = createDocumentsPanel(api, render, (bases) => { state.bases = bases; });
   try {
     const recovered = restorePendingCreation();
@@ -48,6 +71,8 @@ export async function mountApp(root: HTMLElement, api: ApiClient): Promise<void>
     state.bases = results[0].status === 'fulfilled' ? results[0].value : null;
     state.chats = results[1].status === 'fulfilled' ? results[1].value : null;
     hasMoreChats = state.chats?.length === 20;
+    chatOffset = state.chats?.length ?? 0;
+    listedChatIds = new Set(state.chats?.map((chat) => chat.id) ?? []);
     state.basesError = results[0].status === 'rejected'
       ? results[0].reason instanceof ApiError ? results[0].reason : new ApiError('http') : null;
     state.chatsError = results[1].status === 'rejected'
@@ -57,10 +82,38 @@ export async function mountApp(root: HTMLElement, api: ApiClient): Promise<void>
       state.selectedKbId = null;
       state.selectedChatId = null;
       state.chatMessages = [];
+      rememberSelection();
+    }
+    if (state.selectedChatId && state.chats && !hasMoreChats &&
+        !state.chats.some((chat) => chat.id === state.selectedChatId)) {
+      state.selectedChatId = null;
+      rememberSelection();
+    }
+    let restoredChat = state.chats?.find((chat) => chat.id === state.selectedChatId);
+    const requestedChatId = state.selectedChatId;
+    if (!restoredChat && requestedChatId && hasMoreChats) {
+      try {
+        const older = await api.conversation(requestedChatId);
+        if (currentGeneration !== generation || currentChatGeneration !== chatGeneration ||
+            state.selectedChatId !== requestedChatId) return;
+        state.chats?.unshift(older);
+        restoredChat = older;
+      } catch (error) {
+        if (currentGeneration !== generation || currentChatGeneration !== chatGeneration ||
+            state.selectedChatId !== requestedChatId) return;
+        if (error instanceof ApiError && error.kind === 'not-found') {
+          state.selectedChatId = null;
+          rememberSelection();
+        } else state.chatError = error instanceof ApiError ? error : new ApiError('http');
+      }
+    }
+    if (restoredChat && state.selectedKbId !== restoredChat.kb_id) {
+      state.selectedKbId = restoredChat.kb_id;
+      rememberSelection();
     }
     render();
     const selectedChatId = state.selectedChatId;
-    if (selectedChatId && state.chats?.some((chat) => chat.id === selectedChatId)) {
+    if (selectedChatId && state.selectedKbId) {
       try {
         const messages = await api.conversationMessages(selectedChatId);
         if (currentGeneration === generation && currentChatGeneration === chatGeneration &&
@@ -80,6 +133,7 @@ export async function mountApp(root: HTMLElement, api: ApiClient): Promise<void>
     const currentChatGeneration = ++chatGeneration;
     state.selectedKbId = chat.kb_id;
     state.selectedChatId = chat.id;
+    rememberSelection();
     state.chatDraft = '';
     state.chatRequestKey = state.chatRequestText = null;
     state.chatError = null;
@@ -92,13 +146,13 @@ export async function mountApp(root: HTMLElement, api: ApiClient): Promise<void>
       if (currentChatGeneration === chatGeneration && state.selectedChatId === id)
         state.chatError = error instanceof ApiError ? error : new ApiError('http');
     }
-    if (currentChatGeneration === chatGeneration) render();
+    if (currentChatGeneration === chatGeneration) { render(); root.querySelector<HTMLElement>('h1')?.focus(); }
   }
 
   async function loadMoreChats() {
     if (!hasMoreChats || !state.chats || state.chatPending) return;
     const currentGeneration = generation;
-    const offset = state.chats.length;
+    const offset = chatOffset;
     state.chatPending = true;
     render();
     try {
@@ -106,6 +160,8 @@ export async function mountApp(root: HTMLElement, api: ApiClient): Promise<void>
       if (currentGeneration !== generation) return;
       const known = new Set(state.chats.map((item) => item.id));
       state.chats = [...state.chats, ...page.filter((item) => !known.has(item.id))];
+      chatOffset += page.length;
+      for (const chat of page) listedChatIds.add(chat.id);
       hasMoreChats = page.length === 20;
       state.chatsError = null;
     } catch (error) {
@@ -121,13 +177,20 @@ export async function mountApp(root: HTMLElement, api: ApiClient): Promise<void>
     try {
       const chat = await api.createConversation(state.selectedKbId);
       state.chats = [chat, ...(state.chats ?? [])];
+      listedChatIds.add(chat.id);
+      chatOffset += 1;
       state.selectedChatId = chat.id;
+      rememberSelection();
       state.chatMessages = [];
       state.chatDraft = '';
       state.chatRequestKey = state.chatRequestText = null;
     } catch (error) {
       state.chatError = error instanceof ApiError ? error : new ApiError('http');
-    } finally { state.chatPending = false; render(); }
+    } finally {
+      state.chatPending = false;
+      render();
+      if (!state.chatError) root.querySelector<HTMLTextAreaElement>('textarea')?.focus();
+    }
   }
 
   async function renameChat() {
@@ -157,7 +220,9 @@ export async function mountApp(root: HTMLElement, api: ApiClient): Promise<void>
     try {
       await api.deleteConversation(id);
       state.chats = (state.chats ?? []).filter((item) => item.id !== id);
+      if (listedChatIds.delete(id)) chatOffset = Math.max(0, chatOffset - 1);
       state.selectedChatId = null;
+      rememberSelection();
       state.chatMessages = [];
       state.chatError = null;
       state.chatDraft = '';
@@ -171,11 +236,6 @@ export async function mountApp(root: HTMLElement, api: ApiClient): Promise<void>
         state.chatMessages.some((item) => item.status === 'running')) return;
     const question = state.chatDraft.trim();
     if (!question || question.length > 1000) return;
-    const exact = Object.fromEntries(Object.entries(state.exactFilter)
-      .map(([key, value]) => [key, value.trim()]).filter(([, value]) => Boolean(value)));
-    if (state.chatMode === 'exact' && !['doc_code', 'model_code', 'edition'].some((key) => key in exact)) {
-      state.chatError = new ApiError('validation', 'exact_filter'); render(); return;
-    }
     if (!state.chatRequestKey || state.chatRequestText !== question) {
       state.chatRequestKey = crypto.randomUUID();
       state.chatRequestText = question;
@@ -185,7 +245,7 @@ export async function mountApp(root: HTMLElement, api: ApiClient): Promise<void>
     render();
     try {
       const message = await api.askMessageStream(state.selectedChatId, question, state.chatRequestKey,
-        state.chatMode, state.chatMode === 'exact' ? exact : undefined, (progress) => {
+        'auto', undefined, (progress) => {
           if (progress.type === 'accepted') {
             state.chatMessages = [...state.chatMessages.filter((item) =>
               item.message_id !== progress.message.message_id), progress.message];
@@ -247,7 +307,7 @@ export async function mountApp(root: HTMLElement, api: ApiClient): Promise<void>
     if (!chatId || state.chatPending ||
         state.chatMessages.some((item) => item.status === 'running') ||
         !state.chatMessages.some((item) => item.message_id === messageId &&
-          !item.hidden && !item.stale && ['failed', 'interrupted'].includes(item.status))) return;
+          !item.hidden && !item.stale && ['failed', 'interrupted', 'partial'].includes(item.status))) return;
     const key = retryKeys.get(messageId) ?? crypto.randomUUID();
     retryKeys.set(messageId, key);
     state.chatPending = true;
@@ -364,7 +424,10 @@ export async function mountApp(root: HTMLElement, api: ApiClient): Promise<void>
     render();
     try {
       const health = await api.health();
-      if (currentGeneration === healthGeneration) state.health = health;
+      if (currentGeneration === healthGeneration) {
+        state.health = health;
+        state.healthCheckedAt = Date.now();
+      }
     } catch (reason) {
       if (currentGeneration === healthGeneration) state.healthError = reason instanceof ApiError ? reason : new ApiError('http');
     } finally {
@@ -391,26 +454,23 @@ export async function mountApp(root: HTMLElement, api: ApiClient): Promise<void>
     main.id = 'main-content';
     main.tabIndex = -1;
     if (state.page === 'knowledge' && documentsPanel.isOpen) main.append(documentsPanel.render());
-    else if (state.page === 'knowledge') renderKnowledge(main, state, { refresh, createKnowledgeBase, beginRename, renameKnowledgeBase, cancelRename, openDocuments: documentsPanel.open });
+    else if (state.page === 'knowledge') renderKnowledge(main, state, { refresh, createKnowledgeBase, beginRename, renameKnowledgeBase, cancelRename, openDocuments });
     else if (state.page === 'status') renderStatus(main, state, loadHealth);
     else renderWorkbench(main, state, navigate, {
       refresh, selectChat, createChat, renameChat, deleteChat, retryChat, sendChat,
       selectKb: (id: string) => { state.selectedKbId = id; state.selectedChatId = null;
+        rememberSelection();
         state.chatMessages = []; state.chatError = null; state.chatDraft = '';
         state.chatRequestKey = state.chatRequestText = null; render(); },
       setDraft: (text: string) => { state.chatDraft = text; if (text.trim() !== state.chatRequestText) {
         state.chatRequestKey = null; state.chatRequestText = null;
       } },
-      setMode: (mode: 'semantic' | 'exact') => { state.chatMode = mode;
-        state.chatRequestKey = state.chatRequestText = null; render(); },
-      setExact: (key: 'doc_code' | 'model_code' | 'edition' | 'phrase', value: string) => {
-        state.exactFilter[key] = value; state.chatRequestKey = state.chatRequestText = null;
-      },
+      originalUrl: api.originalUrl,
     });
     shell.append(renderHeader(state, navigate));
     if (isManagement) {
       const frame = el('div', 'management-frame');
-      frame.append(renderManagementSidebar(state, navigate, openCreate), main);
+      frame.append(renderManagementSidebar(state, navigate, openCreate, openDocuments), main);
       shell.append(frame);
     } else shell.append(renderSidebar(state, navigate, refresh, createChat, selectChat,
       hasMoreChats, loadMoreChats), main);

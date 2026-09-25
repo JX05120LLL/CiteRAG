@@ -6,7 +6,7 @@ import asyncio
 import json
 import os
 import shutil
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
@@ -283,6 +283,23 @@ class RagRuntime:
                               context: dict | None = None) -> str:
         if self._client is None:
             raise RuntimeError("Answer provider is unavailable")
+        result = await self._client.complete("qwen-flash", self._answer_messages(
+            question, evidence, context,
+        ), max_tokens=512)
+        return result.content
+
+    async def stream_answer(self, question: str, evidence: list[dict],
+                            context: dict | None = None) -> AsyncIterator[str]:
+        if self._client is None:
+            raise RuntimeError("Answer provider is unavailable")
+        async for piece in self._client.stream_complete("qwen-flash", self._answer_messages(
+            question, evidence, context,
+        ), max_tokens=512):
+            yield piece
+
+    @staticmethod
+    def _answer_messages(question: str, evidence: list[dict],
+                         context: dict | None) -> list[Message]:
         payload = json.dumps({"question": question, "evidence": evidence,
                               "conversation_context": context or {}}, ensure_ascii=False)
         if len(payload) > 8000:
@@ -296,10 +313,9 @@ class RagRuntime:
             "不得自造来源、页码、网址或文档。无法回答时 text 留空，evidence_ids 留空。"
             "conversation_context 仅用于理解提问指代，不是事实证据；旧助手文字不可当作依据。"
         )
-        result = await self._client.complete("qwen-flash", [
+        return [
             Message(role="system", content=system), Message(role="user", content=payload),
-        ], max_tokens=512)
-        return result.content
+        ]
 
     async def complete_summary(self, previous: str, turns: list[dict]) -> str:
         if self._client is None:

@@ -21,6 +21,7 @@ from app.models import (
 from app.rag.answer_adapter import AnswerError, checked_answer
 from app.rag.query_adapter import QueryError, RetrievedChunk
 from app.rag.source_mapping import locate_chunk
+from app.rag.streamed_answer import ExtractiveDraft
 from app.services.conversation_context import prepare_context
 from app.services.conversation_retention import active_conversation
 from app.services.errors import ServiceError
@@ -94,6 +95,7 @@ class AnswerService:
         retriever: Retriever, answerer: Answerer, *, mode: str = "semantic",
         exact: dict | None = None,
         on_accepted: Callable[[dict], Awaitable[None]] | None = None,
+        on_preview: Callable[[UUID, str], Awaitable[None]] | None = None,
     ) -> dict:
         conversation, kb = await self._owned_conversation(owner, conversation_id, lock=True)
         existing = await self.session.scalar(select(ConversationMessage).where(
@@ -138,7 +140,7 @@ class AnswerService:
         if on_accepted is not None:
             await on_accepted(answer_view(message, attempt))
         return await self._finish_attempt(owner, conversation_id, kb, message, attempt,
-                                          retriever, answerer, mode, exact)
+                                          retriever, answerer, mode, exact, on_preview)
 
     async def retry(self, owner: UUID, conversation_id: UUID, message_id: UUID,
                     retry_id: UUID, retriever: Retriever, answerer: Answerer) -> dict:
@@ -171,8 +173,8 @@ class AnswerService:
         last = await self.session.scalar(select(AnswerAttempt).where(
             AnswerAttempt.message_id == message_id,
         ).order_by(AnswerAttempt.created_at.desc(), AnswerAttempt.id.desc()))
-        if last is None or last.status not in {"failed", "interrupted"}:
-            raise ServiceError(409, "answer_not_retryable", "仅失败或中断的回答可以重试")
+        if last is None or last.status not in {"failed", "interrupted", "partial"}:
+            raise ServiceError(409, "answer_not_retryable", "仅失败、中断或部分回答可以重试")
         if last.kb_revision != kb.revision or last.workspace != kb.active_workspace:
             raise ServiceError(409, "kb_changed", "知识库已变化，请重新提问")
         attempt = AnswerAttempt(
@@ -190,12 +192,33 @@ class AnswerService:
         self, owner: UUID, conversation_id: UUID, kb: KnowledgeBase,
         message: ConversationMessage, attempt: AnswerAttempt,
         retriever: Retriever, answerer: Answerer, mode: str, exact: dict | None,
+        on_preview: Callable[[UUID, str], Awaitable[None]] | None = None,
     ) -> dict:
         question = message.content
+        previewed = ""
+
+        async def preview(candidate: str) -> None:
+            nonlocal previewed
+            current = await self.session.scalar(select(KnowledgeBase).where(
+                KnowledgeBase.id == kb.id, KnowledgeBase.owner_id == owner,
+            ).execution_options(populate_existing=True))
+            if (current is None or current.status != "ready"
+                or current.revision != attempt.kb_revision
+                or current.active_workspace != attempt.workspace):
+                raise QueryError("kb_changed")
+            await self.session.commit()
+            if not candidate.startswith(previewed):
+                raise AnswerError("answer_unverifiable")
+            delta = candidate[len(previewed):]
+            previewed = candidate
+            if delta and on_preview is not None:
+                await on_preview(attempt.id, delta)
+
         try:
             context = await prepare_context(self.session, conversation_id, kb, answerer)
             status, text, citations = await self._resolve(
                 kb.id, attempt.workspace, question, retriever, answerer, mode, exact, context,
+                preview if on_preview is not None else None,
             )
             error_code = None
         except asyncio.CancelledError:
@@ -205,7 +228,8 @@ class AnswerService:
                 async with AsyncSession(bind=self.session.bind) as cleanup:
                     await cleanup.execute(update(AnswerAttempt).where(
                         AnswerAttempt.id == attempt.id, AnswerAttempt.status == "running",
-                    ).values(status="interrupted", error_code="request_interrupted",
+                    ).values(status="partial" if previewed else "interrupted",
+                             text=previewed or None, citations=[], error_code="request_interrupted",
                              finished_at=datetime.now(UTC)))
                     await cleanup.commit()
 
@@ -217,10 +241,14 @@ class AnswerService:
                 pass
             raise
         except (QueryError, AnswerError) as error:
-            status, text, citations, error_code = "failed", "", [], str(error)
+            status, text, citations, error_code = (
+                "partial" if previewed else "failed", previewed, [], str(error)
+            )
         except Exception:
             # Provider, SDK, and DB diagnostics can contain private content.
-            status, text, citations, error_code = "failed", "", [], "answer_unavailable"
+            status, text, citations, error_code = (
+                "partial" if previewed else "failed", previewed, [], "answer_unavailable"
+            )
         current_kb = await self.session.scalar(select(KnowledgeBase).where(
             KnowledgeBase.id == kb.id, KnowledgeBase.owner_id == owner,
         ).with_for_update().execution_options(populate_existing=True))
@@ -247,10 +275,11 @@ class AnswerService:
     async def _resolve(
         self, kb_id: UUID, workspace: str, question: str,
         retriever: Retriever, answerer: Answerer, mode: str, exact: dict | None,
-        context: dict,
+        context: dict, on_preview: Callable[[str], Awaitable[None]] | None = None,
     ) -> tuple[str, str, list[dict]]:
         if mode == "exact":
-            return await self._resolve_exact(kb_id, question, exact or {}, answerer, context)
+            return await self._resolve_exact(kb_id, question, exact or {}, answerer, context,
+                                             on_preview)
         documents = list(await self.session.scalars(select(Document).where(
             Document.kb_id == kb_id, Document.status == "ready", Document.indexed_once.is_(True),
         )))
@@ -290,7 +319,7 @@ class AnswerService:
         await self.session.commit()
         if not evidence:
             return "insufficient_evidence", "", []
-        raw = await self._answer(answerer, question, evidence, context)
+        raw = await self._answer(answerer, question, evidence, context, on_preview)
         status, text, identifiers = checked_answer(
             raw, {item["id"]: item["text"] for item in evidence},
         )
@@ -299,6 +328,7 @@ class AnswerService:
 
     async def _resolve_exact(
         self, kb_id: UUID, question: str, filters: dict, answerer: Answerer, context: dict,
+        on_preview: Callable[[str], Awaitable[None]] | None = None,
     ) -> tuple[str, str, list[dict]]:
         attributes = {key: filters[key] for key in ("doc_code", "model_code", "edition")
                       if key in filters}
@@ -344,7 +374,7 @@ class AnswerService:
                 "filename": document.filename, "locator": block.locator,
                 "excerpt": block.text,
             })
-        raw = await self._answer(answerer, question, evidence, context)
+        raw = await self._answer(answerer, question, evidence, context, on_preview)
         status, text, identifiers = checked_answer(
             raw, {item["id"]: item["text"] for item in evidence},
         )
@@ -352,7 +382,17 @@ class AnswerService:
 
     @staticmethod
     async def _answer(answerer: Answerer, question: str, evidence: list[dict],
-                      context: dict) -> str:
+                      context: dict,
+                      on_preview: Callable[[str], Awaitable[None]] | None = None) -> str:
+        streamed = getattr(answerer, "stream_with_context", None) if on_preview else None
+        if streamed is not None:
+            draft = ExtractiveDraft({item["id"]: item["text"] for item in evidence})
+            fragments = []
+            async for fragment in streamed(question, evidence, context):
+                fragments.append(fragment)
+                if draft.feed(fragment):
+                    await on_preview(draft.text)
+            return "".join(fragments)
         contextual = getattr(answerer, "answer_with_context", None)
         if contextual is not None:
             return await contextual(question, evidence, context)

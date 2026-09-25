@@ -17,7 +17,7 @@ export async function mountApp(root: HTMLElement, api: ApiClient): Promise<void>
     createDraft: { name: '', pending: false, error: null, requestId: null, requestName: null, uncertain: false },
     renameDraft: null, knowledgeNotice: null,
     selectedKbId: null, selectedChatId: null, chatMessages: [], chatDraft: '',
-    chatStreamText: '', chatStreamAttemptId: null,
+    chatStreamText: '', chatStreamSaved: false, chatStreamAttemptId: null,
     chatPending: false, chatError: null, chatRequestKey: null, chatRequestText: null,
     chatMode: 'semantic', exactFilter: {},
   };
@@ -191,8 +191,10 @@ export async function mountApp(root: HTMLElement, api: ApiClient): Promise<void>
               item.message_id !== progress.message.message_id), progress.message];
             state.chatStreamAttemptId = progress.message.attempt_id;
             state.chatStreamText = '';
+            state.chatStreamSaved = false;
           } else if (state.chatStreamAttemptId) {
             state.chatStreamText = (state.chatStreamText ?? '') + progress.text;
+            state.chatStreamSaved = progress.saved;
           }
           render();
         });
@@ -215,6 +217,7 @@ export async function mountApp(root: HTMLElement, api: ApiClient): Promise<void>
       }
     } finally {
       state.chatStreamText = '';
+      state.chatStreamSaved = false;
       state.chatStreamAttemptId = null;
       state.chatPending = false;
       render();

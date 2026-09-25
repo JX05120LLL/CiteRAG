@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import math
 import re
+from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
@@ -133,6 +135,79 @@ class DashScopeClient:
             request_id=_request_id(response, body),
             usage=_usage(body.get("usage"), model, response),
         )
+
+    async def stream_complete(
+        self, model: str, messages: list[Message], *, max_tokens: int
+    ) -> AsyncIterator[str]:
+        if model != self._config.models["answer"]:
+            raise ValueError("streaming is limited to the answer model")
+        if not messages or any(not message.content for message in messages):
+            raise ValueError("completion messages must not be empty")
+        if max_tokens < 1 or max_tokens > 512:
+            raise ValueError("completion max_tokens must be between 1 and 512")
+        if self._budget is not None:
+            await self._budget.reserve()
+        try:
+            async with self._client.stream("POST", "/compatible-mode/v1/chat/completions", json={
+                "model": model,
+                "messages": [{"role": item.role, "content": item.content} for item in messages],
+                "max_tokens": max_tokens, "stream": True,
+            }) as response:
+                def protocol_error() -> ProviderError:
+                    # A streaming response is not buffered for body-based diagnostics.
+                    return ProviderError("protocol", PROVIDER, model, status=response.status_code)
+
+                if not response.is_success:
+                    await response.aread()
+                    category, diagnostic = _error_category(response, embedding_model=False)
+                    raise ProviderError(category, PROVIDER, model, status=response.status_code,
+                                        request_id=_request_id(response), diagnostic=diagnostic)
+                if not response.headers.get("content-type", "").startswith("text/event-stream"):
+                    raise protocol_error()
+                finished = done = False
+                total = 0
+                async for line in response.aiter_lines():
+                    total += len(line)
+                    if total > 32768:
+                        raise protocol_error()
+                    if not line or line.startswith(":"):
+                        continue
+                    if not line.startswith("data: "):
+                        raise protocol_error()
+                    data = line[6:]
+                    if data == "[DONE]":
+                        done = True
+                        break
+                    try:
+                        payload = json.loads(data)
+                        choices = payload["choices"]
+                        if not isinstance(choices, list) or len(choices) > 1:
+                            raise ValueError
+                        if not choices:
+                            continue  # Optional usage-only trailer.
+                        choice = choices[0]
+                        if choice["index"] != 0 or not isinstance(choice["delta"], dict):
+                            raise ValueError
+                        content = choice["delta"].get("content")
+                        reason = choice.get("finish_reason")
+                        if content is not None and not isinstance(content, str):
+                            raise ValueError
+                        if finished and (content or reason is not None):
+                            raise ValueError
+                        if content:
+                            yield content
+                        if reason is not None:
+                            if reason != "stop" or finished:
+                                raise ValueError
+                            finished = True
+                    except (ValueError, TypeError, KeyError, IndexError):
+                        raise protocol_error() from None
+                if not finished or not done:
+                    raise protocol_error()
+        except httpx.TimeoutException:
+            raise ProviderError("timeout", PROVIDER, model) from None
+        except httpx.RequestError:
+            raise ProviderError("network", PROVIDER, model) from None
 
     async def embed(self, texts: list[str]) -> EmbeddingBatch:
         model = self._config.models["embedding"]

@@ -210,7 +210,8 @@ class AnswerAttempt(Base):
     __table_args__ = (
         CheckConstraint(
             "status IN ('running','answered','insufficient_evidence','needs_clarification',"
-            "'conflicting_evidence','failed','interrupted')", name="ck_answer_attempt_status",
+            "'conflicting_evidence','failed','interrupted','partial')",
+            name="ck_answer_attempt_status",
         ),
         Index("uq_answer_attempt_active", "conversation_id", unique=True,
               postgresql_where=text("status = 'running'")),

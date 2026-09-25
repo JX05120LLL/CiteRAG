@@ -1,6 +1,7 @@
 """Answer model boundary. Only the enabled query path invokes this adapter."""
 
 import json
+from collections.abc import AsyncIterator
 from typing import Any, Protocol
 
 
@@ -27,6 +28,18 @@ class LightRAGAnswerAdapter:
                                   context: dict) -> str:
         try:
             return await self.runtime.complete_answer(question, evidence, context)
+        except Exception:
+            raise AnswerError("answer_unavailable") from None
+
+    async def stream_with_context(self, question: str, evidence: list[dict],
+                                  context: dict) -> AsyncIterator[str]:
+        try:
+            stream = getattr(self.runtime, "stream_answer", None)
+            if stream is None:
+                yield await self.runtime.complete_answer(question, evidence, context)
+            else:
+                async for piece in stream(question, evidence, context):
+                    yield piece
         except Exception:
             raise AnswerError("answer_unavailable") from None
 

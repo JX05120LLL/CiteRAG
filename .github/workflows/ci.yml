@@ -168,6 +168,11 @@ jobs:
                   assert await connection.fetchval("SELECT to_regclass('conversation_messages')")
                   assert await connection.fetchval("SELECT to_regclass('answer_attempts')")
                   assert await connection.fetchval("SELECT to_regclass('conversation_summaries')")
+                  answer_status_check = await connection.fetchval(
+                      "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
+                      "WHERE conname = 'ck_answer_attempt_status' AND conrelid = 'answer_attempts'::regclass"
+                  )
+                  assert answer_status_check and "'partial'" in answer_status_check
                   return owners[0]['id']
               finally:
                   await connection.close()

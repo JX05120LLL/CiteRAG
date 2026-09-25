@@ -174,6 +174,7 @@ export function renderWorkbench(main: HTMLElement, state: AppState,
           : message.status === 'answered' ? message.text
           : message.status === 'insufficient_evidence' ? '当前知识库没有足够的可核查证据，暂不作答。'
           : message.status === 'interrupted' ? '知识库发生变化或服务中断，这次回答未完成。'
+          : message.status === 'partial' ? message.text
           : message.status === 'running' && state.chatStreamAttemptId === message.attempt_id &&
             state.chatStreamText ? state.chatStreamText
           : message.status === 'running' ? '提问已保存，正在检索并核对来源…'
@@ -181,7 +182,11 @@ export function renderWorkbench(main: HTMLElement, state: AppState,
         item.append(el('p', 'chat-answer', answer));
         if (message.status === 'running' && state.chatStreamText &&
             state.chatStreamAttemptId === message.attempt_id)
-          item.append(el('p', 'metadata', '已核验的回答正在展示；完整记录已保存。'));
+          item.append(el('p', 'metadata', state.chatStreamSaved
+            ? '已核验的回答正在展示；完整记录已保存。'
+            : '仅为来自原文的临时片段，尚未形成已核验回答或保存来源。'));
+        if (!message.hidden && message.status === 'partial')
+          item.append(el('p', 'metadata', '生成中断；上方片段不是完整回答，也没有可用引用。'));
         if (message.stale && !message.hidden) item.append(el('p', 'metadata', '基于旧资料；新提问会重新检索当前库。'));
         if (!message.hidden && message.status === 'answered' && message.citations.length) {
           const list = el('ul', 'chat-citations');
@@ -189,7 +194,7 @@ export function renderWorkbench(main: HTMLElement, state: AppState,
           item.append(list);
         }
         if (!message.hidden && !message.stale &&
-            (message.status === 'failed' || message.status === 'interrupted') &&
+            (message.status === 'failed' || message.status === 'interrupted' || message.status === 'partial') &&
             current?.status === 'ready') {
           const retry = action('重试回答', 'text-button', () => { void actions.retryChat(message.message_id); });
           retry.disabled = state.chatPending;

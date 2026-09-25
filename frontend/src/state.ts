@@ -35,6 +35,7 @@ export interface AppState {
   selectedChatId: string | null;
   chatMessages: ChatMessage[];
   chatStreamText?: string;
+  chatStreamSaved?: boolean;
   chatStreamAttemptId?: string | null;
   chatDraft: string;
   chatPending: boolean;

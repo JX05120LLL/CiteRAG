@@ -27,7 +27,7 @@ export interface ChatMessage {
   question: string;
   mode: 'semantic' | 'exact';
   status: 'running' | 'answered' | 'insufficient_evidence' | 'needs_clarification' |
-    'conflicting_evidence' | 'failed' | 'interrupted';
+    'conflicting_evidence' | 'failed' | 'interrupted' | 'partial';
   text: string;
   citations: Citation[];
   kb_revision: number;
@@ -38,7 +38,8 @@ export interface ChatMessage {
   hidden?: boolean;
 }
 
-export type AnswerProgress = { type: 'accepted'; message: ChatMessage } | { type: 'delta'; text: string };
+export type AnswerProgress = { type: 'accepted'; message: ChatMessage } |
+  { type: 'delta'; text: string; saved: boolean };
 
 export interface ManagedDocument {
   id: string;
@@ -253,7 +254,7 @@ function chatMessage(value: unknown): ChatMessage {
   if (!isRecord(value) || !['message_id', 'attempt_id', 'client_message_id', 'question', 'text'].every((key) =>
       typeof value[key] === 'string') ||
       !['running', 'answered', 'insufficient_evidence', 'needs_clarification',
-        'conflicting_evidence', 'failed', 'interrupted'].includes(String(value.status)) ||
+        'conflicting_evidence', 'failed', 'interrupted', 'partial'].includes(String(value.status)) ||
       !Array.isArray(value.citations) || !value.citations.every((item: unknown) => isRecord(item) &&
         ['evidence_id', 'document_id', 'filename', 'excerpt'].every((key) => typeof item[key] === 'string') &&
         isRecord(item.locator) && Object.values(item.locator).every((part) =>
@@ -323,6 +324,7 @@ export function createApi(fetcher: typeof fetch = globalThis.fetch) {
       let buffer = '';
       let accepted: ChatMessage | null = null;
       let streamed = '';
+      let provisional = false;
       let sequence = 0;
       let result: ChatMessage | null = null;
       while (true) {
@@ -348,18 +350,22 @@ export function createApi(fetcher: typeof fetch = globalThis.fetch) {
             accepted = message;
             onProgress?.({ type: 'accepted', message });
           } else if (event === 'delta') {
-            if (!isRecord(data) || typeof data.text !== 'string' || typeof data.attempt_id !== 'string' ||
-                data.saved !== true || data.seq !== sequence + 1 ||
-                (accepted && data.attempt_id !== accepted.attempt_id)) throw new ApiError('invalid-response');
+            if (!accepted || !isRecord(data) || typeof data.text !== 'string' || typeof data.attempt_id !== 'string' ||
+                typeof data.saved !== 'boolean' || data.seq !== sequence + 1 ||
+                data.attempt_id !== accepted.attempt_id) throw new ApiError('invalid-response');
             sequence++;
+            provisional ||= !data.saved;
             streamed += data.text;
             if (streamed.length > 1500) throw new ApiError('invalid-response');
-            onProgress?.({ type: 'delta', text: data.text });
+            onProgress?.({ type: 'delta', text: data.text, saved: data.saved });
           } else if (event === 'saved') {
             const final = chatMessage(data);
             if (!final.saved || final.status === 'running' || final.client_message_id !== key ||
                 (accepted && final.attempt_id !== accepted.attempt_id) ||
-                (sequence > 0 && streamed !== final.text)) throw new ApiError('invalid-response');
+                (!accepted && sequence > 0) ||
+                (sequence > 0 && !provisional && streamed !== final.text) ||
+                (provisional && final.status === 'partial' && streamed !== final.text))
+              throw new ApiError('invalid-response');
             result = final;
           } else if (event === 'pending') {
             throw new ApiError('conflict', 'answer_in_progress');

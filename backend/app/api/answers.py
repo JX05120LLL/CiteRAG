@@ -110,9 +110,16 @@ async def ask_stream(conversation_id: UUID, body: AskRequest, request: Request,
 
     async def stream():
         queue: asyncio.Queue[tuple[str, dict]] = asyncio.Queue()
+        preview_sequence = 0
 
         async def accepted(view: dict):
             await queue.put(("accepted", view))
+
+        async def preview(attempt_id: UUID, delta: str):
+            nonlocal preview_sequence
+            preview_sequence += 1
+            await queue.put(("delta", {"attempt_id": str(attempt_id),
+                                       "seq": preview_sequence, "text": delta, "saved": False}))
 
         async def produce():
             try:
@@ -121,17 +128,18 @@ async def ask_stream(conversation_id: UUID, body: AskRequest, request: Request,
                         owner, conversation_id, body.client_message_id, body.text,
                         retriever, answerer, mode=body.mode,
                         exact=body.exact.model_dump(exclude_none=True) if body.exact else None,
-                        on_accepted=accepted,
+                        on_accepted=accepted, on_preview=preview,
                     )
                 if view["status"] == "running":
                     await queue.put(("pending", view))
                     return
                 # Only committed and checked text is exposed to the browser.
-                for seq, offset in enumerate(range(0, len(view["text"]), 32), start=1):
-                    await queue.put(("delta", {
-                        "attempt_id": str(view["attempt_id"]), "seq": seq,
-                        "text": view["text"][offset:offset + 32], "saved": True,
-                    }))
+                if not preview_sequence and view["status"] == "answered":
+                    for seq, offset in enumerate(range(0, len(view["text"]), 32), start=1):
+                        await queue.put(("delta", {
+                            "attempt_id": str(view["attempt_id"]), "seq": seq,
+                            "text": view["text"][offset:offset + 32], "saved": True,
+                        }))
                 await queue.put(("saved", view))
             except ServiceError as error:
                 await queue.put(("error", {"status": error.status, "code": error.code}))

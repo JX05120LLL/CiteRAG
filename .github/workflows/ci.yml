@@ -37,6 +37,7 @@ jobs:
           public_tests = {
               "backend/tests/test_postgres_local.py",
               "backend/tests/test_ingestion_lifecycle.py",
+              "backend/tests/test_ingestion_jobs.py",
               "backend/tests/test_query_routing.py",
               "backend/tests/test_m13_exact_api.py",
               "backend/tests/test_m13_answer_api.py",
@@ -155,10 +156,10 @@ jobs:
         run: uv sync --locked
       - name: Lint and compile
         run: |
-          uv run --locked --no-env-file ruff check app migrations tests/test_postgres_local.py tests/test_ingestion_lifecycle.py tests/test_query_routing.py tests/test_m13_exact_api.py tests/test_m13_answer_api.py tests/test_m1_stream.py tests/test_m14_lifecycle.py
+          uv run --locked --no-env-file ruff check app migrations tests/test_postgres_local.py tests/test_ingestion_jobs.py tests/test_ingestion_lifecycle.py tests/test_query_routing.py tests/test_m13_exact_api.py tests/test_m13_answer_api.py tests/test_m1_stream.py tests/test_m14_lifecycle.py
           uv run --locked --no-env-file python -m compileall -q app migrations
       - name: Public PostgreSQL and routing regressions
-        run: uv run --locked --no-env-file pytest -q tests/test_postgres_local.py tests/test_ingestion_lifecycle.py tests/test_query_routing.py tests/test_m13_exact_api.py tests/test_m13_answer_api.py tests/test_m1_stream.py tests/test_m14_lifecycle.py
+        run: uv run --locked --no-env-file pytest -q tests/test_postgres_local.py tests/test_ingestion_jobs.py tests/test_ingestion_lifecycle.py tests/test_query_routing.py tests/test_m13_exact_api.py tests/test_m13_answer_api.py tests/test_m1_stream.py tests/test_m14_lifecycle.py
       - name: Generate migration SQL
         run: uv run --locked --no-env-file alembic upgrade head --sql > "$RUNNER_TEMP/citerag-migration.sql"
       - name: Migrate and verify local API behavior

@@ -95,7 +95,7 @@ uv run --no-env-file alembic upgrade head --sql
 
 GitHub CI 使用独立临时 PostgreSQL 17.9，验证新库迁移、重复迁移、真实 API 响应，以及公开的路由/原文定位回归测试，详见 [CI 说明](../docs/development/CI.md)。上述 `--sql` 命令只生成迁移 SQL，不连接数据库；实际数据库行为由 CI 冒烟或本地集成验证确认。
 
-选定的七个 `backend/tests/` 文件现随仓库发布，CI 全部运行；其他专用测试仍在维护者本机。公开测试命令以 [CI 工作流](../.github/workflows/ci.yml) 为准；未设置 `CITERAG_TEST_DATABASE_URL` 时 PostgreSQL 用例明确跳过，不用 SQLite 或内存库替代。独立测试实例准备与完整本机测试方式见[本地开发的运行检查](../docs/development/LOCAL-DEVELOPMENT.md#运行检查)。禁止把真实业务库或共享实例作为测试目标。
+选定的八个 `backend/tests/` 文件现随仓库发布，CI 全部运行；其他专用测试仍在维护者本机。公开测试命令以 [CI 工作流](../.github/workflows/ci.yml) 为准；未设置 `CITERAG_TEST_DATABASE_URL` 时 PostgreSQL 用例明确跳过，不用 SQLite 或内存库替代。独立测试实例准备与完整本机测试方式见[本地开发的运行检查](../docs/development/LOCAL-DEVELOPMENT.md#运行检查)。禁止把真实业务库或共享实例作为测试目标。
 
 M1-1 历史测试覆盖建库幂等/容量/事务；M1-2 增加受限解析、真实隔离 PostgreSQL 生命周期、SDK＋隔离引擎库＋本地模型替身和真实浏览器。三者不等于真实供应商验证；每轮结果见 [M1 验证记录](../docs/development/M1-VALIDATION.md)。
 

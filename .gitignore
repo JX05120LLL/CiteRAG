@@ -16,6 +16,7 @@
 /backend/tests/*
 !/backend/tests/test_postgres_local.py
 !/backend/tests/test_ingestion_lifecycle.py
+!/backend/tests/test_ingestion_jobs.py
 !/backend/tests/test_query_routing.py
 !/backend/tests/test_m13_exact_api.py
 !/backend/tests/test_m13_answer_api.py

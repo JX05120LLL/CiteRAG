@@ -41,10 +41,28 @@ class Settings(BaseModel):
     ingestion_enabled: bool = False
     answer_enabled: bool = False
     backup_enabled: bool = False
+    voice_transport_enabled: bool = False
+    livekit_url: str = "ws://127.0.0.1:7880"
+    livekit_api_key: SecretStr | None = None
+    livekit_api_secret: SecretStr | None = None
     backup_pg_bin: Path | None = None
     backup_root: Path = PROJECT_ROOT / ".local" / "backups"
     rag_database_record: Path = LOCAL_RUNTIME_ROOT / "rag-postgres" / "credential.xml"
     rag_workspace_root: Path = LOCAL_RUNTIME_ROOT / "rag-workspaces"
+
+    @field_validator("livekit_url")
+    @classmethod
+    def local_livekit_only(cls, value: str) -> str:
+        parsed = urlsplit(value)
+        if (parsed.scheme not in {"ws", "wss"} or not parsed.hostname
+            or parsed.hostname not in {"localhost", "127.0.0.1", "::1"}
+            or parsed.username or parsed.password
+            or parsed.path or parsed.query or parsed.fragment or "\\" in value
+            or any(character.isspace() for character in value)
+            or value != f"{parsed.scheme}://{parsed.netloc}"
+            or (parsed.port is not None and parsed.port < 1)):
+            raise ValueError("LiveKit must be an explicit loopback WebSocket origin")
+        return value
 
     @model_validator(mode="after")
     def valid_backup(self):
@@ -121,6 +139,10 @@ class Settings(BaseModel):
             "CITERAG_INGESTION_ENABLED": "ingestion_enabled",
             "CITERAG_ANSWER_ENABLED": "answer_enabled",
             "CITERAG_BACKUP_ENABLED": "backup_enabled",
+            "CITERAG_VOICE_TRANSPORT_ENABLED": "voice_transport_enabled",
+            "CITERAG_LIVEKIT_URL": "livekit_url",
+            "CITERAG_LIVEKIT_API_KEY": "livekit_api_key",
+            "CITERAG_LIVEKIT_API_SECRET": "livekit_api_secret",
             "CITERAG_BACKUP_PG_BIN": "backup_pg_bin",
             "CITERAG_RAG_DATABASE_RECORD": "rag_database_record",
             "CITERAG_RAG_WORKSPACE_ROOT": "rag_workspace_root",

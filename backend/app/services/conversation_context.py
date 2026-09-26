@@ -36,6 +36,14 @@ def bounded_context(summary: str, turns: list[dict[str, str]]) -> dict:
     return {"summary": summary, "turns": turns}
 
 
+def context_turn(message: ConversationMessage, attempt: AnswerAttempt) -> dict[str, str]:
+    turn = {"user": message.content, "assistant": attempt.text or ""}
+    if message.mode == "auto" and isinstance(message.query_filter, dict):
+        route = message.query_filter.get("mode")
+        turn["answer_kind"] = route if route in {"general", "chat"} else "knowledge"
+    return turn
+
+
 async def prepare_context(
     session: AsyncSession, conversation_id: UUID, kb: KnowledgeBase,
     answerer: Summarizer,
@@ -108,7 +116,5 @@ async def prepare_context(
                     summary.updated_at = datetime.now(UTC)
                     await session.commit()
                     summary_text = summary.content
-    return bounded_context(summary_text, [
-        {"user": message.content, "assistant": attempt.text or ""}
-        for message, attempt in latest
-    ])
+    return bounded_context(summary_text, [context_turn(message, attempt)
+                                          for message, attempt in latest])

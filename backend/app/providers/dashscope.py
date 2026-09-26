@@ -98,8 +98,9 @@ class DashScopeClient:
             raise ValueError("completion model is not configured")
         if not messages or any(not message.content for message in messages):
             raise ValueError("completion messages must not be empty")
-        if max_tokens < 1 or max_tokens > 512:
-            raise ValueError("completion max_tokens must be between 1 and 512")
+        output_limit = 2048 if model == self._config.models["answer"] else 512
+        if max_tokens < 1 or max_tokens > output_limit:
+            raise ValueError(f"completion max_tokens must be between 1 and {output_limit}")
         response = await self._post(
             "/compatible-mode/v1/chat/completions",
             {
@@ -108,6 +109,7 @@ class DashScopeClient:
                     {"role": message.role, "content": message.content} for message in messages
                 ],
                 "max_tokens": max_tokens,
+                **({"temperature": 0} if model == self._config.models["answer"] else {}),
             },
             model,
         )
@@ -128,6 +130,8 @@ class DashScopeClient:
                 raise TypeError
         except (KeyError, IndexError, TypeError):
             raise _protocol_error(model, response) from None
+        if model == self._config.models["answer"] and finish_reason == "length":
+            raise ProviderError("output_limit", PROVIDER, model, status=response.status_code)
         return Completion(
             model=model,
             content=content,
@@ -143,15 +147,15 @@ class DashScopeClient:
             raise ValueError("streaming is limited to the answer model")
         if not messages or any(not message.content for message in messages):
             raise ValueError("completion messages must not be empty")
-        if max_tokens < 1 or max_tokens > 512:
-            raise ValueError("completion max_tokens must be between 1 and 512")
+        if max_tokens < 1 or max_tokens > 2048:
+            raise ValueError("completion max_tokens must be between 1 and 2048")
         if self._budget is not None:
             await self._budget.reserve()
         try:
             async with self._client.stream("POST", "/compatible-mode/v1/chat/completions", json={
                 "model": model,
                 "messages": [{"role": item.role, "content": item.content} for item in messages],
-                "max_tokens": max_tokens, "stream": True,
+                "max_tokens": max_tokens, "stream": True, "temperature": 0,
             }) as response:
                 def protocol_error() -> ProviderError:
                     # A streaming response is not buffered for body-based diagnostics.
@@ -197,6 +201,9 @@ class DashScopeClient:
                         if content:
                             yield content
                         if reason is not None:
+                            if reason == "length":
+                                raise ProviderError("output_limit", PROVIDER, model,
+                                                    status=response.status_code)
                             if reason != "stop" or finished:
                                 raise ValueError
                             finished = True

@@ -1,5 +1,9 @@
 # GitHub CI
 
+2026-09-26 集中提交前检查：本次包含文字问答分流、上下文追问、基于原文的总结及事实支持检查，以及本地语音媒体与独立页面。只含暂存文件的独立副本按锁文件安装依赖；公开后端九文件 **145 passed、无跳过**，前端八文件 **178 passed**，类型检查、构建、Ruff、编译、仓库边界、两个 HTML 入口资源检查及原工作流迁移/API 冒烟均通过。数据库为独立临时 PostgreSQL，模型调用为 0，未迁移实际业务库。保留既有 LiveKit 包大小、TestClient 弃用和合成开发密钥长度警告。远端 CI 结果以本次提交对应的 Actions 运行为准；下方“未提交/未推送”描述为各片实施时快照，不代表完整 M0/M1/M2 验收。
+
+2026-09-26 语音增量：公开测试白名单增加 `backend/tests/test_voice_transport.py`、`frontend/src/features/voice/controller.test.ts` 和 `frontend/src/features/voice/page.test.ts`，后端安装锁定的 `rag+voice` 依赖并执行九文件回归。新增测试使用合成配置检查 Token 权限、回环地址、资源门禁、迟到音轨、重复挂断及独立页上下文/清理/安全错误；前端同时构建 `index.html` 和 `voice.html`。CI 不启动 LiveKit 服务、不采集音频、不调用 ASR/TTS 或模型。本片未推送，远程结果尚未验证，详见 [M2-1](M2-LIVEKIT-TRANSPORT.md)。
+
 2026-09-25 本次更新：在原有构建与临时 PostgreSQL/API 冒烟之外，公开选定的合成数据回归测试；前端执行 `pnpm test`，后端执行八个公开测试文件（名单见工作流）。后端按锁文件安装 `rag` 可选依赖，用于与 LightRAG 原文规范化规则核对；测试用 CI 专属临时库随机 schema，显式关闭入库和问答，不连接真实模型。其他维护者本机专用测试仍不入库。下方旧日期段落是当时的 CI 快照，以本节及实际 Actions 运行为当前范围。
 
 2026-09-25 提交前验证记录：业务迁移增加 `0007_partial_answers`，公开 PostgreSQL 冒烟现在检查回答状态约束包含 `partial`；本机隔离 PostgreSQL 与静态检查已核对。提交前远程成功 CI 只对应已推送的 `bd4c75b`，不覆盖本轮改动；后续以 GitHub Actions 实况为准。CI 不运行专用本机测试、真实浏览器或真实模型验收。

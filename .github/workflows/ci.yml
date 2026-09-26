@@ -43,12 +43,15 @@ jobs:
               "backend/tests/test_m13_answer_api.py",
               "backend/tests/test_m1_stream.py",
               "backend/tests/test_m14_lifecycle.py",
+              "backend/tests/test_voice_transport.py",
               "frontend/src/api/client.test.ts",
               "frontend/src/api/stream.test.ts",
               "frontend/src/app.test.ts",
               "frontend/src/documents.test.ts",
               "frontend/src/knowledge.test.ts",
               "frontend/src/pages/status.test.ts",
+              "frontend/src/features/voice/controller.test.ts",
+              "frontend/src/features/voice/page.test.ts",
           }
           private_names = (
               ".env", ".env.*", "*.pem", "*.key", "*.p12", "*.pfx",
@@ -103,17 +106,19 @@ jobs:
           import { existsSync, readFileSync } from 'node:fs';
           import { JSDOM } from 'jsdom';
 
-          const { document } = new JSDOM(readFileSync('dist/index.html', 'utf8')).window;
-          assert.ok(document.title.includes('CiteRAG'));
-          assert.ok(document.querySelector('#app'));
-          assert.ok(document.querySelector('script[type="module"][src]'));
-          assert.ok(document.querySelector('link[rel="stylesheet"][href]'));
-          for (const element of document.querySelectorAll('script[src], link[href]')) {
-            const path = element.getAttribute('src') ?? element.getAttribute('href');
-            if (path.startsWith('data:')) continue;
-            assert.ok(existsSync(`dist/${path.replace(/^\//, '')}`), `Missing asset: ${path}`);
+          for (const [entry, root] of [['index.html', '#app'], ['voice.html', '#voice-app']]) {
+            const { document } = new JSDOM(readFileSync(`dist/${entry}`, 'utf8')).window;
+            assert.ok(document.title.includes('CiteRAG'));
+            assert.ok(document.querySelector(root));
+            assert.ok(document.querySelector('script[type="module"][src]'));
+            assert.ok(document.querySelector('link[rel="stylesheet"][href]'));
+            for (const element of document.querySelectorAll('script[src], link[href]')) {
+              const path = element.getAttribute('src') ?? element.getAttribute('href');
+              if (path.startsWith('data:')) continue;
+              assert.ok(existsSync(`dist/${path.replace(/^\//, '')}`), `Missing asset: ${path}`);
+            }
           }
-          console.log('Built HTML entry, JavaScript, styles, and icon passed.');
+          console.log('Both built HTML entries, JavaScript, styles, and icons passed.');
           JS
 
   backend:
@@ -153,18 +158,18 @@ jobs:
           enable-cache: true
           cache-dependency-glob: backend/uv.lock
       - name: Install locked dependencies
-        run: uv sync --locked --extra rag
+        run: uv sync --locked --extra rag --extra voice
       - name: Lint and compile
         run: |
-          uv run --locked --extra rag --no-env-file ruff check app migrations tests/test_postgres_local.py tests/test_ingestion_jobs.py tests/test_ingestion_lifecycle.py tests/test_query_routing.py tests/test_m13_exact_api.py tests/test_m13_answer_api.py tests/test_m1_stream.py tests/test_m14_lifecycle.py
-          uv run --locked --extra rag --no-env-file python -m compileall -q app migrations
+          uv run --locked --extra rag --extra voice --no-env-file ruff check app migrations tests/test_postgres_local.py tests/test_ingestion_jobs.py tests/test_ingestion_lifecycle.py tests/test_query_routing.py tests/test_m13_exact_api.py tests/test_m13_answer_api.py tests/test_m1_stream.py tests/test_m14_lifecycle.py tests/test_voice_transport.py
+          uv run --locked --extra rag --extra voice --no-env-file python -m compileall -q app migrations
       - name: Public PostgreSQL and routing regressions
-        run: uv run --locked --extra rag --no-env-file pytest -q tests/test_postgres_local.py tests/test_ingestion_jobs.py tests/test_ingestion_lifecycle.py tests/test_query_routing.py tests/test_m13_exact_api.py tests/test_m13_answer_api.py tests/test_m1_stream.py tests/test_m14_lifecycle.py
+        run: uv run --locked --extra rag --extra voice --no-env-file pytest -q tests/test_postgres_local.py tests/test_ingestion_jobs.py tests/test_ingestion_lifecycle.py tests/test_query_routing.py tests/test_m13_exact_api.py tests/test_m13_answer_api.py tests/test_m1_stream.py tests/test_m14_lifecycle.py tests/test_voice_transport.py
       - name: Generate migration SQL
-        run: uv run --locked --extra rag --no-env-file alembic upgrade head --sql > "$RUNNER_TEMP/citerag-migration.sql"
+        run: uv run --locked --extra rag --extra voice --no-env-file alembic upgrade head --sql > "$RUNNER_TEMP/citerag-migration.sql"
       - name: Migrate and verify local API behavior
         run: |
-          uv run --locked --extra rag --no-env-file python <<'PY'
+          uv run --locked --extra rag --extra voice --no-env-file python <<'PY'
           import asyncio
           import os
           import subprocess

@@ -1,0 +1,43 @@
+/* Native CSS port of LiveKit Agent Starter's light theme and voice-only layout. */
+.livekit-voice { --lk-accent: #002cf2; --lk-fg: #171717; --lk-muted: #737373; --lk-line: #e5e5e5; min-height: 100dvh; background: white; color: var(--lk-fg); display: flex; flex-direction: column; }
+.livekit-voice [hidden] { display: none !important; }
+.lk-voice-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 22px 28px; }
+.lk-voice-brand { display: flex; align-items: center; gap: 10px; font-size: 18px; }
+.lk-voice-product { color: var(--lk-muted); font-size: 12px; margin-left: 8px; }
+.lk-voice-back { display: inline-flex; align-items: center; gap: 8px; min-height: 42px; background: none; border: 1px solid var(--lk-line); border-radius: 999px; padding: 8px 16px; font-size: 12px; }
+.lk-voice-main { flex: 1; display: flex; flex-direction: column; width: 100%; max-width: 100%; }
+.lk-voice-context { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 18px; margin: 0 auto; padding: 8px 24px; max-width: 720px; color: var(--lk-muted); font-size: 12px; overflow-wrap: anywhere; }
+.lk-voice-base { display: flex; align-items: center; gap: 6px; }.lk-voice-base .icon { width: 16px; height: 16px; }
+.lk-voice-stage { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; min-height: 390px; padding: 36px 24px; text-align: center; }
+.lk-voice-stage h1 { margin: 0; font-size: 24px; font-weight: 500; }
+.lk-voice-stage .capability-status { margin: 0; padding: 0; background: none; color: #866326; font-size: 12px; line-height: 1.8; }
+.lk-voice-description { font-size: 14px; max-width: 520px; line-height: 1.8; color: #525252; }
+.lk-voice-setup { font-size: 12px; color: var(--lk-muted); max-width: 520px; line-height: 1.8; }
+.lk-voice-start { min-height: 48px; width: min(256px, 100%); border: 0; border-radius: 999px; background: var(--lk-accent); color: white; padding: 12px 24px; margin-top: 8px; font-size: 13px; font-weight: 600; }
+.lk-voice-start:disabled { background: #eee; color: var(--lk-muted); }
+.lk-voice-welcome-icon { display: flex; gap: 4px; align-items: center; justify-content: center; width: 64px; height: 64px; margin: 0 0 8px; }
+.lk-voice-welcome-icon span { display: block; width: 6px; border-radius: 3px; background: currentColor; }
+.lk-voice-visualizer { display: flex; align-items: center; justify-content: center; gap: 16px; width: min(450px, 100%); height: 300px; color: var(--lk-fg); }
+.voice-level-bar { display: block; height: calc(64px + var(--level, 0) * (100% - 64px)); width: 64px; border-radius: 999px; background: currentColor; }
+.lk-voice-level-label { font-size: 12px; color: var(--lk-muted); min-height: 20px; }
+.lk-voice-footer { width: min(672px, 100%); margin: 0 auto; padding: 12px 24px 28px; text-align: center; }
+.lk-voice-controls { display: flex; justify-content: center; align-items: center; flex-wrap: wrap; gap: 10px; padding: 12px; border: 1px solid var(--lk-line); border-radius: 10px; }
+.lk-voice-control { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 10px 14px; border: 0; border-radius: 8px; background: #f5f5f5; font-size: 12px; }
+.lk-voice-control .icon { width: 19px; height: 19px; }
+.lk-voice-control[aria-pressed=true] { color: #b33d36; background: #fbecea; }
+.lk-voice-end { color: #a43228; background: #fbecea; margin-left: auto; }
+.lk-voice-track-count, .lk-voice-privacy { color: var(--lk-muted); font-size: 11px; line-height: 1.8; margin-top: 12px; }
+.lk-voice-links { display: flex; gap: 24px; justify-content: center; margin-top: 10px; }
+.lk-voice-link { min-height: 40px; background: none; border: 0; padding: 4px 0; font-size: 12px; }
+.livekit-voice .voice-error { color: #a43228; max-width: 520px; font-size: 12px; line-height: 1.8; margin: 0; }
+@media (hover:hover) { .lk-voice-start:not(:disabled):hover { background: #0023c2; }.lk-voice-back:not(:disabled):hover, .lk-voice-control:not(:disabled):hover { filter: brightness(.95); }.lk-voice-link:not(:disabled):hover { text-decoration: underline; text-underline-offset: 4px; } }
+@media (max-width: 600px) {
+  .lk-voice-header { padding: 16px; flex-wrap: wrap; gap: 10px; }.lk-voice-brand { font-size: 16px; gap: 8px; }.lk-voice-product { display: none; }.lk-voice-back { padding: 8px 12px; font-size: 11px; }
+  .lk-voice-context { justify-content: flex-start; margin: 0; padding: 6px 20px; font-size: 11px; }
+  .lk-voice-stage { min-height: 350px; padding: 28px 20px; gap: 14px; }.lk-voice-description { font-size: 13px; }.lk-voice-visualizer { height: 220px; gap: 12px; }.voice-level-bar { width: 44px; height: calc(44px + var(--level, 0) * (100% - 44px)); }
+  .lk-voice-footer { padding: 10px 16px max(20px, env(safe-area-inset-bottom)); }.lk-voice-controls { gap: 6px; padding: 10px 6px; }.lk-voice-control { padding: 9px 10px; flex-direction: column; gap: 5px; font-size: 11px; min-width: 58px; }.lk-voice-end { margin-left: 0; }.lk-voice-track-count { padding: 0 6px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .livekit-voice button:active { transform: none; }
+  .voice-level-bar { transform: none; height: 48px; opacity: calc(.2 + var(--level, 0) * .8); }
+}

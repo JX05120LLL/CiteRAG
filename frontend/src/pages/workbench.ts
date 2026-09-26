@@ -10,8 +10,11 @@ function answerFailure(code: string | null): string {
     answer_unverifiable: '模型输出未通过格式或原文核验。请重试，或把问题缩小到资料中的具体内容。',
     answer_format_invalid: '模型返回的格式不完整或不符合要求。请重试，或缩小问题范围。',
     answer_reference_invalid: '模型给出的引用编号未通过核验。请重试；当前未展示未核验的回答。',
-    answer_source_mismatch: '模型回答无法逐字匹配引用原文，或包含不允许的网址。请缩小问题范围后重试。',
+    answer_source_mismatch: '模型的引用摘录无法匹配原文，或网址没有资料依据。请重试，或明确要查询的资料。',
+    answer_unsupported_claims: '回答包含未得到资料支持的事实，已停止展示。请补充资料，或把问题缩小到具体内容后重试。',
+    answer_verification_unavailable: '回答的事实核验未完成，暂不展示正文和引用。请稍后重试。',
     answer_unavailable: '回答模型服务暂不可用。请检查系统状态、模型配置或供应商配额后重试。',
+    answer_output_limit: '模型生成达到输出长度上限，结果未完整返回。请重试，或把问题缩小到资料中的具体内容。',
     retrieval_failed: '检索或原文核对失败。请检查资料与任务状态后重试。',
     rerank_missing: '检索没有完成必要的重排。请检查模型服务状态后重试。',
     summary_unavailable: '聊天上下文摘要未完成。请检查模型服务后重试，或新建聊天。',
@@ -54,7 +57,7 @@ function composer(state: AppState, actions: WorkbenchActions, navigate: (page: P
   input.rows = 2;
   input.maxLength = 1000;
   input.value = state.chatDraft;
-  input.placeholder = enabled ? '输入问题，答案将依据当前知识库的已核验证据' : '请先选择已就绪知识库并创建或打开聊天';
+  input.placeholder = enabled ? '输入问题，自动识别普通交流或知识库查询' : '请先选择已就绪知识库并创建或打开聊天';
   input.setAttribute('aria-label', '问题输入');
   input.addEventListener('input', () => {
     actions.setDraft(input.value);
@@ -84,7 +87,7 @@ function composer(state: AppState, actions: WorkbenchActions, navigate: (page: P
   toolbar.append(image, context, voice, send);
   box.append(toolbar);
   const hint = el('p', 'composer-note', current?.status === 'ready'
-    ? '直接提问，编号和短语可在当前知识库中精确定位；回答只引用可核查的原文。'
+    ? '自然提问，自动区分普通交流与资料查询；知识库回答附可核查的原文来源。'
     : '资料未就绪或正在维护时暂停问答；解析完成不等于已入库。');
   const capability = el('p', 'composer-capability', '图片提问尚未接入；语音页面可查看接入状态。'); capability.id = 'image-unavailable';
   area.append(box, hint, capability);
@@ -165,7 +168,7 @@ export function renderWorkbench(main: HTMLElement, state: AppState,
     if (state.selectedChatId) {
       const transcript = el('section', 'chat-transcript');
       transcript.setAttribute('aria-label', '聊天记录');
-      if (!state.chatMessages.length) transcript.append(el('p', 'chat-empty', '还没有问题。输入区会向当前固定知识库检索，并在回答旁展示可核查来源。'));
+      if (!state.chatMessages.length) transcript.append(el('p', 'chat-empty', '还没有问题。可以直接交流或提问；涉及当前知识库资料时，会检索并展示可核查来源。'));
       for (const message of state.chatMessages) {
         const item = el('article', 'chat-message');
         const question = el('div', 'chat-question');
@@ -180,10 +183,12 @@ export function renderWorkbench(main: HTMLElement, state: AppState,
           : message.status === 'partial' ? message.text
           : message.status === 'running' && state.chatStreamAttemptId === message.attempt_id &&
             state.chatStreamText ? state.chatStreamText
-          : message.status === 'running' ? '提问已保存，正在检索并核对来源…'
+          : message.status === 'running' ? '提问已保存，正在识别问题并准备回答…'
           : answerFailure(message.error_code);
         const response = el('div', 'chat-response');
-        const status = message.hidden ? '已隐藏' : message.status === 'answered' ? '已保存并核验'
+        const status = message.hidden ? '已隐藏' : message.status === 'answered'
+          ? message.route === 'general' ? '通用回答 · 未检索知识库'
+            : message.route === 'chat' ? '普通交流' : '已保存并核验'
           : message.status === 'running' ? '处理中' : message.status === 'partial' ? '部分回答，未完成'
           : message.status === 'insufficient_evidence' ? '证据不足'
           : message.status === 'needs_clarification' && message.route === 'unsupported' ? '当前不可查询'

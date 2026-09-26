@@ -22,6 +22,7 @@
 !/backend/tests/test_m13_answer_api.py
 !/backend/tests/test_m1_stream.py
 !/backend/tests/test_m14_lifecycle.py
+!/backend/tests/test_voice_transport.py
 /frontend/**/*.test.*
 /frontend/**/*.spec.*
 !/frontend/src/api/client.test.ts
@@ -30,6 +31,8 @@
 !/frontend/src/documents.test.ts
 !/frontend/src/knowledge.test.ts
 !/frontend/src/pages/status.test.ts
+!/frontend/src/features/voice/controller.test.ts
+!/frontend/src/features/voice/page.test.ts
 
 # Credentials and local configuration
 .env

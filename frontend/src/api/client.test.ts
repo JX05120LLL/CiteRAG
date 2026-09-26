@@ -5,6 +5,36 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 const status = { status: 'partial', mode: 'local_single_user', database: 'available', rag: 'not_configured', models: 'not_configured' };
 
 describe('local same-origin API boundary', () => {
+  it('reads media configuration and requests a chat-bound token without storing credentials', async () => {
+    const calls: Array<[string, RequestInit | undefined]> = [];
+    const capability = { transport: 'configured', assistant: 'not_configured', purpose: 'media_test' };
+    const connection = { server_url: 'ws://127.0.0.1:17880', token: 'synthetic-token', room: 'synthetic-room',
+      conversation_id: 'chat/1', assistant: 'not_configured', purpose: 'media_test' };
+    const api = createApi(async (url, init) => {
+      calls.push([String(url), init]); return json(String(url).endsWith('/status') ? capability : connection);
+    });
+    expect(await api.voiceStatus()).toEqual(capability);
+    expect(await api.voiceToken('chat/1')).toEqual(connection);
+    expect(calls.map(([url, init]) => [url, init?.method, init?.credentials])).toEqual([
+      ['/api/voice/status', 'GET', 'omit'], ['/api/conversations/chat%2F1/voice/token', 'POST', 'omit'],
+    ]);
+  });
+
+  it.each(['wss://remote.example', 'ws://localhost.evil:7880', 'ws://user:secret@localhost:7880',
+    'ws://127.0.0.1:7880/path', 'ws://127.0.0.1:7880?token=secret'])('rejects unsafe media server %s', async (server_url) => {
+    const api = createApi(async () => json({ server_url, token: 'synthetic-token', room: 'synthetic-room',
+      conversation_id: 'chat', assistant: 'not_configured', purpose: 'media_test' }));
+    await expect(api.voiceToken('chat')).rejects.toMatchObject({ kind: 'invalid-response' });
+  });
+
+  it('rejects mismatched chat tokens and false assistant readiness', async () => {
+    const connection = { server_url: 'ws://127.0.0.1:7880', token: 'synthetic-token', room: 'synthetic-room',
+      conversation_id: 'other', assistant: 'not_configured', purpose: 'media_test' };
+    await expect(createApi(async () => json(connection)).voiceToken('chat')).rejects.toMatchObject({ kind: 'invalid-response' });
+    await expect(createApi(async () => json({ transport: 'configured', assistant: 'available', purpose: 'media_test' })).voiceStatus())
+      .rejects.toMatchObject({ kind: 'invalid-response' });
+  });
+
   it('creates and renames knowledge bases with JSON bodies and omitted credentials', async () => {
     const calls: Array<[string, RequestInit | undefined]> = [];
     const base = { id: 'kb-1', name: '本地资料', status: 'empty' };

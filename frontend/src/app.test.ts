@@ -17,20 +17,80 @@ async function page(fetcher: typeof fetch) {
 afterEach(() => { document.body.replaceChildren(); sessionStorage.clear(); });
 
 describe('M0 local workbench', () => {
-  it('opens the dedicated unavailable voice page without requesting microphone or a voice API', async () => {
+  it.each(['general', 'chat'] as const)('labels %s answers without suggesting knowledge verification', async (route) => {
+    const root = await page(async (url) => {
+      const path = String(url);
+      if (path.includes('knowledge-bases')) return json({ items: [{ id: 'kb', name: '合成库', status: 'ready' }] });
+      if (path.endsWith('/messages')) return json({ items: [{
+        message_id: 'm', attempt_id: 'a', client_message_id: 'c', question: '合成交流',
+        text: '合成通用回答', mode: 'auto', route, status: 'answered', kb_revision: 1,
+        error_code: null, created_at: '2026-09-24T00:00:00Z', saved: true, citations: [],
+      }] });
+      return json({ items: [{ id: 'chat', owner_id: 'local', kb_id: 'kb', title: '合成聊天', created_at: '2026-09-24T00:00:00Z' }] });
+    });
+    button(root, '合成聊天')?.click();
+    await vi.waitFor(() => expect(root.textContent).toContain('合成通用回答'));
+    expect(root.textContent).toContain(route === 'general' ? '通用回答 · 未检索知识库' : '普通交流');
+    expect(root.querySelector('.citation-trigger')).toBeNull();
+    expect(root.querySelector('.message-status')?.textContent).not.toContain('核验');
+  });
+  it('opens the real status view when returning from the standalone voice page', async () => {
+    const root = document.createElement('div'); document.body.append(root);
+    const calls: string[] = [];
+    await mountApp(root, createApi(async (url) => {
+      calls.push(String(url)); return json(url === '/api/status' ? status : { items: [] });
+    }), undefined, 'status');
+    expect(root.querySelector('h1')?.textContent).toBe('系统状态');
+    expect(calls).toContain('/api/status');
+  });
+  it('connects from the voice page and disconnects media when returning to the same chat', async () => {
+    const root = document.createElement('div'); document.body.append(root);
+    const room = { connect: vi.fn(async () => {}), microphone: vi.fn(async () => {}),
+      output: vi.fn(async () => {}), disconnect: vi.fn(async () => {}) };
+    let tokenRequests = 0;
+    await mountApp(root, createApi(async (url) => {
+      const path = String(url);
+      if (path === '/api/voice/status') return json({ transport: 'configured', assistant: 'not_configured', purpose: 'media_test' });
+      if (path.endsWith('/voice/token')) { tokenRequests++; return json({ server_url: 'ws://127.0.0.1:7880', token: 'synthetic',
+        room: 'synthetic', conversation_id: 'chat', assistant: 'not_configured', purpose: 'media_test' }); }
+      if (path.includes('knowledge-bases')) return json({ items: [{ id: 'kb', name: '合成库', status: 'ready' }] });
+      if (path.endsWith('/messages')) return json({ items: [] });
+      return json({ items: [{ id: 'chat', owner_id: 'local', kb_id: 'kb', title: '合成媒体测试聊天', created_at: '2026-09-24T00:00:00Z' }] });
+    }), async () => room);
+    button(root, '合成媒体测试聊天')?.click();
+    await vi.waitFor(() => expect(root.textContent).toContain('固定知识库：合成库'));
+    button(root, '语音通话')?.click();
+    await vi.waitFor(() => expect(button(root, '测试本地音频连接')?.disabled).toBe(false));
+    expect(tokenRequests).toBe(0);
+    button(root, '测试本地音频连接')?.click();
+    await vi.waitFor(() => expect(root.textContent).toContain('媒体已连接'));
+    expect(room.microphone).toHaveBeenCalledWith(true);
+    expect(button(root, '字幕')?.disabled).toBe(true);
+    const microphone = button(root, '静音')!;
+    microphone.focus(); microphone.click();
+    await vi.waitFor(() => expect(button(root, '取消静音')).toBeDefined());
+    expect(document.activeElement).toBe(microphone);
+    button(root, '挂断并返回聊天')?.click();
+    await vi.waitFor(() => expect(room.disconnect).toHaveBeenCalled());
+    await vi.waitFor(() => expect(root.querySelector('textarea')).not.toBeNull());
+    expect(root.textContent).toContain('合成媒体测试聊天');
+  });
+
+  it('reads voice configuration without requesting microphone or issuing a room token', async () => {
     const calls: string[] = [];
     const root = await page(async (url) => {
       calls.push(String(url));
+      if (String(url) === '/api/voice/status') return json({ transport: 'disabled', assistant: 'not_configured', purpose: 'media_test' });
       return json({ items: String(url).includes('knowledge-bases')
         ? [{ id: 'kb', name: '合成库', status: 'ready' }] : [] });
     });
     button(root, '语音通话')?.click();
     expect(root.querySelector('h1')?.textContent).toBe('语音通话');
-    expect(root.textContent).toContain('语音服务尚未接入');
-    expect(button(root, '连接语音')?.disabled).toBe(true);
+    expect(root.textContent).toContain('语音助手尚未接入');
+    expect(button(root, '测试本地音频连接')?.disabled).toBe(true);
     expect(button(root, '静音')?.disabled).toBe(true);
     expect(root.querySelector('.voice-transcript')).toBeNull();
-    expect(calls.some((path) => /voice|room|audio/.test(path))).toBe(false);
+    expect(calls.filter((path) => /voice|room|audio/.test(path))).toEqual(['/api/voice/status']);
     button(root, '返回聊天')?.click();
     await vi.waitFor(() => expect(root.querySelector('textarea')).not.toBeNull());
     expect(button(root, '添加图片')?.disabled).toBe(true);
@@ -129,8 +189,11 @@ describe('M0 local workbench', () => {
     ['answer_unverifiable', '未通过格式或原文核验'],
     ['answer_format_invalid', '模型返回的格式不完整'],
     ['answer_reference_invalid', '引用编号未通过核验'],
-    ['answer_source_mismatch', '无法逐字匹配引用原文'],
+    ['answer_source_mismatch', '引用摘录无法匹配原文'],
+    ['answer_unsupported_claims', '未得到资料支持的事实'],
+    ['answer_verification_unavailable', '事实核验未完成'],
     ['answer_unavailable', '模型服务暂不可用'],
+    ['answer_output_limit', '生成达到输出长度上限'],
     ['constructor', '回答未完成，请检查任务与服务状态'],
     ['future_answer_error', '回答未完成，请检查任务与服务状态'],
   ])('shows a safe explanation for %s while keeping retry available', async (code, reason) => {

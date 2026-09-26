@@ -4,11 +4,15 @@
 
 A local, single-user multimodal knowledge assistant, designed around answers with verifiable sources.
 
+**文字问答改进（2026-09-26）：** 单输入框自动区分普通交流、通用解释和知识库查询；支持结合上下文追问、基于真实证据的总结与独立事实支持检查。通用回答明确标记未检索知识库；详细机制、费用影响和集中验收步骤见[交流分流与有依据的总结](docs/development/INTENT-AND-GROUNDED-ANSWERS.md)。完整 M1 仍待验收。
+
 本地单用户知识助手，面向带可核查来源的文字问答，并计划扩展图片提问和实时语音。使用者直接管理自己的知识库、核查原文，并保存聊天继续交流。首版无需注册、登录或创建管理员。
 
 **当前阶段：M0 未完成；M1-1 至 M1-4 的本机主链路已实现，完整 M1 尚未验收。** 当前接通四类文字资料、受管入库、自动路由普通/精确问答、固定知识库聊天、来源核查、删除/替换与旧空间清理。回答支持 SSE 增量、`partial` 持久状态和重试；来源只在完整回答核验并提交后展示。另有断流恢复、近期窗口/摘要、180 天聊天保留和可选每日成套备份。分层证据和剩余条件见 [M1 计划](docs/development/M1-IMPLEMENTATION.md)与 [M1 验证](docs/development/M1-VALIDATION.md)。
 
-**2026-09-26 UI 升级：** 按已确认的三张概念稿调整工作台、知识库和独立语音页；统一侧栏、输入区、来源与任务详情栏，并适配手机导航。资料与历史任务支持分页、折叠，失败资料可查看安全错误说明与关联任务。语音页已完成布局，通话与图片入口因后端能力尚未接入而禁用。原生 TypeScript + HTML/CSS + Vite 和「回响」Logo 保留，未引入 React/Vue。截图、控件—API 对应和验收步骤见 [UI 升级交付](design/ui/UI-UPGRADE-20260926.md)。
+**2026-09-26 UI 升级：** 按已确认的三张概念稿调整工作台、知识库和独立语音页；统一侧栏、输入区、来源与任务详情栏，并适配手机导航。资料与历史任务支持分页、折叠，失败资料可查看安全错误说明与关联任务。原生 TypeScript + HTML/CSS + Vite 和「回响」Logo 保留，未引入 React/Vue。截图、控件—API 对应和验收步骤见 [UI 升级交付](design/ui/UI-UPGRADE-20260926.md)。
+
+**语音接入首片：** 经用户允许提前启动 M2，已接 LiveKit 官方 SDK、本地媒体凭证、麦克风、静音、音频播放与挂断。语音 UI 已按用户选择原生移植官方页面，独立入口 `voice.html` 与工作台共用实现，保持 TypeScript/Vite。配置默认关闭，页面明确标记“语音助手尚未接入”；ASR、知识库语音回答、TTS 和正式通话租约仍待完成，图片入口仍禁用。已验证真实本地 WebRTC 与合成音频，不等于真人设备或完整语音验收。[原生语音页截图与验证](design/ui/VOICE-NATIVE-20260926.md)、[M2 启动步骤](docs/development/M2-LIVEKIT-TRANSPORT.md)。
 
 入库、问答和备份在仓库配置中默认关闭，真实模型调用需单独授权。上传受理、解析完成、建立索引和最终核验分别记录，不能以“已上传”判断入库成功。Unicode 切分、失败状态与删除恢复修复见 [入库诊断记录](docs/development/INGESTION-UNICODE-FIX.md)。UI 的自动测试和浏览器合成响应验证不代表真实模型、实际业务资料或完整 M1 验收通过；五模型与真实百炼双库验证沿用 M0 历史证据，超长 Embedding 输入边界仍未通过。服务与数据库状态以本机实时核对为准，历史快照见 [M1 验证](docs/development/M1-VALIDATION.md)和[交接](docs/development/HANDOFF.md)。
 
@@ -23,13 +27,14 @@ A local, single-user multimodal knowledge assistant, designed around answers wit
 - [M0 验证记录](docs/development/M0-VALIDATION.md)：实际检查、模拟验证及尚未完成的真实接入条件。
 - [GitHub CI](docs/development/CI.md)：自动构建、静态检查、公开合成回归测试与临时 PostgreSQL/API 冒烟验证；其余专用测试文件仅在本机保留。
 - [UI 升级交付](design/ui/UI-UPGRADE-20260926.md)：当前桌面／手机截图、控件对应接口、验证边界与集中验收步骤。
+- [LiveKit 本地媒体接入](docs/development/M2-LIVEKIT-TRANSPORT.md)：官方 SDK/页面选型、音频连接验证、默认关闭配置及未完成的语音闭环。
 - [UI 设计资产](design/ui/README.md)：已确认的三张概念稿，以及历史 A 版静态稿。
 - [正式 Logo](assets/brand/README.md)：无字图形、反白、应用图标及下载。
 - [贡献约定](CONTRIBUTING.md)：范围、验证、数据与提交要求。
 
 ![CiteRAG 工作台与来源核查，真实浏览器中的合成 UI 验证](design/ui/exports/ui-upgrade-sources-1440.png)
 
-截图使用明确标注的合成资料，只展示实际前端布局与接口接线；语音页展示未接入状态。
+下表为 UI 升级时的合成资料截图；语音页当时尚未接入。随后完成的本地媒体截图见 [M2 接入记录](docs/development/M2-LIVEKIT-TRANSPORT.md)，语音助手仍未接入。
 
 | 页面 | 桌面截图 | 手机截图 |
 |---|---|---|

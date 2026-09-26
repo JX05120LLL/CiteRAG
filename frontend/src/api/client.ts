@@ -12,6 +12,31 @@ export interface Conversation {
   created_at: string;
 }
 
+export interface VoiceCapability {
+  transport: 'disabled' | 'not_configured' | 'configured';
+  assistant: 'not_configured';
+  purpose: 'media_test';
+}
+export interface VoiceConnection {
+  server_url: string;
+  token: string;
+  room: string;
+  conversation_id: string;
+  assistant: 'not_configured';
+  purpose: 'media_test';
+}
+
+function localVoiceUrl(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  try {
+    const url = new URL(value);
+    return ['ws:', 'wss:'].includes(url.protocol) &&
+      ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname) &&
+      !url.username && !url.password && !url.search && !url.hash && url.pathname === '/' &&
+      value === `${url.protocol}//${url.host}`;
+  } catch { return false; }
+}
+
 export interface Citation {
   evidence_id: string;
   document_id: string;
@@ -26,7 +51,7 @@ export interface ChatMessage {
   client_message_id: string;
   question: string;
   mode: 'semantic' | 'exact' | 'auto';
-  route?: 'semantic' | 'exact' | 'literal' | 'needs_clarification' | 'unsupported';
+  route?: 'semantic' | 'exact' | 'literal' | 'general' | 'chat' | 'needs_clarification' | 'unsupported';
   status: 'running' | 'answered' | 'insufficient_evidence' | 'needs_clarification' |
     'conflicting_evidence' | 'failed' | 'interrupted' | 'partial';
   text: string;
@@ -281,7 +306,8 @@ function chatMessage(value: unknown): ChatMessage {
       (value.error_code !== null && typeof value.error_code !== 'string') ||
       !isVerificationTime(value.created_at) || typeof value.saved !== 'boolean' ||
       (value.stale !== undefined && typeof value.stale !== 'boolean') ||
-      (value.route !== undefined && !['semantic', 'exact', 'literal', 'needs_clarification', 'unsupported'].includes(String(value.route))) ||
+      (value.route !== undefined && !['semantic', 'exact', 'literal', 'general', 'chat', 'needs_clarification', 'unsupported'].includes(String(value.route))) ||
+      (['general', 'chat'].includes(String(value.route)) && value.citations.length !== 0) ||
       (value.hidden !== undefined && typeof value.hidden !== 'boolean')) throw new ApiError('invalid-response');
   return value as unknown as ChatMessage;
 }
@@ -496,6 +522,20 @@ export function createApi(fetcher: typeof fetch = globalThis.fetch) {
     retryAnswer: async (chatId: string, messageId: string, attemptId: string): Promise<ChatMessage> =>
       chatMessage(await request(`/api/conversations/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}/retry`,
         'POST', { attempt_id: attemptId }, 60000)),
+    voiceStatus: async (): Promise<VoiceCapability> => {
+      const value = await request('/api/voice/status');
+      if (!isRecord(value) || !['disabled', 'not_configured', 'configured'].includes(String(value.transport)) ||
+          value.assistant !== 'not_configured' || value.purpose !== 'media_test') throw new ApiError('invalid-response');
+      return value as unknown as VoiceCapability;
+    },
+    voiceToken: async (conversation: string): Promise<VoiceConnection> => {
+      const value = await request(`/api/conversations/${encodeURIComponent(conversation)}/voice/token`, 'POST');
+      if (!isRecord(value) || !localVoiceUrl(value.server_url) || typeof value.token !== 'string' ||
+          !value.token || value.token.length > 8192 || typeof value.room !== 'string' || !value.room ||
+          value.conversation_id !== conversation || value.assistant !== 'not_configured' ||
+          value.purpose !== 'media_test') throw new ApiError('invalid-response');
+      return value as unknown as VoiceConnection;
+    },
     health: async (): Promise<SystemHealth> => {
       const value = await request('/api/status');
       if (!isRecord(value) || value.status !== 'partial' || value.mode !== 'local_single_user' ||

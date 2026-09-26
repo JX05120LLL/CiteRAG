@@ -15,6 +15,7 @@ from app.api.answers import router as answers_router
 from app.api.boundaries import require_local_request
 from app.api.documents import router as documents_router
 from app.api.routes import router
+from app.api.voice import router as voice_router
 from app.config import LOCAL_RUNTIME_ROOT, Settings
 from app.database import Database
 from app.ingestion.jobs import IngestionRunner
@@ -196,6 +197,7 @@ def create_app(
     application.include_router(router)
     application.include_router(documents_router)
     application.include_router(answers_router)
+    application.include_router(voice_router)
     return application
 
 

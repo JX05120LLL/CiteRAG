@@ -22,13 +22,123 @@ pytest_plugins = ["test_postgres_local"]
 pytestmark = pytest.mark.postgres
 
 
-@pytest.mark.parametrize("text", ["你好！", "Hi", "您好。", "hello?"])
+@pytest.mark.asyncio
+@pytest.mark.parametrize("supported", [True, False, "invalid"])
+async def test_summary_stream_waits_for_support_check_and_preserves_real_citations(
+    m13_environment, supported,
+):
+    api, _, app, _ = m13_environment
+    kb = await new_kb(api)
+    source = "Nimbus uses PostgreSQL. Nimbus queues work with Redis."
+    job = await finished(api, await upload(api, kb, data=(source + "\n").encode()))
+    chat = (await api.post("/api/conversations", json={"kb_id": kb})).json()["id"]
+    app.state.answer_enabled = True
+    requested = []
+
+    class Retrieval:
+        async def retrieve(self, _kb, _workspace, question, _sources):
+            requested.append(question)
+            return [RetrievedChunk("synthetic_chunk", "source_" +
+                                   job["document_ids"][0].replace("-", ""), source)]
+
+    class Summary:
+        requires_support_verification = True
+        verified = False
+
+        async def route_with_context(self, question, candidates, context, documents):
+            assert documents and documents[0]["status"] == "ready"
+            if question == "How does it queue work?":
+                assert context["turns"][0]["user"] == "Introduce Nimbus"
+                return '{"mode":"semantic","query":"Nimbus queues work"}'
+            return '{"mode":"semantic"}'
+
+        async def stream_with_context(self, question, evidence, context):
+            raw = json.dumps({"status": "answered", "text": "Nimbus combines PostgreSQL and Redis.",
+                              "evidence_ids": ["E1"], "support": [
+                                  {"evidence_id": "E1", "quote": source}]})
+            for offset in range(0, len(raw), 8):
+                yield raw[offset:offset+8]
+
+        async def verify_answer(self, text, evidence):
+            assert evidence[0]["text"] == source and "PostgreSQL" in text
+            self.verified = True
+            return json.dumps({"supported": supported})
+
+    model = Summary()
+    app.state.query_adapter, app.state.answer_adapter = Retrieval(), model
+    received = events(await api.post(f"/api/conversations/{chat}/messages/stream", json={
+        "client_message_id": str(uuid4()), "text": "Introduce Nimbus", "mode": "auto",
+    }))
+    result = received[-1][1]
+    assert model.verified and received[0][0] == "accepted" and received[-1][0] == "saved"
+    if supported is True:
+        assert result["status"] == "answered" and result["citations"][0]["excerpt"] == source
+        assert all(data["saved"] for name, data in received if name == "delta")
+        followup = events(await api.post(f"/api/conversations/{chat}/messages/stream", json={
+            "client_message_id": str(uuid4()), "text": "How does it queue work?", "mode": "auto",
+        }))[-1][1]
+        assert followup["status"] == "answered" and requested[-1] == "Nimbus queues work"
+    else:
+        expected = ("answer_unsupported_claims" if supported is False
+                    else "answer_verification_unavailable")
+        assert result["status"] == "failed" and result["error_code"] == expected
+        assert result["text"] == "" and result["citations"] == []
+        assert [name for name, _data in received] == ["accepted", "saved"]
+
+
+@pytest.mark.asyncio
+async def test_general_question_skips_retrieval_and_kb_miss_never_falls_back(m13_environment):
+    api, _, app, _ = m13_environment
+    kb = await new_kb(api)
+    await finished(api, await upload(api, kb))
+    chat = (await api.post("/api/conversations", json={"kb_id": kb})).json()["id"]
+    app.state.answer_enabled = True
+    calls = []
+
+    class Routes:
+        async def route_with_context(self, question, _candidates, context, _documents):
+            if question == "Explain that concept further":
+                assert context["turns"][-1]["answer_kind"] == "general"
+                return '{"mode":"general","query":"Explain RAG further"}'
+            return json.dumps({"mode": "general" if question == "What is RAG?" else "semantic"})
+
+        async def general_answer(self, question, context):
+            calls.append("general")
+            assert question in {"What is RAG?", "Explain RAG further"}
+            return '{"text":"RAG uses retrieval to provide context for generation."}'
+
+    class EmptyRetrieval:
+        async def retrieve(self, *_args):
+            calls.append("retrieval")
+            return []
+
+    app.state.answer_adapter, app.state.query_adapter = Routes(), EmptyRetrieval()
+    async def ask(question):
+        return events(await api.post(f"/api/conversations/{chat}/messages/stream", json={
+            "client_message_id": str(uuid4()), "text": question, "mode": "auto",
+        }))[-1][1]
+
+    general = await ask("What is RAG?")
+    assert general["status"] == "answered" and general["route"] == "general"
+    assert general["citations"] == [] and calls == ["general"]
+    followup = await ask("Explain that concept further")
+    assert followup["route"] == "general" and followup["status"] == "answered"
+    assert calls == ["general", "general"]
+    missing = await ask("What is in my missing document?")
+    assert missing["status"] == "insufficient_evidence" and missing["citations"] == []
+    assert calls == ["general", "general", "retrieval"]
+
+
+@pytest.mark.parametrize("text", [
+    "你好！", "Hi", "您好。", "hello?", "你好你好", "你好，您好！", "hi hi", "谢谢谢谢你",
+])
 def test_whole_greeting_is_recognized(text):
     assert is_pure_greeting(text)
 
 
 @pytest.mark.parametrize("text", [
     "你好，请介绍这份简历", "hello world project", "您好，候选人掌握什么技能？",
+    "你好你好，介绍简历", "high availability", "hihello", "谢谢你，技能是什么？",
 ])
 def test_question_with_greeting_still_uses_knowledge_routing(text):
     assert not is_pure_greeting(text)
@@ -46,7 +156,10 @@ def test_invalid_model_answers_have_distinct_safe_reasons(raw, code):
 
 
 @pytest.mark.asyncio
-async def test_pure_greeting_is_saved_as_clarification_without_retrieval_or_model(m13_environment):
+@pytest.mark.parametrize("greeting", ["你好！", "你好你好", "谢谢"])
+async def test_pure_greeting_is_saved_as_chat_without_retrieval_or_model(
+    m13_environment, greeting,
+):
     api, _, app, _ = m13_environment
     kb = await new_kb(api)
     await finished(api, await upload(api, kb))
@@ -73,14 +186,14 @@ async def test_pure_greeting_is_saved_as_clarification_without_retrieval_or_mode
 
     app.state.answer_adapter, app.state.query_adapter = NoModel(), NoRetrieval()
     response = await api.post(f"/api/conversations/{chat}/messages/stream", json={
-        "client_message_id": str(uuid4()), "text": "你好！", "mode": "auto",
+        "client_message_id": str(uuid4()), "text": greeting, "mode": "auto",
     })
     received = events(response)
-    assert [name for name, _ in received] == ["accepted", "saved"]
+    assert received[0][0] == "accepted" and received[-1][0] == "saved"
     saved = received[-1][1]
-    assert saved["status"] == "needs_clarification" and saved["error_code"] is None
-    assert saved["route"] == "needs_clarification" and saved["citations"] == []
-    assert "请告诉我" in saved["text"]
+    assert saved["status"] == "answered" and saved["error_code"] is None
+    assert saved["route"] == "chat" and saved["citations"] == []
+    assert ("不客气" if greeting == "谢谢" else "你好") in saved["text"]
     assert app.state.answer_adapter.calls == app.state.query_adapter.calls == 0
 
 

@@ -1,10 +1,12 @@
 """Durable single-conversation answers with source and revision gates."""
 
 import asyncio
+import json
 import re
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any, Protocol
+from unicodedata import category
 from uuid import UUID, uuid4
 
 from sqlalchemy import select, update
@@ -73,16 +75,28 @@ def answer_view(message: ConversationMessage, attempt: AnswerAttempt) -> dict:
     }
     if message.mode == "auto" and isinstance(message.query_filter, dict):
         route = message.query_filter.get("mode")
-        if route in {"semantic", "exact", "literal", "needs_clarification", "unsupported"}:
+        if route in {"semantic", "exact", "literal", "general", "chat",
+                     "needs_clarification", "unsupported"}:
             view["route"] = route
     return view
 
 
 def is_pure_greeting(question: str) -> bool:
     # Match whole courtesy messages only; greetings inside a factual question still retrieve.
-    return question.strip(" \t\r\n!?！？，。,.～~").casefold() in {
-        "你好", "您好", "hello", "hi", "hey", "早上好", "下午好", "晚上好", "谢谢", "谢谢你",
-    }
+    parts = re.split(
+        r"[ \t\r\n!?！？，。,.～~]+", question.strip(" \t\r\n!?！？，。,.～~").casefold(),
+    )
+    return all(
+        part in {"hello", "hi", "hey"}
+        or re.fullmatch(r"(?:你好|您好|早上好|下午好|晚上好|谢谢你|谢谢)+", part) is not None
+        for part in parts
+    )
+
+
+def courtesy_reply(question: str) -> str:
+    if "谢谢" in question or "thank" in question.casefold():
+        return "不客气！想继续了解资料或通用知识，可以直接提问。"
+    return "你好！我可以与你交流，也可以根据当前知识库的资料回答问题。"
 
 
 class AnswerService:
@@ -253,15 +267,15 @@ class AnswerService:
 
         try:
             if mode == "auto" and is_pure_greeting(question):
-                message.query_filter = {"mode": "needs_clarification"}
+                message.query_filter = {"mode": "chat"}
                 status, text, citations = (
-                    "needs_clarification",
-                    "你好！我可以根据当前知识库的资料回答问题。请告诉我你想了解的具体内容。", [],
+                    "answered",
+                    courtesy_reply(question), [],
                 )
             else:
                 context = await prepare_context(self.session, conversation_id, kb, answerer)
                 if mode == "auto" and exact is None:
-                    exact = await self._route_auto(kb.id, question, answerer)
+                    exact = await self._route_auto(kb.id, question, answerer, context)
                     message.query_filter = exact
                     await self.session.commit()
                 status, text, citations = await self._resolve(
@@ -320,16 +334,17 @@ class AnswerService:
         await self.session.commit()
         return answer_view(message, current_attempt)
 
-    async def _route_auto(self, kb_id: UUID, question: str, answerer: Answerer) -> dict:
+    async def _route_auto(self, kb_id: UUID, question: str, answerer: Answerer,
+                          context: dict) -> dict:
         rows = list(await self.session.execute(select(
-            Document.doc_code, Document.model_code, Document.edition,
+            Document.doc_code, Document.model_code, Document.edition, Document.filename,
         ).where(
             Document.kb_id == kb_id, Document.status == "ready", Document.indexed_once.is_(True),
         ).limit(501)))
         await self.session.commit()
         attributes = [
             (field, value)
-            for doc_code, model_code, edition in (rows if len(rows) <= 500 else [])
+            for doc_code, model_code, edition, _filename in (rows if len(rows) <= 500 else [])
             for field, value in (("doc_code", doc_code), ("model_code", model_code),
                                  ("edition", edition))
             if value is not None
@@ -337,6 +352,12 @@ class AnswerService:
         candidates = matching_candidates(question, attributes)
         if len(candidates) > 12:
             return {"mode": "needs_clarification"}
+        contextual = getattr(answerer, "route_with_context", None)
+        if contextual is not None:
+            documents = [{"filename": row.filename[:200], "status": "ready"}
+                         for row in rows[:20]]
+            raw = await contextual(question, candidates, context, documents)
+            return checked_route(raw, candidates, question, context=context)
         route_query = getattr(answerer, "route_query", None)
         if route_query is None:
             raise AnswerError("answer_unavailable")
@@ -350,6 +371,25 @@ class AnswerService:
         if mode == "auto":
             route = exact or {}
             routed_mode = route.get("mode")
+            if routed_mode == "chat":
+                return "answered", courtesy_reply(question), []
+            if routed_mode == "general":
+                general = getattr(answerer, "general_answer", None)
+                if general is None:
+                    raise AnswerError("answer_unavailable")
+                raw = await general(route.get("query", question), context)
+                try:
+                    data = json.loads(raw)
+                    if (not isinstance(data, dict) or set(data) != {"text"}
+                        or not isinstance(data["text"], str) or not data["text"].strip()
+                        or len(data["text"]) > 1000
+                        or re.search(r"https?://", data["text"], re.IGNORECASE)
+                        or any(category(char).startswith("C") and char not in "\n\t"
+                               for char in data["text"])):
+                        raise ValueError
+                except (ValueError, TypeError):
+                    raise AnswerError("answer_format_invalid") from None
+                return "answered", data["text"].strip(), []
             if routed_mode == "exact":
                 return await self._resolve_exact(kb_id, question, route["filters"], answerer,
                                                  context, on_preview)
@@ -358,7 +398,7 @@ class AnswerService:
                                                    context, on_preview)
             if routed_mode == "needs_clarification":
                 return ("needs_clarification",
-                        "请补充知识库中的具体编号、短语或资料名称，以便定位原文。", [])
+                        "请说明你指的是哪份资料或哪个项目，也可以补充具体编号或短语。", [])
             if routed_mode == "unsupported":
                 return ("needs_clarification",
                         "当前知识库不支持以检索片段计算全集统计；请缩小到具体资料或编号。", [])
@@ -374,7 +414,8 @@ class AnswerService:
         if not documents:
             raise QueryError("retrieval_failed")
         by_source = {document.source_key: document for document in documents}
-        chunks = await retriever.retrieve(kb_id, workspace, question, {
+        retrieval_question = (exact or {}).get("query", question) if mode == "auto" else question
+        chunks = await retriever.retrieve(kb_id, workspace, retrieval_question, {
             document.source_key: document.engine_doc_id for document in documents
         })
         if not chunks:
@@ -407,11 +448,7 @@ class AnswerService:
         if not evidence:
             return "insufficient_evidence", "", []
         raw = await self._answer(answerer, question, evidence, context, on_preview)
-        status, text, identifiers = checked_answer(
-            raw, {item["id"]: item["text"] for item in evidence},
-        )
-        selected = [citation for citation in citations if citation["evidence_id"] in identifiers]
-        return status, text, selected
+        return await self._checked_result(answerer, raw, evidence, citations)
 
     async def _resolve_literal(
         self, kb_id: UUID, question: str, phrase: str, answerer: Answerer, context: dict,
@@ -452,10 +489,7 @@ class AnswerService:
             })
         await self.session.commit()
         raw = await self._answer(answerer, question, evidence, context, on_preview)
-        status, text, identifiers = checked_answer(
-            raw, {item["id"]: item["text"] for item in evidence},
-        )
-        return status, text, [item for item in citations if item["evidence_id"] in identifiers]
+        return await self._checked_result(answerer, raw, evidence, citations)
 
     async def _resolve_exact(
         self, kb_id: UUID, question: str, filters: dict, answerer: Answerer, context: dict,
@@ -506,9 +540,29 @@ class AnswerService:
                 "excerpt": block.text,
             })
         raw = await self._answer(answerer, question, evidence, context, on_preview)
+        return await self._checked_result(answerer, raw, evidence, citations)
+
+    @staticmethod
+    async def _checked_result(answerer: Answerer, raw: str, evidence: list[dict],
+                               citations: list[dict]) -> tuple[str, str, list[dict]]:
         status, text, identifiers = checked_answer(
             raw, {item["id"]: item["text"] for item in evidence},
         )
+        if status == "answered" and "support" in json.loads(raw):
+            verifier = getattr(answerer, "verify_answer", None)
+            if verifier is None:
+                raise AnswerError("answer_verification_unavailable")
+            selected = [item for item in evidence if item["id"] in identifiers]
+            verdict = await verifier(text, selected)
+            try:
+                data = json.loads(verdict)
+                if (not isinstance(data, dict) or set(data) != {"supported"}
+                    or not isinstance(data["supported"], bool)):
+                    raise ValueError
+            except (ValueError, TypeError):
+                raise AnswerError("answer_verification_unavailable") from None
+            if not data["supported"]:
+                raise AnswerError("answer_unsupported_claims")
         return status, text, [c for c in citations if c["evidence_id"] in identifiers]
 
     @staticmethod
@@ -517,11 +571,17 @@ class AnswerService:
                       on_preview: Callable[[str], Awaitable[None]] | None = None) -> str:
         streamed = getattr(answerer, "stream_with_context", None) if on_preview else None
         if streamed is not None:
-            draft = ExtractiveDraft({item["id"]: item["text"] for item in evidence})
+            draft = None if getattr(answerer, "requires_support_verification", False) else (
+                ExtractiveDraft({item["id"]: item["text"] for item in evidence})
+            )
             fragments = []
+            size = 0
             async for fragment in streamed(question, evidence, context):
+                if not isinstance(fragment, str) or size + len(fragment) > 12000:
+                    raise AnswerError("answer_format_invalid")
+                size += len(fragment)
                 fragments.append(fragment)
-                if draft.feed(fragment):
+                if draft is not None and draft.feed(fragment):
                     await on_preview(draft.text)
             return "".join(fragments)
         contextual = getattr(answerer, "answer_with_context", None)

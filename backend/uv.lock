@@ -242,6 +242,9 @@ rag = [
     { name = "lightrag-hku" },
     { name = "pgvector" },
 ]
+voice = [
+    { name = "livekit-api" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -257,6 +260,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.115,<1" },
     { name = "httpx", specifier = ">=0.28,<1" },
     { name = "lightrag-hku", marker = "extra == 'rag'", git = "https://github.com/HKUDS/LightRAG.git?rev=59af311307c7417b342f44850b097648d47e83bd" },
+    { name = "livekit-api", marker = "extra == 'voice'", specifier = "==1.2.1" },
     { name = "pgvector", marker = "extra == 'rag'", specifier = ">=0.4,<0.5" },
     { name = "pydantic", specifier = ">=2.10,<3" },
     { name = "pypdf", specifier = ">=6,<7" },
@@ -265,7 +269,7 @@ requires-dist = [
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0,<2.1" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34,<1" },
 ]
-provides-extras = ["rag"]
+provides-extras = ["rag", "voice"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -577,6 +581,35 @@ dependencies = [
     { name = "tenacity" },
     { name = "tiktoken" },
     { name = "xlsxwriter" },
+]
+
+[[package]]
+name = "livekit-api"
+version = "1.2.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "livekit-protocol" },
+    { name = "protobuf" },
+    { name = "pyjwt" },
+    { name = "types-protobuf" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/da/0d/ff9502faa5e9785563e9648313a030fab65ed7f6ff8cf52d7bc6c9e01c97/livekit_api-1.2.1.tar.gz", hash = "sha256:eee78dba493b736bc8422660debc7cf89340f1b80c63890a36a18d99c938045c", size = 21780, upload-time = "2026-08-27T14:06:57.419Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a1/c8/bc29cf16427fc446aa4487c552503cef42eebfcb920902bb54b7180e40d3/livekit_api-1.2.1-py3-none-any.whl", hash = "sha256:aa15b0a194c9e8167d4261bc61381682df23f98bc6d77760fcded93d2ce4b4ca", size = 27586, upload-time = "2026-08-27T14:06:56.286Z" },
+]
+
+[[package]]
+name = "livekit-protocol"
+version = "1.1.27"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "protobuf" },
+    { name = "types-protobuf" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/15/f3/5572f2b58f04534e22e266e113cb49b4f0b2a4e1d2abf385267cb51559ab/livekit_protocol-1.1.27.tar.gz", hash = "sha256:740a4c6e438da763d204f2a6b0fc8f7f33ca96e27b17ce9abc6557dbb0a28dbd", size = 124650, upload-time = "2026-09-16T12:43:25.761Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7e/04/12a047d5ec0ea5099426d071a0147118767cb231d270cb1d0bece266eb01/livekit_protocol-1.1.27-py3-none-any.whl", hash = "sha256:765bbe0c9c6b626519f6f5952793f81eaf3f5b8c9bd1e1b03994f3177774aa10", size = 151314, upload-time = "2026-09-16T12:43:24.327Z" },
 ]
 
 [[package]]
@@ -920,6 +953,15 @@ wheels = [
 ]
 
 [[package]]
+name = "pyjwt"
+version = "2.15.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/02/a5/5197bfd06417837ac079921c66fa6393f1dea3557272a263cebfef69e432/pyjwt-2.15.0.tar.gz", hash = "sha256:b11c5f9791d7bf51c2b39a81ed669f6b2dbbd669df2942f6c60167e9e3d1abe4", size = 120513, upload-time = "2026-09-23T16:56:00.689Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e8/55/40e45bf052ee8ee12a4dfd785519660f8effa7b065442b91646ec6828619/pyjwt-2.15.0-py3-none-any.whl", hash = "sha256:7a3742debf6b879e912dbb9819ceec1594be812452b78c5f2e2dfc56564954f8", size = 33680, upload-time = "2026-09-23T16:55:59.241Z" },
+]
+
+[[package]]
 name = "pypdf"
 version = "6.19.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1182,6 +1224,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/d4/9c/7035b0bcfaa68d1ee4803fc5be5214ad865669b05bd20e7105ae8a18afc6/tiktoken-0.14.0-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:b950248272f1b303dc32986396e2dccfa10cf6d1e83ec8f0bba1776660305482", size = 1250635, upload-time = "2026-08-17T19:48:54.392Z" },
     { url = "https://files.pythonhosted.org/packages/bc/1d/69cabf18bed7f4366da076735816abce0d4db3fae491ae338a6612128777/tiktoken-0.14.0-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:3de75343041a1c57333b1e707ac8a9769738241d7d6a55d39e12cf84548337c6", size = 1316085, upload-time = "2026-08-17T19:48:55.525Z" },
     { url = "https://files.pythonhosted.org/packages/bd/bd/a2e884fb1402cba5be08836590320012b2d8ada0e2eef9911a64df4bcd2d/tiktoken-0.14.0-cp312-cp312-win_amd64.whl", hash = "sha256:087538c080e5ff421abd3a0785ed63c5111d06af98e6cd0d374dbe5969147ca3", size = 941208, upload-time = "2026-08-17T19:48:56.938Z" },
+]
+
+[[package]]
+name = "types-protobuf"
+version = "7.35.1.20260906"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/e1/6c/e3e5b3e10bc328126a39637c138f9ebfd734bf14342b9f3540039b4ab995/types_protobuf-7.35.1.20260906.tar.gz", hash = "sha256:efd1a3862d4c967dad5512ef8d56b1530ac84f182c41735b94004756518c4998", size = 69895, upload-time = "2026-09-06T06:35:28.308Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/44/4e/f63e826c68f77ef875506d72f225918800346545ee99847bc28f3394f18d/types_protobuf-7.35.1.20260906-py3-none-any.whl", hash = "sha256:5155e48569e0dabff303fdf578db96cd31ea9a4a63b18018a4ceac6b0ae17462", size = 86419, upload-time = "2026-09-06T06:35:27.247Z" },
 ]
 
 [[package]]

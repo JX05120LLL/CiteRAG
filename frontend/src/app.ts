@@ -1,18 +1,22 @@
 import { ApiError } from './api/client';
-import type { ApiClient, KnowledgeBase } from './api/client';
+import type { ApiClient, KnowledgeBase, VoiceCapability } from './api/client';
 import { renderKnowledge } from './pages/knowledge';
 import { createDocumentsPanel } from './pages/documents';
 import { renderStatus } from './pages/status';
 import { renderWorkbench } from './pages/workbench';
 import { renderSources } from './pages/sources';
-import { renderVoice } from './pages/voice';
+import { createVoiceView } from './pages/voice';
+import { VoiceController } from './features/voice/controller';
+import type { RoomFactory } from './features/voice/controller';
+import { createMediaRoom } from './features/voice/livekit';
 import { action, el } from './shared/dom';
 import { renderHeader, renderManagementSidebar, renderSidebar } from './shared/shell';
 import type { AppState, Page } from './state';
 import { isKnowledgePending, knowledgeLimit } from './state';
 import { clearPendingCreation, normalizeKnowledgeName, restorePendingCreation, savePendingCreation } from './knowledge-draft';
 
-export async function mountApp(root: HTMLElement, api: ApiClient): Promise<void> {
+export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: RoomFactory = createMediaRoom,
+    initialPage: 'workbench' | 'status' = 'workbench'): Promise<void> {
   const selectionKey = 'citerag.workbench.selection';
   let restoredSelection: { kbId: string | null; chatId: string | null } = { kbId: null, chatId: null };
   try {
@@ -26,7 +30,7 @@ export async function mountApp(root: HTMLElement, api: ApiClient): Promise<void>
     }
   } catch { /* Selection is convenience state; storage failure must not block the app. */ }
   const state: AppState = {
-    bases: null, chats: null, page: 'workbench', loading: true,
+    bases: null, chats: null, page: initialPage, loading: true,
     basesError: null, chatsError: null, health: null, healthError: null, healthLoading: false,
     healthCheckedAt: undefined,
     createDraft: { name: '', pending: false, error: null, requestId: null, requestName: null, uncertain: false },
@@ -42,6 +46,26 @@ export async function mountApp(root: HTMLElement, api: ApiClient): Promise<void>
   let chatOffset = 0;
   let listedChatIds = new Set<string>();
   const retryKeys = new Map<string, string>();
+  let voiceCapability: VoiceCapability | null = null;
+  let voiceChecking = false;
+  let voiceCapabilityError = false;
+  let voiceGeneration = 0;
+  let voiceView: ReturnType<typeof createVoiceView> | null = null;
+  const voice = new VoiceController(api, () => { if (state.page === 'voice') render(); }, roomFactory,
+    (levels) => { if (state.page === 'voice') voiceView?.levels(levels); });
+  window.addEventListener('pagehide', () => { void voice.hangup(); }, { once: true });
+  async function loadVoiceCapability() {
+    const generation = ++voiceGeneration;
+    voiceChecking = true; voiceCapabilityError = false; render();
+    try {
+      const capability = await api.voiceStatus();
+      if (generation === voiceGeneration) voiceCapability = capability;
+    } catch {
+      if (generation === voiceGeneration) { voiceCapability = null; voiceCapabilityError = true; }
+    } finally {
+      if (generation === voiceGeneration) { voiceChecking = false; if (state.page === 'voice') render(); }
+    }
+  }
   function openDocuments(base: KnowledgeBase, focusTasks = false) {
     void documentsPanel.open(base).then(() => {
       if (state.page === 'knowledge' && documentsPanel.isOpen) {
@@ -447,26 +471,47 @@ export async function mountApp(root: HTMLElement, api: ApiClient): Promise<void>
     const previous = state.page;
     ++healthGeneration;
     state.page = next;
+    if (previous === 'voice' && next !== 'voice') {
+      ++voiceGeneration; voiceChecking = false; voiceView = null; void voice.hangup();
+    }
     state.navigationOpen = false;
     state.selectedCitation = null;
     render();
     if (next === 'status') void loadHealth();
+    if (next === 'voice') void loadVoiceCapability();
     if (next === 'workbench' && previous !== 'workbench') void refresh();
     root.querySelector<HTMLElement>('h1')?.focus();
   }
 
   function render() {
+    if (state.page === 'voice') {
+      const base = state.bases?.find((item) => item.id === state.selectedKbId);
+      const context = { chatId: state.selectedChatId,
+        chatTitle: state.chats?.find((item) => item.id === state.selectedChatId)?.title ?? '',
+        kbName: base?.name ?? '', kbReady: base?.status === 'ready', chatPending: state.chatPending };
+      const actions = { capability: voiceCapability, checking: voiceChecking, capabilityError: voiceCapabilityError,
+        media: voice.state, refresh: loadVoiceCapability,
+        connect: () => { if (context.chatId && !context.chatPending && context.kbReady &&
+          voiceCapability?.transport === 'configured') void voice.connect(context.chatId); },
+        hangup: () => { void voice.hangup(); }, microphone: () => { void voice.toggleMicrophone(); },
+        output: () => { void voice.toggleOutput(); },
+        back: async () => { await voice.hangup(); navigate('workbench'); },
+        status: async () => { await voice.hangup(); navigate('status'); } };
+      voiceView ??= createVoiceView(context, actions);
+      voiceView.update(context, actions);
+      if (root.firstChild !== voiceView.element) root.replaceChildren(voiceView.element);
+      return;
+    }
     const skip = el('a', 'skip-link', '跳到主要内容');
     skip.href = '#main-content';
     const isManagement = state.page === 'knowledge' || state.page === 'status';
-    const shell = el('div', `app-shell${isManagement ? ' app-shell-management' : ''}${state.page === 'voice' ? ' app-shell-voice' : ''}${state.navigationOpen ? ' navigation-open' : ''}`);
+    const shell = el('div', `app-shell${isManagement ? ' app-shell-management' : ''}${state.navigationOpen ? ' navigation-open' : ''}`);
     const main = el('main', `main ${isManagement ? 'management' : 'workbench'}`);
     main.id = 'main-content';
     main.tabIndex = -1;
     if (state.page === 'knowledge' && documentsPanel.isOpen) main.append(documentsPanel.render());
     else if (state.page === 'knowledge') renderKnowledge(main, state, { refresh, createKnowledgeBase, beginRename, renameKnowledgeBase, cancelRename, openDocuments });
     else if (state.page === 'status') renderStatus(main, state, loadHealth);
-    else if (state.page === 'voice') renderVoice(main, state, navigate);
     else renderWorkbench(main, state, navigate, {
       refresh, selectChat, createChat, renameChat, deleteChat, retryChat, sendChat,
       selectKb: (id: string) => { state.selectedKbId = id; state.selectedChatId = null;
@@ -508,11 +553,11 @@ export async function mountApp(root: HTMLElement, api: ApiClient): Promise<void>
       const frame = el('div', 'management-frame');
       frame.append(renderManagementSidebar(state, navigate, openCreate, openDocuments, documentsPanel.currentBaseId), main);
       shell.append(frame);
-    } else if (state.page === 'voice') shell.append(main);
-    else shell.append(renderSidebar(state, navigate, refresh, createChat, selectChat,
+    } else shell.append(renderSidebar(state, navigate, refresh, createChat, selectChat,
       hasMoreChats, loadMoreChats, openDocuments), main);
     root.replaceChildren(skip, shell);
   }
 
   await refresh();
+  if (initialPage === 'status') await loadHealth();
 }

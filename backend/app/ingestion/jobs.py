@@ -61,6 +61,25 @@ class IngestionRunner:
                                   and job.operation in {"delete", "replace"}), None)
                 if preflight is None:
                     kb.status = "blocked"
+            # Repair document labels left by failed rebuilds in older versions.
+            failed_rebuilds = await session.scalars(select(IngestionJob).join(KnowledgeBase)
+                .where(IngestionJob.operation == "rebuild",
+                       IngestionJob.status.in_(("failed", "interrupted")),
+                       IngestionJob.engine_mutated.is_(True),
+                       IngestionJob.cleanup_pending.is_(False),
+                       IngestionJob.retired_workspace == KnowledgeBase.active_workspace,
+                       KnowledgeBase.status == "blocked", KnowledgeBase.owner_id.is_not(None)))
+            for failed in failed_rebuilds:
+                if any(job.kb_id == failed.kb_id and job.status in {"queued", "running"}
+                       for job in jobs):
+                    continue
+                affected = await session.scalars(select(Document).where(
+                    Document.kb_id == failed.kb_id,
+                    Document.id.in_([UUID(value) for value in failed.document_ids]),
+                    Document.status.in_(("parsing", "indexing")),
+                ))
+                for document in affected:
+                    document.status, document.error_code = "failed", failed.error_code
             await session.commit()
             references = set(await session.scalars(select(Document.storage_key)))
         await asyncio.to_thread(self.store.cleanup_orphans, references)
@@ -323,6 +342,9 @@ class IngestionRunner:
         async with self.database.sessions() as session:
             job = await session.get(IngestionJob, identifier)
             old = await session.get(Document, UUID(job.document_ids[0]))
+            if job.operation == "delete" and not old.indexed_once:
+                await self._delete_unindexed(session, job, old)
+                return
             replacement = (await session.get(Document, UUID(job.document_ids[1]))
                            if job.operation == "replace" else None)
             retained = list(await session.scalars(select(Document).where(
@@ -418,6 +440,7 @@ class IngestionRunner:
             for document in retained:
                 row = await session.get(Document, document.id)
                 row.status, row.chunk_count = "ready", counts[row.engine_doc_id]
+                row.error_code = None
             if replacement is not None:
                 row = await session.get(Document, replacement.id)
                 row.status, row.chunk_count = "ready", counts[row.engine_doc_id]
@@ -426,6 +449,34 @@ class IngestionRunner:
             job.message = "新空间已核验，正在物理清理旧空间和旧原文"
             await session.commit()
         await self._finish_cleanup(identifier)
+
+    async def _delete_unindexed(self, session, job, document):
+        # No engine state exists for this original. Physical removal is idempotent
+        # if the process stops before the final DB commit.
+        try:
+            await asyncio.to_thread(self.store.discard, document.storage_key)
+        except OSError:
+            raise ServiceError(503, "storage_unavailable",
+                               "原文清理失败，请检查存储后重试") from None
+        self.assert_owned()
+        await session.execute(delete(ParsedBlockRecord).where(
+            ParsedBlockRecord.document_id == document.id,
+        ))
+        document.status, document.error_code = "deleted", None
+        document.parsed_text, document.chunk_count = None, 0
+        document.doc_code = document.model_code = document.edition = None
+        historical = await session.scalars(select(IngestionJob).where(
+            IngestionJob.kb_id == job.kb_id,
+            IngestionJob.status.in_(("failed", "interrupted")),
+        ))
+        for previous in historical:
+            if str(document.id) in previous.document_ids:
+                previous.error_code = "stale_job"
+                previous.message = "资料已删除，历史任务不能再次重试"
+        job.status, job.stage, job.error_code = "succeeded", "complete", None
+        job.message = "未入库资料的原文与解析结果已清理，未修改知识索引"
+        job.finished_at = datetime.now(UTC)
+        await session.commit()
 
     async def _finish_cleanup(self, identifier: UUID):
         self.assert_owned()
@@ -489,12 +540,20 @@ class IngestionRunner:
                     document = await session.get(Document, UUID(document_id))
                     if document:
                         document.status, document.error_code = "failed", code
+            elif job.operation == "rebuild":
+                for document_id in job.document_ids:
+                    document = await session.get(Document, UUID(document_id))
+                    if document is not None and document.status in {"parsing", "indexing"}:
+                        document.status, document.error_code = "failed", code
             elif job.operation in {"delete", "replace"}:
                 old = await session.get(Document, UUID(job.document_ids[0]))
                 if old is not None and not job.engine_mutated:
-                    old.status = "ready"
                     kb = await session.get(KnowledgeBase, job.kb_id, with_for_update=True)
-                    kb.status = "ready"
+                    if not old.indexed_once:
+                        old.status, old.error_code = "failed", code
+                    else:
+                        old.status = "failed" if old.error_code else "ready"
+                        kb.status = "blocked" if old.status == "failed" else "ready"
                 if job.operation == "replace":
                     replacement = await session.get(Document, UUID(job.document_ids[1]))
                     if replacement is not None and not job.engine_mutated:

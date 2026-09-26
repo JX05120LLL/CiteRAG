@@ -13,6 +13,10 @@ export function action(label: string, className = 'button secondary', onClick?: 
 }
 
 const paths = {
+  menu: ['M3 5h14M3 10h14M3 15h14'],
+  phone: ['M5 3l3 4-2 2c1 3 2 4 5 5l2-2 4 3-1 3C8 18 2 12 2 4Z'],
+  stop: ['M5 5h10v10H5z'],
+  file: ['M5 2h7l4 4v12H5zM12 2v5h4M8 10h5M8 13h5'],
   plus: ['M10 4v12M4 10h12'],
   search: ['M8.5 14a5.5 5.5 0 1 0 0-11 5.5 5.5 0 0 0 0 11ZM13 13l4 4'],
   book: ['M10 4v13M10 4C7 2 3 3 3 3v13s4-1 7 1c3-2 7-1 7-1V3s-4-1-7 1Z'],

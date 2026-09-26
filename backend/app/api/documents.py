@@ -7,9 +7,9 @@ from unicodedata import category
 from urllib.parse import quote
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, field_validator
-from sqlalchemy import select
+from sqlalchemy import func, select
 from starlette.datastructures import UploadFile
 from starlette.formparsers import MultiPartException
 
@@ -148,12 +148,30 @@ async def upload_documents(kb_id: UUID, request: Request, owner: LocalOwner, ses
 
 
 @router.get("/knowledge-bases/{kb_id}/documents")
-async def list_documents(kb_id: UUID, owner: LocalOwner, session: Session):
+async def list_documents(
+    kb_id: UUID, owner: LocalOwner, session: Session,
+    limit: int | None = Query(default=None, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    scope: Literal["all", "current", "deleted"] = "all",
+):
     await owned_kb(session, owner, kb_id)
-    items = await session.scalars(select(Document).where(Document.kb_id == kb_id).order_by(
-        Document.created_at, Document.id,
-    ))
-    return {"items": [DocumentView.model_validate(item) for item in items]}
+    counts = dict((await session.execute(select(Document.status, func.count()).where(
+        Document.kb_id == kb_id,
+    ).group_by(Document.status))).all())
+    query = select(Document).where(Document.kb_id == kb_id)
+    if scope == "current":
+        query = query.where(Document.status != "deleted")
+    elif scope == "deleted":
+        query = query.where(Document.status == "deleted")
+    total = sum(count for status, count in counts.items() if scope == "all"
+                or (status == "deleted") == (scope == "deleted"))
+    # Preserve the original unpaged contract and ordering for existing callers.
+    query = query.order_by(Document.created_at, Document.id).offset(offset)
+    if limit is not None:
+        query = query.limit(limit)
+    items = await session.scalars(query)
+    return {"items": [DocumentView.model_validate(item) for item in items],
+            "total": total, "counts": counts}
 
 
 @router.patch("/documents/{document_id}/attributes", response_model=DocumentView)
@@ -178,12 +196,29 @@ async def set_document_attributes(
 
 
 @router.get("/knowledge-bases/{kb_id}/jobs")
-async def list_jobs(kb_id: UUID, owner: LocalOwner, session: Session):
+async def list_jobs(
+    kb_id: UUID, owner: LocalOwner, session: Session,
+    limit: int = Query(default=100, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    scope: Literal["all", "history"] = "all",
+):
     kb = await owned_kb(session, owner, kb_id)
-    jobs = await session.scalars(select(IngestionJob).where(IngestionJob.kb_id == kb_id).order_by(
+    query = select(IngestionJob).where(IngestionJob.kb_id == kb_id)
+    if scope == "history":
+        query = query.where(IngestionJob.status.not_in(["queued", "running"]))
+    total = await session.scalar(select(func.count()).select_from(query.subquery()))
+    failed_count = await session.scalar(select(func.count()).select_from(IngestionJob).where(
+        IngestionJob.kb_id == kb_id, IngestionJob.status.in_(["failed", "interrupted"]),
+    ))
+    active = await session.scalars(select(IngestionJob).where(
+        IngestionJob.kb_id == kb_id, IngestionJob.status.in_(["queued", "running"]),
+    ).order_by(IngestionJob.created_at, IngestionJob.id))
+    jobs = await session.scalars(query.order_by(
         IngestionJob.created_at.desc(), IngestionJob.id,
-    ).limit(100))
-    return {"items": [job_view(job, kb.active_workspace) for job in jobs]}
+    ).limit(limit).offset(offset))
+    return {"items": [job_view(job, kb.active_workspace) for job in jobs], "total": total,
+            "active_items": [job_view(job, kb.active_workspace) for job in active],
+            "failed_count": failed_count}
 
 
 @router.get("/jobs/{job_id}")
@@ -217,9 +252,9 @@ async def delete_document(
     owner: LocalOwner, session: Session,
 ):
     runner = runner_for(request)
-    if not runner.enabled:
-        raise ServiceError(503, "ingestion_disabled", "索引维护尚未启用，不能受理删除")
-    job = await DocumentService(session).delete(owner, document_id, body.client_request_id)
+    job = await DocumentService(session).delete(
+        owner, document_id, body.client_request_id, allow_indexed=runner.enabled,
+    )
     runner.wake()
     return job_view(job)
 

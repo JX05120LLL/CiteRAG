@@ -78,6 +78,13 @@ def answer_view(message: ConversationMessage, attempt: AnswerAttempt) -> dict:
     return view
 
 
+def is_pure_greeting(question: str) -> bool:
+    # Match whole courtesy messages only; greetings inside a factual question still retrieve.
+    return question.strip(" \t\r\n!?！？，。,.～~").casefold() in {
+        "你好", "您好", "hello", "hi", "hey", "早上好", "下午好", "晚上好", "谢谢", "谢谢你",
+    }
+
+
 class AnswerService:
     def __init__(self, session: AsyncSession):
         self.session = session
@@ -245,15 +252,22 @@ class AnswerService:
                 await on_preview(attempt.id, delta)
 
         try:
-            context = await prepare_context(self.session, conversation_id, kb, answerer)
-            if mode == "auto" and exact is None:
-                exact = await self._route_auto(kb.id, question, answerer)
-                message.query_filter = exact
-                await self.session.commit()
-            status, text, citations = await self._resolve(
-                kb.id, attempt.workspace, question, retriever, answerer, mode, exact, context,
-                preview if on_preview is not None else None,
-            )
+            if mode == "auto" and is_pure_greeting(question):
+                message.query_filter = {"mode": "needs_clarification"}
+                status, text, citations = (
+                    "needs_clarification",
+                    "你好！我可以根据当前知识库的资料回答问题。请告诉我你想了解的具体内容。", [],
+                )
+            else:
+                context = await prepare_context(self.session, conversation_id, kb, answerer)
+                if mode == "auto" and exact is None:
+                    exact = await self._route_auto(kb.id, question, answerer)
+                    message.query_filter = exact
+                    await self.session.commit()
+                status, text, citations = await self._resolve(
+                    kb.id, attempt.workspace, question, retriever, answerer, mode, exact, context,
+                    preview if on_preview is not None else None,
+                )
             error_code = None
         except asyncio.CancelledError:
             # A disconnected request must not hold the conversation until restart.

@@ -9,7 +9,7 @@ from sqlalchemy import select
 from test_ingestion_lifecycle import FakeAdapter, application, finished, new_kb, upload
 from test_postgres_local import migrate
 
-from app.models import Document, KnowledgeBase, ParsedBlockRecord
+from app.models import Document, IngestionJob, KnowledgeBase, ParsedBlockRecord
 from app.rag.query_adapter import RetrievedChunk
 
 pytest_plugins = ["test_postgres_local"]
@@ -37,6 +37,176 @@ async def documents(api, kb):
     result = await api.get(f"/api/knowledge-bases/{kb}/documents")
     assert result.status_code == 200
     return result.json()["items"]
+
+
+@pytest.mark.asyncio
+async def test_paged_documents_and_jobs_keep_complete_history_and_private_boundaries(lifecycle):
+    api, db, _, adapter = lifecycle
+    kb = await new_kb(api)
+    other = await new_kb(api)
+    async with db.sessions() as session:
+        for index in range(105):
+            session.add(IngestionJob(kb_id=UUID(kb), client_request_id=uuid4(),
+                operation="delete", fingerprint=f"{index:064d}", document_ids=[],
+                status="succeeded", stage="complete"))
+        for index in range(21):
+            session.add(Document(kb_id=UUID(kb), filename=f"synthetic-{index}.txt",
+                size=10, sha256=f"{index:064d}", storage_key=f"private-{index}",
+                source_key=f"source-{index}", engine_doc_id=f"engine-{index}",
+                status="deleted" if index < 11 else "ready"))
+        await session.commit()
+    current = (await api.get(f"/api/knowledge-bases/{kb}/documents",
+        params={"scope": "current", "limit": 10, "offset": 0})).json()
+    assert current["total"] == 10 and len(current["items"]) == 10
+    assert current["counts"] == {"deleted": 11, "ready": 10}
+    assert all(row["status"] == "ready" and "storage_key" not in row
+               for row in current["items"])
+    deleted = (await api.get(f"/api/knowledge-bases/{kb}/documents",
+        params={"scope": "deleted", "limit": 10, "offset": 10})).json()
+    assert deleted["total"] == 11 and len(deleted["items"]) == 1
+    found = []
+    for offset in range(0, 110, 10):
+        result = (await api.get(f"/api/knowledge-bases/{kb}/jobs",
+            params={"scope": "history", "limit": 10, "offset": offset})).json()
+        assert result["total"] == 105 and result["active_items"] == []
+        assert result["failed_count"] == 0
+        assert all("target_workspace" not in row for row in result["items"])
+        found.extend(row["id"] for row in result["items"])
+    assert len(found) == len(set(found)) == 105
+    assert (await api.get(f"/api/knowledge-bases/{other}/jobs")).json()["total"] == 0
+    assert (await api.get(f"/api/knowledge-bases/{uuid4()}/jobs")).status_code == 404
+    for params in ({"limit": 101}, {"offset": -1}, {"scope": "invalid"}):
+        assert (await api.get(f"/api/knowledge-bases/{kb}/jobs", params=params)).status_code == 422
+    assert adapter.insert_count == 0
+
+
+@pytest.mark.asyncio
+async def test_active_job_is_returned_even_when_history_page_is_empty(lifecycle):
+    api, _, app, _ = lifecycle
+    kb = await new_kb(api)
+    app.state.ingestion_runner.enabled = False
+    await upload(api, kb)
+    result = (await api.get(f"/api/knowledge-bases/{kb}/jobs",
+        params={"scope": "history", "limit": 10, "offset": 100})).json()
+    assert result["items"] == [] and result["total"] == 0
+    assert len(result["active_items"]) == 1
+    assert result["active_items"][0]["status"] in {"queued", "running"}
+
+
+@pytest.mark.asyncio
+async def test_delete_failed_unindexed_original_without_engine_or_enabled_ingestion(lifecycle):
+    api, db, app, adapter = lifecycle
+    kb = await new_kb(api)
+    failed = await finished(api, await upload(api, kb, data=b"\xff"))
+    doc_id = failed["document_ids"][0]
+    async with db.sessions() as session:
+        row = await session.get(Document, UUID(doc_id))
+        original = app.state.source_store.path_for(row.storage_key)
+        assert row.status == "failed" and not row.indexed_once
+    before = adapter.insert_count
+    app.state.ingestion_runner.enabled = False
+    key = str(uuid4())
+    complete = await finished(api, await api.post(f"/api/documents/{doc_id}/delete",
+        json={"client_request_id": key}))
+    assert complete["status"] == "succeeded" and not complete["engine_mutated"]
+    assert adapter.insert_count == before and not original.exists()
+    assert (await documents(api, kb))[0]["status"] == "deleted"
+    assert (await api.post(f"/api/jobs/{failed['id']}/retry")).status_code == 409
+    replay = await api.post(f"/api/documents/{doc_id}/delete", json={"client_request_id": key})
+    assert replay.json()["id"] == complete["id"]
+
+
+@pytest.mark.asyncio
+async def test_delete_failed_indexed_document_recovers_blocked_empty_library(lifecycle):
+    api, db, app, adapter = lifecycle
+    kb = await new_kb(api)
+    adapter.failure = "insert"
+    failed = await finished(api, await upload(api, kb))
+    doc_id = failed["document_ids"][0]
+    adapter.failure = None
+    complete = await finished(api, await api.post(f"/api/documents/{doc_id}/delete",
+        json={"client_request_id": str(uuid4())}))
+    assert complete["status"] == "succeeded" and complete["engine_mutated"]
+    async with db.sessions() as session:
+        assert (await session.get(KnowledgeBase, UUID(kb))).status == "empty"
+        row = await session.get(Document, UUID(doc_id))
+        assert row.status == "deleted" and not row.indexed_once
+        assert not app.state.source_store.path_for(row.storage_key).exists()
+
+
+@pytest.mark.asyncio
+async def test_failed_rebuild_marks_affected_documents_failed(lifecycle):
+    api, _, _, adapter = lifecycle
+    kb = await new_kb(api)
+    await finished(api, await upload(api, kb))
+    adapter.failure = "verify"
+    result = await finished(api, await api.post(f"/api/knowledge-bases/{kb}/rebuild",
+        json={"client_request_id": str(uuid4())}))
+    assert result["status"] == "failed"
+    rows = await documents(api, kb)
+    assert rows[0]["status"] == "failed"
+    assert rows[0]["error_code"] == "verification_failed"
+
+
+@pytest.mark.asyncio
+async def test_recovery_repairs_legacy_indexing_label_without_restarting_models(lifecycle):
+    api, db, app, adapter = lifecycle
+    kb = await new_kb(api)
+    uploaded = await finished(api, await upload(api, kb))
+    adapter.failure = "verify"
+    await finished(api, await api.post(f"/api/knowledge-bases/{kb}/rebuild",
+        json={"client_request_id": str(uuid4())}))
+    async with db.sessions() as session:
+        row = await session.get(Document, UUID(uploaded["document_ids"][0]))
+        row.status, row.error_code = "indexing", None
+        await session.commit()
+    before = adapter.insert_count
+    await app.state.ingestion_runner.recover()
+    assert adapter.insert_count == before
+    assert (await documents(api, kb))[0]["status"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_local_failed_file_delete_preserves_other_blocked_documents(lifecycle):
+    api, db, _, adapter = lifecycle
+    kb = await new_kb(api)
+    unindexed = await finished(api, await upload(api, kb, data=b"\xff"))
+    adapter.failure = "insert"
+    indexed = await finished(api, await upload(api, kb))
+    before = adapter.insert_count
+    result = await finished(api, await api.post(
+        f"/api/documents/{unindexed['document_ids'][0]}/delete",
+        json={"client_request_id": str(uuid4())}))
+    assert result["status"] == "succeeded" and adapter.insert_count == before
+    async with db.sessions() as session:
+        assert (await session.get(KnowledgeBase, UUID(kb))).status == "blocked"
+        row = await session.get(Document, UUID(indexed["document_ids"][0]))
+        assert row.status == "failed" and row.indexed_once
+
+
+@pytest.mark.asyncio
+async def test_failed_local_cleanup_stays_failed_and_retry_does_not_enter_maintenance(
+    lifecycle, monkeypatch
+):
+    api, db, app, _ = lifecycle
+    kb = await new_kb(api)
+    failed = await finished(api, await upload(api, kb, data=b"\xff"))
+    discard = app.state.source_store.discard
+
+    def locked(_key):
+        raise PermissionError("synthetic locked original")
+
+    monkeypatch.setattr(app.state.source_store, "discard", locked)
+    result = await finished(api, await api.post(
+        f"/api/documents/{failed['document_ids'][0]}/delete",
+        json={"client_request_id": str(uuid4())}))
+    assert result["status"] == "failed" and result["error_code"] == "storage_unavailable"
+    assert (await documents(api, kb))[0]["status"] == "failed"
+    monkeypatch.setattr(app.state.source_store, "discard", discard)
+    recovered = await finished(api, await api.post(f"/api/jobs/{result['id']}/retry"))
+    assert recovered["status"] == "succeeded"
+    async with db.sessions() as session:
+        assert (await session.get(KnowledgeBase, UUID(kb))).status == "empty"
 
 
 @pytest.mark.asyncio

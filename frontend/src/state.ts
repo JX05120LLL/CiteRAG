@@ -1,6 +1,6 @@
 import type { ApiError, ChatMessage, Conversation, KnowledgeBase, SystemHealth } from './api/client';
 
-export type Page = 'workbench' | 'knowledge' | 'status';
+export type Page = 'workbench' | 'knowledge' | 'status' | 'voice';
 
 export interface KnowledgeDraft {
   name: string;
@@ -19,6 +19,8 @@ export interface RenameKnowledgeDraft extends KnowledgeDraft {
 }
 
 export interface AppState {
+  navigationOpen?: boolean;
+  selectedCitation?: { messageId: string; evidenceId: string } | null;
   bases: KnowledgeBase[] | null;
   chats: Conversation[] | null;
   page: Page;

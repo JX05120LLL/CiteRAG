@@ -12,13 +12,76 @@ from test_ingestion_lifecycle import finished, new_kb, upload
 from test_m13_answer_api import Answer, Query, m13_environment, no_provider_access
 
 from app.models import KnowledgeBase
+from app.rag.answer_adapter import AnswerError, checked_answer
 from app.rag.query_adapter import RetrievedChunk
 from app.rag.streamed_answer import ExtractiveDraft
-from app.services.answers import AnswerService
+from app.services.answers import AnswerService, is_pure_greeting
 from app.services.errors import ServiceError
 
 pytest_plugins = ["test_postgres_local"]
 pytestmark = pytest.mark.postgres
+
+
+@pytest.mark.parametrize("text", ["你好！", "Hi", "您好。", "hello?"])
+def test_whole_greeting_is_recognized(text):
+    assert is_pure_greeting(text)
+
+
+@pytest.mark.parametrize("text", [
+    "你好，请介绍这份简历", "hello world project", "您好，候选人掌握什么技能？",
+])
+def test_question_with_greeting_still_uses_knowledge_routing(text):
+    assert not is_pure_greeting(text)
+
+
+@pytest.mark.parametrize(("raw", "code"), [
+    ('{"status":', "answer_format_invalid"),
+    ('{"status":"answered","text":"safe","evidence_ids":["E9"]}', "answer_reference_invalid"),
+    ('{"status":"answered","text":"invented answer","evidence_ids":["E1"]}',
+     "answer_source_mismatch"),
+])
+def test_invalid_model_answers_have_distinct_safe_reasons(raw, code):
+    with pytest.raises(AnswerError, match=f"^{code}$"):
+        checked_answer(raw, {"E1": "The safe limit is 42 C."})
+
+
+@pytest.mark.asyncio
+async def test_pure_greeting_is_saved_as_clarification_without_retrieval_or_model(m13_environment):
+    api, _, app, _ = m13_environment
+    kb = await new_kb(api)
+    await finished(api, await upload(api, kb))
+    chat = (await api.post("/api/conversations", json={"kb_id": kb})).json()["id"]
+    app.state.answer_enabled = True
+
+    class NoModel:
+        calls = 0
+
+        async def route_query(self, *args):
+            self.calls += 1
+            raise RuntimeError("Unexpected route call")
+
+        async def answer(self, *args):
+            self.calls += 1
+            raise RuntimeError("Unexpected answer call")
+
+    class NoRetrieval:
+        calls = 0
+
+        async def retrieve(self, *args):
+            self.calls += 1
+            raise RuntimeError("Unexpected retrieval call")
+
+    app.state.answer_adapter, app.state.query_adapter = NoModel(), NoRetrieval()
+    response = await api.post(f"/api/conversations/{chat}/messages/stream", json={
+        "client_message_id": str(uuid4()), "text": "你好！", "mode": "auto",
+    })
+    received = events(response)
+    assert [name for name, _ in received] == ["accepted", "saved"]
+    saved = received[-1][1]
+    assert saved["status"] == "needs_clarification" and saved["error_code"] is None
+    assert saved["route"] == "needs_clarification" and saved["citations"] == []
+    assert "请告诉我" in saved["text"]
+    assert app.state.answer_adapter.calls == app.state.query_adapter.calls == 0
 
 
 def events(response):

@@ -17,6 +17,50 @@ TOKENIZER_SOURCE = PROJECT_ROOT / '.local/runtime/tokenizer/o200k_base.tiktoken'
 _TOKENIZER_URL = 'https://openaipublic.blob.core.windows.net/encodings/o200k_base.tiktoken'
 
 
+def chunking_by_source_span(
+    tokenizer: Any,
+    content: str,
+    split_by_character: str | None = None,
+    split_by_character_only: bool = False,
+    chunk_overlap_token_size: int = 100,
+    chunk_token_size: int = 1200,
+) -> list[dict[str, Any]]:
+    """Pinned SDK callback: slice original characters, never decode token windows.
+
+    Byte-level BPE windows can split a Chinese character and introduce U+FFFD.
+    The SDK's safe span API verifies token budgets on complete source substrings.
+    Keep the legacy six-argument callback contract used by RAW ingestion.
+    """
+    if chunk_token_size <= 0 or not 0 <= chunk_overlap_token_size < chunk_token_size:
+        raise ValueError('Invalid chunk token size or overlap')
+    chunks: list[dict[str, Any]] = []
+    segments = content.split(split_by_character) if split_by_character else [content]
+    for segment in segments:
+        if split_by_character and split_by_character_only:
+            from lightrag.exceptions import ChunkTokenLimitExceededError
+
+            token_count = len(tokenizer.encode(segment))
+            if token_count > chunk_token_size:
+                # No private preview is attached to errors crossing this boundary.
+                raise ChunkTokenLimitExceededError(token_count, chunk_token_size)
+            parts = [segment]
+        else:
+            spans = tokenizer.split_by_token_limit(
+                segment, chunk_token_size, chunk_overlap_token_size,
+            )
+            parts = [segment[span.start:span.end] for span in spans]
+        for part in parts:
+            # Preserve the verified substring, including boundary whitespace:
+            # stripping can change BPE merges and exceed the checked token budget.
+            if part.strip():
+                chunks.append({
+                    'content': part,
+                    'tokens': len(tokenizer.encode(part)),
+                    'chunk_order_index': len(chunks),
+                })
+    return chunks
+
+
 def verify_sdk_revision() -> None:
     try:
         package = distribution('lightrag-hku')
@@ -105,6 +149,7 @@ def sdk_factory(
             doc_status_storage='PGDocStatusStorage',
             chunk_token_size=1200,
             chunk_overlap_token_size=100,
+            chunking_func=chunking_by_source_span,
             tokenizer=tokenizer,
             llm_model_name=llm_model_name,
             llm_model_func=llm_model_func,

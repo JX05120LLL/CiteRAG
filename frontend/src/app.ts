@@ -4,7 +4,9 @@ import { renderKnowledge } from './pages/knowledge';
 import { createDocumentsPanel } from './pages/documents';
 import { renderStatus } from './pages/status';
 import { renderWorkbench } from './pages/workbench';
-import { el } from './shared/dom';
+import { renderSources } from './pages/sources';
+import { renderVoice } from './pages/voice';
+import { action, el } from './shared/dom';
 import { renderHeader, renderManagementSidebar, renderSidebar } from './shared/shell';
 import type { AppState, Page } from './state';
 import { isKnowledgePending, knowledgeLimit } from './state';
@@ -40,9 +42,13 @@ export async function mountApp(root: HTMLElement, api: ApiClient): Promise<void>
   let chatOffset = 0;
   let listedChatIds = new Set<string>();
   const retryKeys = new Map<string, string>();
-  function openDocuments(base: KnowledgeBase) {
+  function openDocuments(base: KnowledgeBase, focusTasks = false) {
     void documentsPanel.open(base).then(() => {
-      if (state.page === 'knowledge' && documentsPanel.isOpen) root.querySelector<HTMLElement>('h1')?.focus();
+      if (state.page === 'knowledge' && documentsPanel.isOpen) {
+        const target = root.querySelector<HTMLElement>(focusTasks ? '#persistent-jobs' : 'h1');
+        target?.focus();
+        if (focusTasks) target?.scrollIntoView?.({ block: 'start' });
+      }
     });
   }
   function rememberSelection() {
@@ -131,6 +137,7 @@ export async function mountApp(root: HTMLElement, api: ApiClient): Promise<void>
     const chat = state.chats?.find((item) => item.id === id);
     if (!chat || state.chatPending) return;
     const currentChatGeneration = ++chatGeneration;
+    state.navigationOpen = false;
     state.selectedKbId = chat.kb_id;
     state.selectedChatId = chat.id;
     rememberSelection();
@@ -138,6 +145,7 @@ export async function mountApp(root: HTMLElement, api: ApiClient): Promise<void>
     state.chatRequestKey = state.chatRequestText = null;
     state.chatError = null;
     state.chatMessages = [];
+    state.selectedCitation = null;
     render();
     try {
       const messages = await api.conversationMessages(id);
@@ -439,6 +447,8 @@ export async function mountApp(root: HTMLElement, api: ApiClient): Promise<void>
     const previous = state.page;
     ++healthGeneration;
     state.page = next;
+    state.navigationOpen = false;
+    state.selectedCitation = null;
     render();
     if (next === 'status') void loadHealth();
     if (next === 'workbench' && previous !== 'workbench') void refresh();
@@ -448,14 +458,15 @@ export async function mountApp(root: HTMLElement, api: ApiClient): Promise<void>
   function render() {
     const skip = el('a', 'skip-link', '跳到主要内容');
     skip.href = '#main-content';
-    const isManagement = state.page !== 'workbench';
-    const shell = el('div', `app-shell${isManagement ? ' app-shell-management' : ''}`);
+    const isManagement = state.page === 'knowledge' || state.page === 'status';
+    const shell = el('div', `app-shell${isManagement ? ' app-shell-management' : ''}${state.page === 'voice' ? ' app-shell-voice' : ''}${state.navigationOpen ? ' navigation-open' : ''}`);
     const main = el('main', `main ${isManagement ? 'management' : 'workbench'}`);
     main.id = 'main-content';
     main.tabIndex = -1;
     if (state.page === 'knowledge' && documentsPanel.isOpen) main.append(documentsPanel.render());
     else if (state.page === 'knowledge') renderKnowledge(main, state, { refresh, createKnowledgeBase, beginRename, renameKnowledgeBase, cancelRename, openDocuments });
     else if (state.page === 'status') renderStatus(main, state, loadHealth);
+    else if (state.page === 'voice') renderVoice(main, state, navigate);
     else renderWorkbench(main, state, navigate, {
       refresh, selectChat, createChat, renameChat, deleteChat, retryChat, sendChat,
       selectKb: (id: string) => { state.selectedKbId = id; state.selectedChatId = null;
@@ -465,15 +476,41 @@ export async function mountApp(root: HTMLElement, api: ApiClient): Promise<void>
       setDraft: (text: string) => { state.chatDraft = text; if (text.trim() !== state.chatRequestText) {
         state.chatRequestKey = null; state.chatRequestText = null;
       } },
-      originalUrl: api.originalUrl,
+      selectCitation: (messageId, evidenceId) => {
+        state.selectedCitation = { messageId, evidenceId }; render();
+        root.querySelector<HTMLElement>('.source-inspector button')?.focus();
+      },
     });
-    shell.append(renderHeader(state, navigate));
+    if (state.page === 'workbench' && state.selectedCitation) {
+      const message = state.chatMessages.find((item) => item.message_id === state.selectedCitation?.messageId &&
+        item.status === 'answered' && !item.hidden);
+      const citation = message?.citations.find((item) => item.evidence_id === state.selectedCitation?.evidenceId);
+      if (message && citation && state.bases?.find((base) => base.id === state.selectedKbId)?.status === 'ready') {
+        main.classList.add('has-inspector');
+        main.append(renderSources(message.citations, citation, api.originalUrl, (next) => {
+          state.selectedCitation = { messageId: message.message_id, evidenceId: next.evidence_id }; render();
+          root.querySelector<HTMLElement>('.source-inspector button')?.focus();
+        }, () => { state.selectedCitation = null; render(); root.querySelector<HTMLElement>('.citation-trigger')?.focus(); }));
+      } else state.selectedCitation = null;
+    }
+    const toggleNavigation = () => { state.navigationOpen = !state.navigationOpen; render(); };
+    shell.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && state.navigationOpen) {
+        state.navigationOpen = false; render(); root.querySelector<HTMLElement>('.navigation-toggle')?.focus();
+      }
+    });
+    shell.append(renderHeader(state, navigate, toggleNavigation));
+    if (state.navigationOpen) {
+      const dismiss = action('', 'navigation-backdrop', toggleNavigation); dismiss.setAttribute('aria-label', '关闭导航');
+      shell.append(dismiss);
+    }
     if (isManagement) {
       const frame = el('div', 'management-frame');
-      frame.append(renderManagementSidebar(state, navigate, openCreate, openDocuments), main);
+      frame.append(renderManagementSidebar(state, navigate, openCreate, openDocuments, documentsPanel.currentBaseId), main);
       shell.append(frame);
-    } else shell.append(renderSidebar(state, navigate, refresh, createChat, selectChat,
-      hasMoreChats, loadMoreChats), main);
+    } else if (state.page === 'voice') shell.append(main);
+    else shell.append(renderSidebar(state, navigate, refresh, createChat, selectChat,
+      hasMoreChats, loadMoreChats, openDocuments), main);
     root.replaceChildren(skip, shell);
   }
 

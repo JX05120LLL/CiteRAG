@@ -115,20 +115,22 @@ def checked_answer(raw: str, evidence: dict[str, str]) -> tuple[str, str, list[s
         if not isinstance(text, str) or len(text) > 1500 or not isinstance(identifiers, list):
             raise ValueError
         if status == "answered" and (not text.strip() or len(identifiers) != 1):
-            raise ValueError
-        if len(identifiers) > 3 or len(set(identifiers)) != len(identifiers) or (
-            any(not isinstance(identifier, str) or identifier not in evidence
-                for identifier in identifiers)
-        ):
-            raise ValueError
+            if not text.strip():
+                raise ValueError
+            raise AnswerError("answer_reference_invalid")
+        if (len(identifiers) > 3 or any(
+            not isinstance(identifier, str) or identifier not in evidence
+            for identifier in identifiers)
+            or len(set(identifiers)) != len(identifiers)):
+            raise AnswerError("answer_reference_invalid")
         if status != "answered":
             return status, "", []
         if "http://" in text or "https://" in text:
-            raise ValueError
+            raise AnswerError("answer_source_mismatch")
         # This first slice publishes only extractive answers. The model may
         # select a relevant span, but it cannot invent new factual prose.
         if text.strip() not in evidence[identifiers[0]]:
-            raise ValueError
+            raise AnswerError("answer_source_mismatch")
         return status, text.strip(), identifiers
     except (ValueError, TypeError, KeyError):
-        raise AnswerError("answer_unverifiable") from None
+        raise AnswerError("answer_format_invalid") from None

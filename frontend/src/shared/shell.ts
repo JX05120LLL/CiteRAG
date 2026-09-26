@@ -4,7 +4,7 @@ import type { AppState, Page } from '../state';
 import { isKnowledgePending, kbStatuses, knowledgeLimit } from '../state';
 import { action, el, icon } from './dom';
 
-export function renderHeader(state: AppState, navigate: (page: Page) => void) {
+export function renderHeader(state: AppState, navigate: (page: Page) => void, toggleNavigation: () => void) {
   const {page} = state;
   const top = el('header', 'topbar');
   const brand = action('', 'brand', () => navigate('workbench'));
@@ -18,24 +18,31 @@ export function renderHeader(state: AppState, navigate: (page: Page) => void) {
   const context = el('div', 'top-context');
   if (page === 'workbench') context.append(icon('book'));
   const currentBase = state.bases?.find((base) => base.id === state.selectedKbId);
-  context.append(el('span', '', page === 'knowledge' ? '我的知识库' : page === 'status' ? '系统状态'
+  context.append(el('span', '', page === 'knowledge' ? '我的知识库' : page === 'status' ? '系统状态' : page === 'voice' ? '语音通话'
     : currentBase?.name ?? '尚未选择知识库'));
   if (page === 'workbench') {
     const rule = el('span', 'context-rule');
     rule.append(icon('lock'), el('span', '', '一个聊天固定一个知识库'));
     context.append(rule);
   }
-  top.append(brand, context, el('div', 'local-mode', '本地单用户'));
+  const menu = action('', 'icon-button navigation-toggle', toggleNavigation);
+  menu.append(icon('menu')); menu.setAttribute('aria-label', '切换导航');
+  menu.setAttribute('aria-expanded', String(state.navigationOpen === true));
+  menu.setAttribute('aria-controls', 'app-navigation');
+  if (page === 'voice') menu.hidden = true;
+  top.append(brand, menu, context, el('div', 'local-mode', '本地工作台 · 单用户'));
   return top;
 }
 
 export function renderSidebar(state: AppState, navigate: (page: Page) => void,
                               refresh: () => Promise<void>, createChat: () => Promise<void>,
                               selectChat: (id: string) => Promise<void>,
-                              hasMoreChats: boolean, loadMoreChats: () => Promise<void>) {
+                              hasMoreChats: boolean, loadMoreChats: () => Promise<void>,
+                              openDocuments?: (base: KnowledgeBase, focusTasks?: boolean) => void) {
   const {page, chats, loading} = state;
   const aside = el('aside', 'sidebar');
   aside.setAttribute('aria-label', '聊天与导航');
+  aside.id = 'app-navigation';
   const newChat = action('新建聊天', 'button new-chat', () => { void createChat(); });
   newChat.prepend(icon('plus'));
   newChat.disabled = state.chatPending || !state.bases?.some(
@@ -65,28 +72,46 @@ export function renderSidebar(state: AppState, navigate: (page: Page) => void,
   const privacy = el('p', 'privacy-note');
   privacy.append(icon('book'), el('span', '', '同一安装使用同一份本地资料'));
   footer.append(privacy);
-  const nav = el('nav', 'sidebar-nav');
+  const nav = el('nav', 'sidebar-nav primary-nav');
   nav.setAttribute('aria-label', '工作台导航');
   if (page !== 'workbench') {
     const back = action('返回工作台', 'nav-button', () => navigate('workbench'));
     back.prepend(icon('back'));
     nav.append(back);
   }
-  for (const [destination, label, symbol] of [['knowledge', '我的知识库', 'folder'], ['status', '系统状态', 'status']] as const) {
+  for (const [destination, label, symbol] of [['workbench', '对话工作台', 'book'], ['knowledge', '我的知识库', 'folder']] as const) {
     const link = action(label, `nav-button${page === destination ? ' is-active' : ''}`, () => navigate(destination));
     link.prepend(icon(symbol));
     if (page === destination) link.setAttribute('aria-current', 'page');
     nav.append(link);
   }
-  footer.append(nav);
-  aside.append(newChat, explanation, history, footer);
+  const taskBase = state.bases?.find((base) => base.id === state.selectedKbId);
+  const tasks = action('处理任务', 'nav-button', () => {
+    if (taskBase) { navigate('knowledge'); openDocuments?.(taskBase, true); }
+  });
+  tasks.prepend(icon('file')); tasks.disabled = !taskBase || !openDocuments;
+  tasks.title = taskBase ? '查看当前知识库的资料处理任务' : '先选择知识库，再查看该库的处理任务';
+  nav.append(tasks);
+  const status = action('系统状态', 'nav-button', () => navigate('status')); status.prepend(icon('status'));
+  footer.append(status);
+  const library = el('section', 'sidebar-libraries'); library.append(el('p', 'section-label', '我的知识库'));
+  for (const base of state.bases ?? []) {
+    const entry = action(base.name, 'nav-button library-entry', () => { navigate('knowledge'); openDocuments?.(base); });
+    entry.prepend(icon('book')); entry.append(el('span', `status-dot base-${base.status}`));
+    entry.setAttribute('aria-label', `查看知识库：${base.name} · ${kbStatuses[base.status]}`);
+    library.append(entry);
+  }
+  aside.append(newChat, explanation, nav, history, library, footer);
   return aside;
 }
 
 export function renderManagementSidebar(state: AppState, navigate: (page: Page) => void,
-                                        openCreate: () => void, openDocuments: (base: KnowledgeBase) => void) {
+                                        openCreate: () => void, openDocuments: (base: KnowledgeBase, focusTasks?: boolean) => void,
+                                        viewedKbId?: string | null) {
   const aside = el('aside', 'management-sidebar');
   aside.setAttribute('aria-label', '我的知识库与管理导航');
+  aside.id = 'app-navigation';
+  const back = action('返回工作台', 'button new-chat', () => navigate('workbench')); back.prepend(icon('back'));
   const heading = el('div', 'management-sidebar-heading');
   const create = action('', 'text-button', openCreate);
   create.append(icon('plus'));
@@ -112,15 +137,24 @@ export function renderManagementSidebar(state: AppState, navigate: (page: Page) 
     }
   } else list.append(el('li', 'management-sidebar-empty', state.loading ? '正在读取知识库…' : state.bases ? '暂无知识库' : '知识库列表暂不可用'));
   const footer = el('div', 'management-sidebar-footer');
-  const nav = el('nav', 'management-nav');
+  const nav = el('nav', 'management-nav primary-nav');
   nav.setAttribute('aria-label', '管理导航');
-  for (const [destination, label, symbol] of [['workbench', '返回工作台', 'book'], ['knowledge', '我的知识库', 'folder'], ['status', '系统状态', 'status']] as const) {
+  for (const [destination, label, symbol] of [['knowledge', '我的知识库', 'folder']] as const) {
     const link = action(label, `nav-button${state.page === destination ? ' is-active' : ''}`, () => navigate(destination));
     link.prepend(icon(symbol));
     if (state.page === destination) link.setAttribute('aria-current', 'page');
     nav.append(link);
   }
-  footer.append(el('p', 'section-label', '本地工作台'), nav);
-  aside.append(heading, hint, list, footer);
+  const taskBase = state.bases?.find((base) => base.id === (viewedKbId ?? state.selectedKbId)) ?? state.bases?.[0];
+  const tasks = action('处理任务', 'nav-button', () => {
+    if (taskBase) { navigate('knowledge'); openDocuments(taskBase, true); }
+  });
+  tasks.prepend(icon('file')); tasks.disabled = !taskBase || isKnowledgePending(state);
+  tasks.title = taskBase ? `查看 ${taskBase.name} 的处理任务` : '创建知识库后可查看该库的处理任务';
+  nav.append(tasks);
+  const status = action('系统状态', `nav-button${state.page === 'status' ? ' is-active' : ''}`, () => navigate('status'));
+  status.prepend(icon('status')); if (state.page === 'status') status.setAttribute('aria-current', 'page');
+  footer.append(el('p', 'section-label', '本地工作台'), status);
+  aside.append(back, nav, heading, hint, list, footer);
   return aside;
 }

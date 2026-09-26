@@ -85,6 +85,22 @@ export interface ParsedBlock {
   end: number;
 }
 
+export interface DocumentPage {
+  items: ManagedDocument[];
+  total: number;
+  counts: Partial<Record<ManagedDocument['status'], number>>;
+}
+export interface JobPage {
+  items: IngestionJob[];
+  total: number;
+  active_items: IngestionJob[];
+  failed_count: number;
+}
+
+function nonnegativeCount(value: unknown): value is number {
+  return Number.isSafeInteger(value) && Number(value) >= 0;
+}
+
 export interface SystemHealth {
   status: 'partial';
   mode: 'local_single_user';
@@ -398,6 +414,14 @@ export function createApi(fetcher: typeof fetch = globalThis.fetch) {
       collection<Record<string, unknown>>(await request(`/api/knowledge-bases/${encodeURIComponent(kbId)}/documents`), isDocument)
         .map((item) => ({ ...item, doc_code: item.doc_code ?? null, model_code: item.model_code ?? null,
           edition: item.edition ?? null }) as unknown as ManagedDocument),
+    documentPage: async (kbId: string, scope: 'current' | 'deleted', offset = 0): Promise<DocumentPage> => {
+      const value = await request(`/api/knowledge-bases/${encodeURIComponent(kbId)}/documents?scope=${scope}&limit=10&offset=${offset}`);
+      if (!isRecord(value) || !nonnegativeCount(value.total) || !isRecord(value.counts) ||
+          !Object.values(value.counts).every(nonnegativeCount)) throw new ApiError('invalid-response');
+      const items = collection<ManagedDocument>(value, isDocument).map((item) => ({ ...item,
+        doc_code: item.doc_code ?? null, model_code: item.model_code ?? null, edition: item.edition ?? null }));
+      return { items, total: value.total, counts: value.counts };
+    },
     updateDocumentAttributes: async (id: string, values: {doc_code: string | null; model_code: string | null; edition: string | null}): Promise<ManagedDocument> => {
       const value = await request(`/api/documents/${encodeURIComponent(id)}/attributes`, 'PATCH', values);
       if (!isRecord(value) || !isDocument(value)) throw new ApiError('invalid-response');
@@ -405,6 +429,16 @@ export function createApi(fetcher: typeof fetch = globalThis.fetch) {
     },
     jobs: async (kbId: string): Promise<IngestionJob[]> =>
       collection<Record<string, unknown>>(await request(`/api/knowledge-bases/${encodeURIComponent(kbId)}/jobs`), () => true).map(ingestionJob),
+    jobPage: async (kbId: string, offset = 0): Promise<JobPage> => {
+      const value = await request(`/api/knowledge-bases/${encodeURIComponent(kbId)}/jobs?scope=history&limit=10&offset=${offset}`);
+      if (!isRecord(value) || !nonnegativeCount(value.total) || !nonnegativeCount(value.failed_count) ||
+          !Array.isArray(value.active_items)) throw new ApiError('invalid-response');
+      const items = collection<Record<string, unknown>>(value, () => true).map(ingestionJob);
+      const active = value.active_items.map(ingestionJob);
+      if (active.some((job) => job.kb_id !== kbId || !['queued', 'running'].includes(job.status)) ||
+          items.some((job) => job.kb_id !== kbId || ['queued', 'running'].includes(job.status))) throw new ApiError('invalid-response');
+      return { items, total: value.total, active_items: active, failed_count: value.failed_count };
+    },
     job: async (id: string): Promise<IngestionJob> => ingestionJob(await request(`/api/jobs/${encodeURIComponent(id)}`)),
     uploadDocuments: async (kbId: string, files: File[], clientRequestId: string): Promise<IngestionJob> => {
       const data = new FormData();

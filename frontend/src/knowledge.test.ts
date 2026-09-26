@@ -382,7 +382,7 @@ describe('M1 knowledge mutations', () => {
     button(root, '返回工作台').click();
     finish(json({ ...base, name: '最终名称' }));
     await vi.waitFor(() => expect(root.querySelector('.knowledge-list')?.textContent).toContain('最终名称'));
-    expect(root.querySelector('h1')?.textContent).toBe('开始文字问答');
+    expect(root.querySelector('h1')?.textContent).toBe('从你的知识库开始提问');
     expect(root.querySelector('.management-content')).toBeNull();
   });
 });

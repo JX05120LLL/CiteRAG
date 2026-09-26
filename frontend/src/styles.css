@@ -300,8 +300,8 @@ summary:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
 .nav-button { min-height: 39px; padding: 7px 11px; font-weight: 500; }
 .nav-button.is-active { background: #e8e8e2; color: #1e1e1c; font-weight: 700; }
 .main { min-height: 0; }
-.workbench { height: calc(100dvh - 68px); min-height: 520px; overflow: hidden; background: #fff; }
-.conversation-content { flex: 1; overflow-y: auto; padding: 30px clamp(24px, 5vw, 76px) 24px; }
+.workbench { --chat-inset: clamp(24px, 5vw, 76px); --chat-width: 860px; height: calc(100dvh - 68px); min-height: 520px; overflow: hidden; background: #fff; }
+.conversation-content { flex: 1; overflow-y: auto; padding: 30px var(--chat-inset) 24px; }
 .eyebrow { color: #6b6b66; font-weight: 700; letter-spacing: .05em; }
 .workspace-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding-bottom: 20px; border-bottom: 1px solid var(--line); }
 .workspace-heading h1 { margin: 5px 0 4px; font-size: 28px; font-weight: 650; line-height: 1.3; }
@@ -318,7 +318,7 @@ summary:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
 .knowledge-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); max-width: none; gap: 10px; margin-top: 24px; }
 .knowledge-row { padding: 17px; border: 1px solid var(--line); border-radius: 10px; }
 .knowledge-row .metadata { text-align: right; }
-.chat-transcript { max-width: 860px; max-height: none; overflow: visible; padding: 12px 0 28px; }
+.chat-transcript { max-width: var(--chat-width); max-height: none; overflow: visible; padding: 12px 0 28px; }
 .chat-empty { margin: 48px 0; color: var(--muted); line-height: 1.8; }
 .chat-message { padding: 23px 0 26px; border-color: #e6e5e1; }
 .chat-question { display: grid; gap: 7px; padding: 0 0 16px; font-weight: 500; }
@@ -332,7 +332,7 @@ summary:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
 .status-failed, .status-interrupted { color: var(--error); background: #f9e9e7; }
 .chat-citation { border: 1px solid #e3e4dc; border-left: 3px solid #4f7560; border-radius: 5px; background: #fff; padding: 12px 14px; }
 .chat-citation blockquote { line-height: 1.75; }
-.composer-area { width: min(900px, calc(100% - 48px)); margin: 0 auto; padding: 10px 0 16px; background: #fff; }
+.composer-area { width: min(var(--chat-width), calc(100% - 2 * var(--chat-inset))); margin: 0 0 0 var(--chat-inset); padding: 10px 0 16px; background: #fff; }
 .composer { border-radius: 13px; padding: 10px 14px; box-shadow: 0 2px 10px #0000000a; }
 .composer:focus-within { border-color: #4f7560; box-shadow: 0 0 0 2px #4f756033; }
 .composer textarea { min-height: 46px; height: 46px; resize: vertical; font-size: 14px; line-height: 1.7; }
@@ -380,12 +380,22 @@ summary:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
 .document-upload .button { margin-left: auto; border-radius: 8px; }
 .document-toolbar { margin-top: 26px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
 .document-toolbar h2 { font-size: 17px; font-weight: 700; }
+.collection-pagination { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 12px; margin: 16px 0; }
+.collection-pagination .metadata { font-variant-numeric: tabular-nums; }
+.collection-pagination .button { padding: 8px 14px; }
+.collection-history { border-top: 1px solid var(--line); padding: 12px 0; }
+.history-toggle { font-weight: 600; padding: 8px 0; }
+.task-history-summary { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 20px; }
+.deleted-record { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.deleted-record .document-filename { flex: 1 1 220px; min-width: 0; overflow-wrap: anywhere; }
 .managed-documents, .ingestion-jobs { margin-top: 0; }
 .managed-document { align-items: center; gap: 14px; padding: 17px 0; }
 .document-description { display: grid; grid-template-columns: 42px minmax(0, 1fr); column-gap: 12px; align-items: center; flex: 1; }
 .document-type { grid-row: 1 / 4; display: grid; place-items: center; width: 42px; height: 46px; border: 1px solid #deded8; border-radius: 7px; background: #f5f5f1; font-size: 10px; font-weight: 800; }
 .document-filename { font-size: 13px; line-height: 1.5; }
 .document-description .metadata { font-size: 11px; }
+.document-description > .document-filename, .document-description > .metadata, .document-failure { grid-column: 2; }
+.document-failure { overflow-wrap: anywhere; }
 .document-status { grid-column: 2; width: fit-content; padding: 2px 7px; border-radius: 5px; font-size: 11px; font-weight: 700; background: #ecece8; color: #54544e; }
 .doc-ready { background: #e6f0e9; color: var(--good); }
 .doc-failed { background: #f9e9e7; color: var(--error); }
@@ -435,8 +445,8 @@ summary:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
   .nav-button { flex: 0 0 auto; width: auto; min-height: 32px; padding: 5px 8px; font-size: 11px; }
   .nav-button .icon { width: 15px; height: 15px; }
   .main { min-height: 0; }
-  .workbench { height: 100%; min-height: 0; overflow: hidden; }
-  .conversation-content { min-height: 0; overflow-y: auto; padding: 20px 16px 24px; }
+  .workbench { --chat-inset: 16px; height: 100%; min-height: 0; overflow: hidden; }
+  .conversation-content { min-height: 0; overflow-y: auto; padding: 20px var(--chat-inset) 24px; }
   .workspace-heading { display: block; }
   .workspace-heading h1 { font-size: 22px; }
   .chat-controls { margin-top: 12px; }
@@ -448,7 +458,7 @@ summary:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
   .chat-message { padding: 17px 0; }
   .chat-response { padding: 12px; }
   .chat-answer { font-size: 14px; }
-  .composer-area { width: 100%; margin: 0; padding: 10px 12px 14px; border-top: 1px solid var(--line); }
+  .composer-area { width: min(var(--chat-width), calc(100% - 2 * var(--chat-inset))); margin-left: var(--chat-inset); padding: 10px 0 14px; border-top: 1px solid var(--line); }
   .composer { padding: 8px 10px; }
   .composer textarea { min-height: 44px; height: 44px; resize: none; }
   .composer-toolbar { margin-top: 2px; }

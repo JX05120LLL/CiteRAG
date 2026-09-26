@@ -17,6 +17,139 @@ async function page(fetcher: typeof fetch) {
 afterEach(() => { document.body.replaceChildren(); sessionStorage.clear(); });
 
 describe('M0 local workbench', () => {
+  it('opens the dedicated unavailable voice page without requesting microphone or a voice API', async () => {
+    const calls: string[] = [];
+    const root = await page(async (url) => {
+      calls.push(String(url));
+      return json({ items: String(url).includes('knowledge-bases')
+        ? [{ id: 'kb', name: '合成库', status: 'ready' }] : [] });
+    });
+    button(root, '语音通话')?.click();
+    expect(root.querySelector('h1')?.textContent).toBe('语音通话');
+    expect(root.textContent).toContain('语音服务尚未接入');
+    expect(button(root, '连接语音')?.disabled).toBe(true);
+    expect(button(root, '静音')?.disabled).toBe(true);
+    expect(root.querySelector('.voice-transcript')).toBeNull();
+    expect(calls.some((path) => /voice|room|audio/.test(path))).toBe(false);
+    button(root, '返回聊天')?.click();
+    await vi.waitFor(() => expect(root.querySelector('textarea')).not.toBeNull());
+    expect(button(root, '添加图片')?.disabled).toBe(true);
+    expect(root.textContent).toContain('图片提问尚未接入');
+  });
+
+  it('opens a verified citation in an inspector and removes it when maintenance hides the answer', async () => {
+    let hidden = false;
+    const root = await page(async (url) => {
+      const path = String(url);
+      if (path.includes('knowledge-bases')) return json({ items: [{ id: 'kb', name: '合成库', status: hidden ? 'maintaining' : 'ready' }] });
+      if (path.endsWith('/messages')) return json({ items: [{
+        message_id: 'm', attempt_id: 'a', client_message_id: 'c', question: '合成问题',
+        text: '核验后的回答', mode: 'semantic', status: 'answered', kb_revision: 1,
+        error_code: null, created_at: '2026-09-24T00:00:00Z', saved: true, hidden,
+        citations: [{ evidence_id: 'e1', document_id: 'doc', filename: '合成原文.txt',
+          locator: { kind: 'lines', line_start: 2, line_end: 3 }, excerpt: '仅来自 API 的原文片段' }],
+      }] });
+      return json({ items: [{ id: 'chat', owner_id: 'local', kb_id: 'kb', title: '合成聊天', created_at: '2026-09-24T00:00:00Z' }] });
+    });
+    button(root, '合成聊天')?.click();
+    await vi.waitFor(() => expect(root.querySelector('.citation-trigger')).not.toBeNull());
+    (root.querySelector('.citation-trigger') as HTMLButtonElement).click();
+    const panel = root.querySelector('[aria-label="来源核查"]');
+    expect(panel?.textContent).toContain('仅来自 API 的原文片段');
+    expect(panel?.textContent).toContain('第 2–3 行');
+    expect(panel?.querySelector('a')?.getAttribute('href')).toBe('/api/documents/doc/original');
+    hidden = true;
+    button(root, '我的知识库')?.click();
+    button(root, '返回工作台')?.click();
+    await vi.waitFor(() => expect(root.textContent).toContain('旧知识回答与证据暂不显示'));
+    expect(root.querySelector('[aria-label="来源核查"]')).toBeNull();
+  });
+
+  it('opens and closes mobile navigation with the same accessible control', async () => {
+    const root = await page(async () => json({ items: [] }));
+    const toggle = root.querySelector<HTMLButtonElement>('[aria-label="切换导航"]');
+    expect(toggle?.getAttribute('aria-expanded')).toBe('false');
+    toggle?.click();
+    expect(root.querySelector('[aria-label="切换导航"]')?.getAttribute('aria-expanded')).toBe('true');
+    (root.querySelector('[aria-label="关闭导航"]') as HTMLButtonElement)?.click();
+    expect(root.querySelector('[aria-label="切换导航"]')?.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('closes navigation when selecting a saved chat', async () => {
+    const root = await page(async (url) => {
+      const path = String(url);
+      if (path.includes('knowledge-bases')) return json({ items: [{ id: 'kb', name: '合成库', status: 'ready' }] });
+      if (path.endsWith('/messages')) return json({ items: [] });
+      return json({ items: [{ id: 'chat', owner_id: 'local', kb_id: 'kb', title: '合成聊天', created_at: '2026-09-24T00:00:00Z' }] });
+    });
+    (root.querySelector('[aria-label="切换导航"]') as HTMLButtonElement).click();
+    button(root, '合成聊天')?.click();
+    await vi.waitFor(() => expect(root.querySelector('[aria-label="切换导航"]')?.getAttribute('aria-expanded')).toBe('false'));
+    expect(root.querySelector('[aria-label="关闭导航"]')).toBeNull();
+  });
+
+  it('opens processing tasks for the selected knowledge base through the document and job APIs', async () => {
+    const reads: string[] = [];
+    const root = await page(async (url) => {
+      const path = String(url); reads.push(path);
+      if (path.includes('/documents?')) return json({ items: [], total: 0, counts: {} });
+      if (path.includes('/jobs?')) return json({ items: [], total: 0, active_items: [], failed_count: 0 });
+      return json({ items: path === '/api/knowledge-bases' ? [{ id: 'kb', name: '合成库', status: 'ready' }] : [] });
+    });
+    const picker = root.querySelector<HTMLSelectElement>('#chat-kb')!;
+    picker.value = 'kb'; picker.dispatchEvent(new Event('change'));
+    expect(button(root, '处理任务')).toBeDefined();
+    button(root, '处理任务')?.click();
+    await vi.waitFor(() => expect(root.textContent).toContain('暂无进行中的任务'));
+    expect(reads).toContain('/api/knowledge-bases/kb/documents?scope=current&limit=10&offset=0');
+    expect(reads).toContain('/api/knowledge-bases/kb/jobs?scope=history&limit=10&offset=0');
+  });
+
+  it('opens tasks for the library being viewed instead of the fixed chat library', async () => {
+    const reads: string[] = [];
+    const root = await page(async (url) => {
+      const path = String(url); reads.push(path);
+      if (path.includes('/documents?')) return json({ items: [], total: 0, counts: {} });
+      if (path.includes('/jobs?')) return json({ items: [], total: 0, active_items: [], failed_count: 0 });
+      return json({ items: path === '/api/knowledge-bases'
+        ? [{ id: 'a', name: '库 A', status: 'ready' }, { id: 'b', name: '库 B', status: 'ready' }] : [] });
+    });
+    const picker = root.querySelector<HTMLSelectElement>('#chat-kb')!;
+    picker.value = 'a'; picker.dispatchEvent(new Event('change'));
+    button(root, '我的知识库')?.click();
+    (root.querySelector('[aria-label="查看资料与任务：库 B"]') as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(root.textContent).toContain('暂无进行中的任务'));
+    reads.length = 0;
+    button(root, '处理任务')?.click();
+    await vi.waitFor(() => expect(reads).toContain('/api/knowledge-bases/b/jobs?scope=history&limit=10&offset=0'));
+    expect(reads.some(path => path.includes('/knowledge-bases/a/'))).toBe(false);
+  });
+
+  it.each([
+    ['answer_unverifiable', '未通过格式或原文核验'],
+    ['answer_format_invalid', '模型返回的格式不完整'],
+    ['answer_reference_invalid', '引用编号未通过核验'],
+    ['answer_source_mismatch', '无法逐字匹配引用原文'],
+    ['answer_unavailable', '模型服务暂不可用'],
+    ['constructor', '回答未完成，请检查任务与服务状态'],
+    ['future_answer_error', '回答未完成，请检查任务与服务状态'],
+  ])('shows a safe explanation for %s while keeping retry available', async (code, reason) => {
+    const root = await page(async (input) => {
+      const path = String(input);
+      if (path === '/api/knowledge-bases') return json({ items: [{ id: 'kb', name: '合成库', status: 'ready' }] });
+      if (path === '/api/conversations/chat/messages') return json({ items: [{
+        message_id: 'message', attempt_id: 'attempt', client_message_id: 'client', question: '合成问题',
+        text: '', mode: 'auto', status: 'failed', kb_revision: 1, error_code: code,
+        created_at: '2026-09-24T00:00:00Z', saved: true, citations: [],
+      }] });
+      return json({ items: [{ id: 'chat', owner_id: 'local', kb_id: 'kb', title: '合成聊天',
+        created_at: '2026-09-24T00:00:00Z' }] });
+    });
+    button(root, '合成聊天')?.click();
+    await vi.waitFor(() => expect(root.querySelector('.chat-answer')?.textContent).toContain(reason));
+    expect(root.textContent).toContain(code);
+    expect(button(root, '重试回答')?.disabled).toBe(false);
+  });
   it('restores a selected chat from session storage and reloads saved messages after refresh', async () => {
     let messageReads = 0;
     const fetcher: typeof fetch = async (input) => {
@@ -92,7 +225,7 @@ describe('M0 local workbench', () => {
     expect(root.querySelector('form')).toBeNull();
     expect(root.textContent).not.toMatch(/管理员|登录|退出|账号/);
     for (const label of ['新建聊天', '发送']) expect(button(root, label)?.disabled).toBe(true);
-    expect(button(root, '添加图片')).toBeUndefined();
+    expect(button(root, '添加图片')?.disabled).toBe(true);
     expect(button(root, '开始语音')).toBeUndefined();
     expect(root.querySelector('textarea')?.disabled).toBe(true);
   });

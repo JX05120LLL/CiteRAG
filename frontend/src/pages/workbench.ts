@@ -1,7 +1,26 @@
 import type { AppState, Page } from '../state';
 import type { Citation } from '../api/client';
+import brandMark from '../../../assets/brand/mark.svg';
+import { locationText } from './sources';
 import { kbStatuses } from '../state';
 import { action, el, icon, alert, heading } from '../shared/dom';
+
+function answerFailure(code: string | null): string {
+  const reasons: Record<string, string> = {
+    answer_unverifiable: '模型输出未通过格式或原文核验。请重试，或把问题缩小到资料中的具体内容。',
+    answer_format_invalid: '模型返回的格式不完整或不符合要求。请重试，或缩小问题范围。',
+    answer_reference_invalid: '模型给出的引用编号未通过核验。请重试；当前未展示未核验的回答。',
+    answer_source_mismatch: '模型回答无法逐字匹配引用原文，或包含不允许的网址。请缩小问题范围后重试。',
+    answer_unavailable: '回答模型服务暂不可用。请检查系统状态、模型配置或供应商配额后重试。',
+    retrieval_failed: '检索或原文核对失败。请检查资料与任务状态后重试。',
+    rerank_missing: '检索没有完成必要的重排。请检查模型服务状态后重试。',
+    summary_unavailable: '聊天上下文摘要未完成。请检查模型服务后重试，或新建聊天。',
+    request_interrupted: '请求连接已中断。请刷新查看保存状态后重试。',
+    server_restarted: '服务重启中断了这次回答。请重试。',
+    kb_changed: '知识库已变化。请等待资料就绪后重新提问。',
+  };
+  return (code && Object.hasOwn(reasons, code) && reasons[code]) || '回答未完成，请检查任务与服务状态后重试。';
+}
 
 interface WorkbenchActions {
   refresh: () => Promise<void>;
@@ -13,36 +32,18 @@ interface WorkbenchActions {
   sendChat: () => Promise<void>;
   selectKb: (id: string) => void;
   setDraft: (text: string) => void;
-  originalUrl: (documentId: string) => string;
+  selectCitation: (messageId: string, evidenceId: string) => void;
 }
 
-function locationText(citation: Citation): string {
-  const place = citation.locator;
-  if (place.kind === 'page' && Number.isInteger(place.page)) return `第 ${place.page} 页`;
-  if (place.kind === 'lines' && Number.isInteger(place.line_start)) {
-    return place.line_end === place.line_start ? `第 ${place.line_start} 行`
-      : `第 ${place.line_start}–${place.line_end} 行`;
-  }
-  if (place.kind === 'paragraph' && Number.isInteger(place.paragraph)) return `第 ${place.paragraph} 段`;
-  if (place.kind === 'table' && Number.isInteger(place.table) && Number.isInteger(place.row)) {
-    return `表 ${place.table} 第 ${place.row} 行`;
-  }
-  return '来源片段';
-}
-
-function citationCard(citation: Citation, originalUrl: (documentId: string) => string): HTMLElement {
+function citationCard(citation: Citation, selected: boolean, open: () => void): HTMLElement {
   const card = el('li', 'chat-citation');
-  card.append(el('strong', '', `${citation.filename} · ${locationText(citation)}`),
-    el('blockquote', '', citation.excerpt));
-  const original = el('a', 'text-button', '下载原文核对');
-  original.href = originalUrl(citation.document_id);
-  original.download = '';
-  original.rel = 'noreferrer';
-  card.append(original);
+  const trigger = action(`${citation.filename} · ${locationText(citation)}`, 'citation-trigger', open);
+  trigger.prepend(icon('file')); trigger.setAttribute('aria-expanded', String(selected));
+  card.append(trigger);
   return card;
 }
 
-function composer(state: AppState, actions: WorkbenchActions) {
+function composer(state: AppState, actions: WorkbenchActions, navigate: (page: Page) => void) {
   const area = el('div', 'composer-area');
   const box = el('div', 'composer');
   const input = el('textarea');
@@ -75,12 +76,18 @@ function composer(state: AppState, actions: WorkbenchActions) {
     : current?.status === 'blocked' ? '知识库待修复，问答暂停'
     : current?.status === 'empty' ? '知识库尚无已核验资料'
     : !enabled ? '先选择就绪知识库并创建或打开聊天' : '先输入问题';
-  toolbar.append(el('span', 'composer-shortcut', 'Enter 发送 · Shift+Enter 换行'), send);
+  const image = action('添加图片', 'button secondary'); image.prepend(icon('image')); image.disabled = true;
+  image.title = '图片提问尚未接入'; image.setAttribute('aria-describedby', 'image-unavailable');
+  const context = el('span', 'composer-context', current?.name ?? '未选择知识库'); context.prepend(icon('book'));
+  const voice = action('语音通话', 'button secondary voice-entry', () => navigate('voice')); voice.prepend(icon('mic'));
+  voice.disabled = busy; voice.title = '打开通话页面；语音服务尚未接入';
+  toolbar.append(image, context, voice, send);
   box.append(toolbar);
   const hint = el('p', 'composer-note', current?.status === 'ready'
     ? '直接提问，编号和短语可在当前知识库中精确定位；回答只引用可核查的原文。'
     : '资料未就绪或正在维护时暂停问答；解析完成不等于已入库。');
-  area.append(box, hint);
+  const capability = el('p', 'composer-capability', '图片提问尚未接入；语音页面可查看接入状态。'); capability.id = 'image-unavailable';
+  area.append(box, hint, capability);
   return area;
 }
 
@@ -88,7 +95,7 @@ export function renderWorkbench(main: HTMLElement, state: AppState,
                                 navigate: (page: Page) => void, actions: WorkbenchActions) {
   const {loading, basesError: error, bases} = state;
   const content = el('div', 'conversation-content');
-  content.append(el('p', 'eyebrow', 'CiteRAG / 本地工作台 / 文字问答'));
+  main.classList.toggle('is-home', !state.selectedChatId);
   if (loading) {
     content.append(heading('正在连接工作台'), el('p', 'intro', '正在读取本地知识库与聊天…'));
     content.setAttribute('role', 'status');
@@ -102,14 +109,19 @@ export function renderWorkbench(main: HTMLElement, state: AppState,
   } else {
     const titlebar = el('div', 'workspace-heading');
     const titles = el('div');
-    titles.append(heading(state.selectedChatId ? state.chats?.find((chat) => chat.id === state.selectedChatId)?.title ?? '当前聊天' : '开始文字问答'));
+    if (!state.selectedChatId) {
+      const mark = el('img', 'welcome-mark'); mark.src = brandMark; mark.alt = ''; mark.width = 48; mark.height = 48;
+      titles.append(mark);
+    }
+    titles.append(heading(state.selectedChatId ? state.chats?.find((chat) => chat.id === state.selectedChatId)?.title ?? '当前聊天' : '从你的知识库开始提问'));
     const selectedBase = bases.find((base) => base.id === state.selectedKbId);
     titles.append(el('p', 'metadata', state.selectedChatId
       ? `固定知识库：${selectedBase?.name ?? '原知识库暂不可用'} · ${selectedBase ? kbStatuses[selectedBase.status] : '状态待确认'}`
       : '先选择已就绪知识库，再创建聊天。每个聊天固定一个知识库。'));
     titlebar.append(titles);
     if (state.selectedChatId) {
-      const controls = el('div', 'chat-controls');
+      const controls = el('details', 'chat-controls');
+      controls.append(el('summary', '', '聊天操作'));
       const rename = action('聊天改名', 'button secondary', () => { void actions.renameChat(); });
       const remove = action('删除聊天', 'button secondary', () => { void actions.deleteChat(); });
       rename.disabled = remove.disabled = state.chatPending;
@@ -169,7 +181,7 @@ export function renderWorkbench(main: HTMLElement, state: AppState,
           : message.status === 'running' && state.chatStreamAttemptId === message.attempt_id &&
             state.chatStreamText ? state.chatStreamText
           : message.status === 'running' ? '提问已保存，正在检索并核对来源…'
-          : '回答未完成，请检查任务与服务状态。';
+          : answerFailure(message.error_code);
         const response = el('div', 'chat-response');
         const status = message.hidden ? '已隐藏' : message.status === 'answered' ? '已保存并核验'
           : message.status === 'running' ? '处理中' : message.status === 'partial' ? '部分回答，未完成'
@@ -180,6 +192,10 @@ export function renderWorkbench(main: HTMLElement, state: AppState,
         response.append(el('span', 'message-role', 'CiteRAG 回答'), el('span', `message-status status-${message.status}`, status),
           el('p', 'chat-answer', answer));
         item.append(response);
+        if (!message.hidden && ['failed', 'interrupted', 'partial'].includes(message.status) && message.error_code) {
+          if (message.status !== 'failed') response.append(el('p', 'field-hint', answerFailure(message.error_code)));
+          if (/^[a-z][a-z0-9_]{0,63}$/.test(message.error_code)) response.append(el('p', 'metadata', `错误代码：${message.error_code}`));
+        }
         if (message.status === 'running' && state.chatStreamText &&
             state.chatStreamAttemptId === message.attempt_id)
           item.append(el('p', 'metadata', state.chatStreamSaved
@@ -190,7 +206,9 @@ export function renderWorkbench(main: HTMLElement, state: AppState,
         if (message.stale && !message.hidden) item.append(el('p', 'metadata', '基于旧资料；新提问会重新检索当前库。'));
         if (!message.hidden && message.status === 'answered' && message.citations.length) {
           const list = el('ul', 'chat-citations');
-          for (const citation of message.citations) list.append(citationCard(citation, actions.originalUrl));
+          for (const citation of message.citations) list.append(citationCard(citation,
+            state.selectedCitation?.messageId === message.message_id && state.selectedCitation.evidenceId === citation.evidence_id,
+            () => actions.selectCitation(message.message_id, citation.evidence_id)));
           item.append(list);
         }
         if (!message.hidden && !message.stale &&
@@ -204,7 +222,20 @@ export function renderWorkbench(main: HTMLElement, state: AppState,
       }
       content.append(transcript);
     }
-    content.append(el('p', 'scope-note', '一个聊天固定一个知识库。换库时需要新建聊天。'));
+    if (!state.selectedChatId && state.chats?.length) {
+      const recent = el('section', 'recent-chats'); recent.append(el('h2', '', '继续最近聊天'));
+      for (const chat of state.chats.slice(0, 3)) {
+        const entry = action(chat.title, 'recent-chat', () => { void actions.selectChat(chat.id); });
+        entry.prepend(icon('book')); entry.disabled = state.chatPending;
+        entry.append(el('span', 'metadata', bases.find((base) => base.id === chat.kb_id)?.name ?? '知识库暂不可用'));
+        recent.append(entry);
+      }
+      content.append(recent);
+    }
   }
-  main.append(content, composer(state, actions));
+  main.append(content, composer(state, actions, navigate));
+  if (!state.selectedChatId) {
+    const recent = content.querySelector('.recent-chats');
+    if (recent) main.append(recent);
+  }
 }

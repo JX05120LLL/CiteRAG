@@ -1,5 +1,7 @@
 # CiteRAG 可运行 UI：知识库、文字工作台与系统状态
 
+2026-09-26 的三页升级与当前截图请看 [UI 升级交付](UI-UPGRADE-20260926.md)。下文保留此前版本的实现与验证记录；其中“没有语音/图片入口”等界面描述已被新版本替代，实际通话和图片接口仍未接入。
+
 2026-09-25。当前运行界面以 `frontend/src/` 为准。旧 A 版 SVG/PNG 是历史设计资产，不再约束页面排布。保留 CiteRAG 名称与 `assets/brand/` 的无字「回响」Logo，继续使用原生 TypeScript、HTML/CSS 和 Vite。
 
 参考 [LiveRAG 当前 `master` 的知识库截图](https://github.com/YS-BW/LiveRAG/blob/208eede49e76cbb00ed85ee644576bd2520ce8f6/README.assets/%E7%9F%A5%E8%AF%86%E5%BA%93.png)及同提交的 `frontend/components/app/live-rag-knowledge-panel.tsx`：借鉴窄侧栏、右侧任务区、紧凑状态与资料清单。未复制其源码、图片、品牌或语音入口。

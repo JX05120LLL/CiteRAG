@@ -106,6 +106,8 @@ class DocumentService:
             return job
         if job.status not in {"failed", "interrupted"}:
             raise ServiceError(409, "job_not_retryable", "任务已完成，无需重试")
+        if job.error_code == "stale_job":
+            raise ServiceError(409, "stale_job", "此任务已失效，不能再次重试")
         cleaning = (job.cleanup_pending and job.retired_workspace is not None
                     and job.retired_workspace != kb.active_workspace)
         if job.error_code == "rebuild_required" and not cleaning:
@@ -126,10 +128,11 @@ class DocumentService:
             job.stage = "cleanup"
             kb.status = "maintaining"
         elif job.operation in {"delete", "replace"}:
-            kb.status = "maintaining"
             old = await self.session.get(Document, UUID(job.document_ids[0]),
                                          with_for_update=True)
-            if old.status == "ready":
+            if job.operation == "replace" or old.indexed_once:
+                kb.status = "maintaining"
+            if old.status in {"ready", "failed"}:
                 old.status = "deleting" if job.operation == "delete" else "replacing"
         # Retain engine_mutated: a failed retry can never release a blocked library.
         if not job.engine_mutated:
@@ -167,7 +170,8 @@ class DocumentService:
         await self.session.commit()
         return job
 
-    async def delete(self, owner: UUID, document_id: UUID, request_id: UUID):
+    async def delete(self, owner: UUID, document_id: UUID, request_id: UUID,
+                     *, allow_indexed: bool = True):
         await self.session.scalar(select(LocalProfile).where(
             LocalProfile.id == owner,
         ).with_for_update())
@@ -184,10 +188,15 @@ class DocumentService:
                 raise ServiceError(409, "idempotency_conflict", "请求键已用于其他维护操作")
             await self.session.commit()
             return prior
-        if kb.status != "ready" or document.status != "ready":
+        failed = document.status == "failed" and kb.status in {"empty", "ready", "blocked"}
+        if not failed and (kb.status != "ready" or document.status != "ready"):
             raise ServiceError(409, "kb_not_ready", "资料未就绪，暂不能删除")
         await no_active_job(self.session, kb.id)
-        kb.status, document.status = "maintaining", "deleting"
+        if document.indexed_once and not allow_indexed:
+            raise ServiceError(503, "ingestion_disabled", "索引维护尚未启用，不能受理删除")
+        if document.indexed_once:
+            kb.status = "maintaining"
+        document.status = "deleting"
         job = IngestionJob(kb_id=kb.id, client_request_id=request_id,
             operation="delete", fingerprint=fingerprint, document_ids=[str(document_id)],
             status="queued", stage="accepted", message="删除已受理，原文访问已暂停")

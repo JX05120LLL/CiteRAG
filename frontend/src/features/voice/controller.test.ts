@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { VoiceController } from './controller';
 import type { MediaRoom, RoomEvents } from './controller';
+import { ApiError } from '../../api/client';
+import type { ChatMessage } from '../../api/client';
 
 const details = { server_url: 'ws://127.0.0.1:7880', token: 'synthetic-token', room: 'test-room',
   conversation_id: 'chat', assistant: 'not_configured' as const, purpose: 'media_test' as const };
@@ -19,6 +21,95 @@ function fixture() {
 }
 
 describe('LiveKit media lifecycle', () => {
+  it('rejects old events while correction is pending and accepts its new generation', async () => {
+    const { controller, room, api } = fixture();
+    let push!: (event: import('../../api/client').VoiceEvent) => void;
+    let release!: (value: { generation: number }) => void;
+    room.discardOutput = vi.fn();
+    Object.assign(api, {
+      voiceStart: async () => ({ ...details, session_id: 's', control_token: 'synthetic-control-1234567890',
+        assistant_identity: 'assistant', assistant: 'starting', purpose: 'voice_assistant', lease_seconds: 40, generation: 0 }),
+      voiceEvents: async (_id: string, _control: string, signal: AbortSignal, callback: typeof push) => {
+        push = callback; await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve()));
+      },
+      voiceCorrection: () => new Promise<{ generation: number }>((resolve) => { release = resolve; }),
+      voiceEnd: async () => ({ status: 'ended' }),
+    });
+    await controller.connect('chat', true);
+    push({ type: 'transcript', seq: 1, session_id: 's', generation: 1, text: 'original', final: true, utterance: 1, revision: 1 });
+    const pending = controller.correctTranscript('corrected');
+    push({ type: 'transcript', seq: 2, session_id: 's', generation: 1, text: 'late old', final: true, utterance: 1, revision: 1 });
+    expect(controller.state.finalTranscript).toBe('original');
+    push({ type: 'transcript', seq: 3, session_id: 's', generation: 2, text: 'corrected', final: true, utterance: 1, revision: 2 });
+    release({ generation: 2 }); await pending;
+    expect(controller.state.finalTranscript).toBe('corrected');
+    expect(room.discardOutput).toHaveBeenLastCalledWith(2);
+    expect(room.discardOutput).toHaveBeenCalledTimes(3); // Do not discard new audio on HTTP acknowledgement.
+    await controller.hangup();
+  });
+  it('clears the previous chat history before starting a different call', async () => {
+    const { controller } = fixture();
+    controller.state.answers = [{ message_id: 'previous-chat' } as ChatMessage];
+    await controller.connect('different-chat');
+    expect(controller.state.answers).toEqual([]);
+    await controller.hangup();
+  });
+  it('allows an explicit new call after API restart invalidates the old lease', async () => {
+    const { controller, api } = fixture();
+    const start = vi.fn(async () => ({ ...details, session_id: 's',
+      control_token: 'synthetic-control-1234567890', assistant_identity: 'assistant',
+      assistant: 'starting', purpose: 'voice_assistant', lease_seconds: 40, generation: 0 }));
+    Object.assign(api, { voiceStart: start, voiceEnd: async () => { throw new ApiError('http', 'voice_session_missing'); } });
+    await controller.connect('chat', true);
+    await controller.hangup();
+    expect(controller.state.error).toBe('voice_session_ended');
+    await controller.connect('chat', true);
+    expect(start).toHaveBeenCalledTimes(2);
+    await controller.hangup();
+  });
+  it('revokes the server call even if local disconnect fails', async () => {
+    const { controller, room, api } = fixture();
+    const end = vi.fn(async () => ({ status: 'ended' }));
+    Object.assign(api, { voiceStart: async () => ({ ...details, session_id: 's',
+      control_token: 'synthetic-control-1234567890', assistant_identity: 'assistant',
+      assistant: 'starting', purpose: 'voice_assistant', lease_seconds: 40, generation: 0 }),
+      voiceEnd: end });
+    await controller.connect('chat', true);
+    vi.mocked(room.disconnect).mockRejectedValue(new Error('synthetic disconnect failure'));
+    await controller.hangup();
+    expect(end).toHaveBeenCalledWith('s', 'synthetic-control-1234567890');
+  });
+  it('keeps media connection separate from assistant readiness and stops stale output', async () => {
+    let push!: (event: import('../../api/client').VoiceEvent) => void;
+    let events!: RoomEvents;
+    const history = vi.fn(async () => []);
+    const room = { connect: async () => {}, microphone: async () => {}, output: async () => {},
+      disconnect: async () => {}, discardOutput: vi.fn() };
+    const api = { voiceToken: async () => details,
+      voiceStart: async () => ({ ...details, session_id: 's', control_token: 'synthetic-control-1234567890',
+        assistant_identity: 'assistant', assistant: 'starting' as const, purpose: 'voice_assistant' as const,
+        lease_seconds: 40, generation: 0 }),
+      voiceEvents: async (_id: string, _control: string, signal: AbortSignal, callback: typeof push) => {
+        push = callback; await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve()));
+      }, voiceRenew: async () => ({ generation: 0 }), voiceStop: async () => ({ generation: 1 }),
+      voiceEnd: async () => ({ status: 'ended' }), conversationMessages: history };
+    const controller = new VoiceController(api, vi.fn(), async (callbacks) => { events = callbacks; return room; });
+    await controller.connect('chat', true);
+    expect(controller.state.phase).toBe('connected');
+    expect(controller.state.assistantPhase).toBe('starting');
+    push({ type: 'ready', phase: 'listening', seq: 1, generation: 0, session_id: 's' });
+    expect(controller.state.assistantPhase).toBe('listening');
+    events.reconnecting(); events.reconnected();
+    await vi.waitFor(() => expect(history).toHaveBeenCalledTimes(2));
+    expect(history).toHaveBeenLastCalledWith('chat');
+    await controller.stopAnswer();
+    expect(room.discardOutput).toHaveBeenCalled();
+    push({ type: 'phase', phase: 'speaking', seq: 2, generation: 0, session_id: 's' });
+    expect(controller.state.assistantPhase).not.toBe('speaking');
+    await controller.hangup();
+    push({ type: 'ready', phase: 'listening', seq: 3, generation: 2, session_id: 's' });
+    expect(controller.state.phase).toBe('idle');
+  });
   it('keeps audio connected when only the input visualizer is unavailable', async () => {
     const { controller, event } = fixture();
     await controller.connect('chat');

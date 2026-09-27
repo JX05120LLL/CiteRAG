@@ -11,6 +11,7 @@ export async function createMediaRoom(events: RoomEvents): Promise<MediaRoom> {
   const tracks = new Set<import('livekit-client').RemoteAudioTrack>();
   let outputEnabled = true;
   let disposed = false;
+  let minimumGeneration = 0;
   let meter: ReturnType<typeof createAudioAnalyser> | null = null;
   let frame = 0;
   async function stopMeter() {
@@ -46,8 +47,11 @@ export async function createMediaRoom(events: RoomEvents): Promise<MediaRoom> {
       events.meterUnavailable?.();
     }
   }
-  room.on(RoomEvent.TrackSubscribed, (track) => {
+  room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
     if (track.kind !== Track.Kind.Audio) return;
+    if (events.assistantIdentity && (participant.identity !== events.assistantIdentity ||
+        !/^citerag-output-\d+$/.test(publication.trackName) ||
+        Number(publication.trackName.split('-').at(-1)) < minimumGeneration)) return;
     const audio = track as import('livekit-client').RemoteAudioTrack;
     tracks.add(audio);
     const element = audio.attach(); element.muted = !outputEnabled; host.append(element);
@@ -57,6 +61,8 @@ export async function createMediaRoom(events: RoomEvents): Promise<MediaRoom> {
     if (track.kind !== Track.Kind.Audio) return;
     const audio = track as import('livekit-client').RemoteAudioTrack;
     for (const element of audio.detach()) element.remove();
+    // SDK may detach internally before this event; remove its empty media nodes too.
+    for (const element of host.querySelectorAll('audio')) if (!element.srcObject) element.remove();
     tracks.delete(audio); events.remoteAudio(tracks.size);
   });
   room.on(RoomEvent.Disconnected, events.disconnected);
@@ -66,6 +72,14 @@ export async function createMediaRoom(events: RoomEvents): Promise<MediaRoom> {
     if (!room.canPlaybackAudio) events.playbackRequired();
   });
   return {
+    discardOutput: (generation) => {
+      minimumGeneration = generation;
+      for (const track of tracks) {
+        for (const element of track.detach()) { element.pause(); element.srcObject = null; element.remove(); }
+      }
+      for (const element of host.querySelectorAll('audio')) { element.pause(); element.srcObject = null; element.remove(); }
+      tracks.clear(); events.remoteAudio(0);
+    },
     connect: (url, token) => room.connect(url, token, { autoSubscribe: true,
       websocketTimeout: 8000, peerConnectionTimeout: 10000 }),
     microphone: async (enabled) => {
@@ -83,7 +97,7 @@ export async function createMediaRoom(events: RoomEvents): Promise<MediaRoom> {
       disposed = true;
       room.removeAllListeners();
       for (const publication of room.localParticipant.audioTrackPublications.values()) publication.track?.stop();
-      for (const track of tracks) for (const element of track.detach()) element.remove();
+      for (const track of tracks) for (const element of track.detach()) { element.pause(); element.srcObject = null; element.remove(); }
       tracks.clear(); host.remove();
       await stopMeter();
       await room.disconnect(true);

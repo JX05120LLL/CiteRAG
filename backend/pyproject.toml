@@ -23,6 +23,11 @@ rag = [
 ]
 voice = [
     "livekit-api==1.2.1",
+    "livekit==1.1.20",
+    "websockets==16.0",
+    "onnxruntime==1.30.0",
+    "numpy==2.5.3",
+    "av==18.1.0",
 ]
 
 [dependency-groups]

@@ -29,6 +29,7 @@ from app.rag.owner import ApiOwner, OwnerLost
 from app.rag.runtime import RagRuntime
 from app.services.conversation_retention import RetentionRunner
 from app.services.errors import ServiceError
+from app.voice.runtime import VoiceRuntime
 
 
 def error_response(status: int, code: str, message: str) -> JSONResponse:
@@ -109,6 +110,8 @@ def create_app(
                 stack.push_async_callback(retention.close)
                 await retention.start()
                 application.state.retention_runner = retention
+                stack.push_async_callback(application.state.voice_runtime.close)
+                await application.state.voice_runtime.start()
                 if settings.backup_enabled:
                     backup = DailyBackupRunner(
                         settings, runtime, application.state.owner.assert_owned,
@@ -136,6 +139,7 @@ def create_app(
     application.state.answer_enabled = settings.answer_enabled
     application.state.query_adapter = None
     application.state.answer_adapter = None
+    application.state.voice_runtime = VoiceRuntime(application)
 
     @application.middleware("http")
     async def request_boundaries(request: Request, call_next):
@@ -151,6 +155,8 @@ def create_app(
                 await application.state.backup_gate.enter()
                 admitted = True
             response = await call_next(request)
+            if admitted:
+                await application.state.voice_runtime.reconcile()
             if owner is not None:
                 owner.assert_owned()
         except OwnerLost:

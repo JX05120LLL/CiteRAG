@@ -82,12 +82,14 @@ class RetryRequest(BaseModel):
 @router.post("/conversations/{conversation_id}/messages")
 async def ask(conversation_id: UUID, body: AskRequest, request: Request,
               owner: LocalOwner, session: Session):
+    request.app.state.voice_runtime.registry.require_text(conversation_id)
     if not request.app.state.answer_enabled:
         raise ServiceError(503, "answer_disabled", "文字检索与模型回答尚未启用")
     runtime = request.app.state.rag_runtime
     retriever = request.app.state.query_adapter or LightRAGQueryAdapter(runtime)
     answerer = request.app.state.answer_adapter or LightRAGAnswerAdapter(runtime)
-    return await AnswerService(session).ask(
+    return await AnswerService(session,
+        admission=request.app.state.voice_runtime.registry.require_text).ask(
         owner, conversation_id, body.client_message_id, body.text, retriever, answerer,
         mode=body.mode, exact=body.exact.model_dump(exclude_none=True) if body.exact else None,
     )
@@ -101,6 +103,7 @@ def _event(name: str, value: dict) -> str:
 @router.post("/conversations/{conversation_id}/messages/stream")
 async def ask_stream(conversation_id: UUID, body: AskRequest, request: Request,
                      owner: LocalOwner):
+    request.app.state.voice_runtime.registry.require_text(conversation_id)
     if not request.app.state.answer_enabled:
         raise ServiceError(503, "answer_disabled", "文字检索与模型回答尚未启用")
     runtime = request.app.state.rag_runtime
@@ -124,7 +127,8 @@ async def ask_stream(conversation_id: UUID, body: AskRequest, request: Request,
         async def produce():
             try:
                 async with database.sessions() as session:
-                    view = await AnswerService(session).ask(
+                    view = await AnswerService(session,
+                        admission=request.app.state.voice_runtime.registry.require_text).ask(
                         owner, conversation_id, body.client_message_id, body.text,
                         retriever, answerer, mode=body.mode,
                         exact=body.exact.model_dump(exclude_none=True) if body.exact else None,
@@ -176,10 +180,13 @@ async def list_messages(conversation_id: UUID, owner: LocalOwner, session: Sessi
 @router.post("/conversations/{conversation_id}/messages/{message_id}/retry")
 async def retry_answer(conversation_id: UUID, message_id: UUID, body: RetryRequest,
                        request: Request, owner: LocalOwner, session: Session):
+    request.app.state.voice_runtime.registry.require_text(conversation_id)
     if not request.app.state.answer_enabled:
         raise ServiceError(503, "answer_disabled", "文字检索与模型回答尚未启用")
     runtime = request.app.state.rag_runtime
     retriever = request.app.state.query_adapter or LightRAGQueryAdapter(runtime)
     answerer = request.app.state.answer_adapter or LightRAGAnswerAdapter(runtime)
-    return await AnswerService(session).retry(owner, conversation_id, message_id,
+    return await AnswerService(session,
+        admission=request.app.state.voice_runtime.registry.require_text).retry(
+                                              owner, conversation_id, message_id,
                                               body.attempt_id, retriever, answerer)

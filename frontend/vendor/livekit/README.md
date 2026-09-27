@@ -1,5 +1,7 @@
 # LiveKit 官方语音 UI 移植来源
 
+M2 2026-09-27：该MIT许可覆盖UI布局；新增Python RTC/管理SDK依据各自Apache-2.0许可安装，不能混称MIT。React Voice共用原控制器与同进程后端worker，未安装官方React组件/Agents SDK。链路、精确版本和语音验证边界见 [M2交付](../../../docs/development/M2-VOICE-VALIDATION.md)。
+
 来源：[livekit-examples/agent-starter-react](https://github.com/livekit-examples/agent-starter-react)，固定提交 `c5d78a6c381a0ac80b081cf6aeb8ac454d00ca78`，MIT，许可全文见 [LICENSE](LICENSE)。
 
 2026-09-27 用户选定 B 并要求官方语音界面融合。当前 [React Voice](../../src/react/Voice.tsx) 采用下述欢迎/会话布局，以 Ant Design 与 B tokens 重写，工作台和独立入口共用；媒体沿用现有 VoiceController / livekit-client 单生命周期。未安装 LiveKit React 组件包，不运行官方 Next.js/Cloud 或独立 Agents 后端，也不引入 Tailwind。许可全文继续保留。下方原生实现与蓝色 token 是 2026-09-26 的历史范围，当前主题为 B 的绿色。

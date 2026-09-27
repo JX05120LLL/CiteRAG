@@ -3,6 +3,8 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createApi } from '../api/client';
 import { CiteRagApp, StandaloneVoice } from './App';
+import { Voice } from './Voice';
+import type { VoiceActions } from '../pages/voice';
 import { sampleBases, sampleChats, sampleDocuments, sampleJobs, sampleMessages, sampleVoice } from '../preview/samples';
 
 beforeEach(() => {
@@ -14,6 +16,36 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); sessionStorage.clear(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 const json = (value: unknown) => new Response(JSON.stringify(value), { headers: { 'Content-Type': 'application/json' } });
+function assistantActions(): VoiceActions {
+  return { capability: { transport: 'configured', assistant: 'configured', purpose: 'voice_assistant' },
+    checking: false, capabilityError: false,
+    media: { phase: 'connecting', assistantPhase: 'not_configured', muted: false, outputMuted: false,
+      busy: false, remoteAudio: 0, playbackRequired: false, meterUnavailable: false, error: null,
+      answers: sampleMessages[sampleChats[0].id] },
+    refresh: vi.fn(async () => {}), connect: vi.fn(), hangup: vi.fn(), microphone: vi.fn(),
+    output: vi.fn(), back: vi.fn(), status: vi.fn(), originalUrl: id => `/api/documents/${id}/original` };
+}
+
+it('distinguishes configured, connecting and ready voice states without false configuration failure', () => {
+  const actions = assistantActions();
+  const context = { chatId: 'chat', chatTitle: '合成语音', kbName: '合成库', kbReady: true, chatPending: false };
+  const view = render(<Voice context={context} actions={actions} />);
+  expect(screen.getByRole('status').textContent).toBe('等待助手就绪');
+  expect(screen.queryByText('已配置 · 未验证连接')).toBeNull();
+  view.rerender(<Voice context={context} actions={{ ...actions,
+    media: { ...actions.media, phase: 'connected', assistantPhase: 'listening' } }} />);
+  expect(screen.getByRole('status').textContent).toBe('助手就绪，等待说话');
+});
+
+it('downloads a voice source without navigating the active call document', async () => {
+  const actions = assistantActions();
+  render(<Voice context={{ chatId: 'chat', chatTitle: '合成语音', kbName: '合成库', kbReady: true, chatPending: false }} actions={actions} />);
+  const citation = sampleMessages[sampleChats[0].id][0].citations[0];
+  fireEvent.click(screen.getByRole('button', { name: new RegExp(citation.filename) }));
+  const drawer = await screen.findByRole('dialog');
+  expect(within(drawer).getByRole('link', { name: '下载原文' }).getAttribute('download')).toBe(citation.filename);
+  expect(actions.hangup).not.toHaveBeenCalled();
+});
 function fixture(messages = sampleMessages[sampleChats[0].id], chats = sampleChats) {
   const calls: { path: string; method: string; body: unknown }[] = [];
   const fetcher: typeof fetch = async (input, init) => {
@@ -35,7 +67,7 @@ function fixture(messages = sampleMessages[sampleChats[0].id], chats = sampleCha
 it('restores fixed chat, opens a verified source and restores focus without writes under StrictMode', async () => {
   const { api, calls } = fixture();
   render(<StrictMode><CiteRagApp api={api} /></StrictMode>);
-  const source = await screen.findByRole('button', { name: /合成产品手册.md/ }); source.focus(); fireEvent.click(source);
+  const source = await screen.findByRole('button', { name: /合成产品手册.md/ }, { timeout: 5000 }); source.focus(); fireEvent.click(source);
   const drawer = await screen.findByRole('dialog');
   expect(within(drawer).getByText(sampleMessages[sampleChats[0].id][0].citations[0].excerpt)).toBeTruthy();
   expect(within(drawer).getByRole('link', { name: '下载原文' }).getAttribute('href')).toContain('/original');

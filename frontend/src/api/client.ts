@@ -14,8 +14,8 @@ export interface Conversation {
 
 export interface VoiceCapability {
   transport: 'disabled' | 'not_configured' | 'configured';
-  assistant: 'not_configured';
-  purpose: 'media_test';
+  assistant: 'not_configured' | 'configured';
+  purpose: 'media_test' | 'voice_assistant';
 }
 export interface VoiceConnection {
   server_url: string;
@@ -24,6 +24,30 @@ export interface VoiceConnection {
   conversation_id: string;
   assistant: 'not_configured';
   purpose: 'media_test';
+}
+
+export interface VoiceSessionConnection extends Omit<VoiceConnection, 'assistant' | 'purpose'> {
+  session_id: string;
+  control_token: string;
+  assistant_identity: string;
+  assistant: 'starting';
+  purpose: 'voice_assistant';
+  lease_seconds: number;
+  generation: number;
+}
+export interface VoiceEvent {
+  session_id: string;
+  seq: number;
+  generation: number;
+  type: 'ready' | 'phase' | 'transcript' | 'answer' | 'error' | 'interrupted' | 'ended' | 'playout_drained';
+  phase?: string;
+  text?: string;
+  final?: boolean;
+  utterance?: number;
+  revision?: number;
+  answer?: ChatMessage;
+  code?: string;
+  reason?: string;
 }
 
 function localVoiceUrl(value: unknown): value is string {
@@ -314,14 +338,14 @@ function chatMessage(value: unknown): ChatMessage {
 
 export function createApi(fetcher: typeof fetch = globalThis.fetch) {
   async function request(path: string, method: 'GET' | 'POST' | 'PATCH' | 'DELETE' = 'GET', body?: unknown,
-                         timeoutMs = 10000): Promise<unknown> {
+                         timeoutMs = 10000, extraHeaders: Record<string, string> = {}): Promise<unknown> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const multipart = body instanceof FormData;
       const response = await fetcher(path, {
         method, credentials: 'omit',
-        headers: { Accept: 'application/json', ...(body === undefined || multipart ? {} : { 'Content-Type': 'application/json' }) },
+        headers: { Accept: 'application/json', ...extraHeaders, ...(body === undefined || multipart ? {} : { 'Content-Type': 'application/json' }) },
         ...(body === undefined ? {} : { body: multipart ? body : JSON.stringify(body) }), signal: controller.signal,
       });
       let value: unknown = null;
@@ -525,7 +549,8 @@ export function createApi(fetcher: typeof fetch = globalThis.fetch) {
     voiceStatus: async (): Promise<VoiceCapability> => {
       const value = await request('/api/voice/status');
       if (!isRecord(value) || !['disabled', 'not_configured', 'configured'].includes(String(value.transport)) ||
-          value.assistant !== 'not_configured' || value.purpose !== 'media_test') throw new ApiError('invalid-response');
+          !['not_configured', 'configured'].includes(String(value.assistant)) ||
+          !['media_test', 'voice_assistant'].includes(String(value.purpose))) throw new ApiError('invalid-response');
       return value as unknown as VoiceCapability;
     },
     voiceToken: async (conversation: string): Promise<VoiceConnection> => {
@@ -535,6 +560,84 @@ export function createApi(fetcher: typeof fetch = globalThis.fetch) {
           value.conversation_id !== conversation || value.assistant !== 'not_configured' ||
           value.purpose !== 'media_test') throw new ApiError('invalid-response');
       return value as unknown as VoiceConnection;
+    },
+    voiceStart: async (conversation: string, key: string): Promise<VoiceSessionConnection> => {
+      const value = await request(`/api/conversations/${encodeURIComponent(conversation)}/voice/sessions`, 'POST', { client_request_id: key });
+      if (!isRecord(value) || !localVoiceUrl(value.server_url) || value.conversation_id !== conversation ||
+          typeof value.token !== 'string' || !value.token || value.token.length > 8192 ||
+          typeof value.room !== 'string' || typeof value.session_id !== 'string' ||
+          typeof value.control_token !== 'string' || value.control_token.length < 20 ||
+          typeof value.assistant_identity !== 'string' || value.assistant !== 'starting' ||
+          value.purpose !== 'voice_assistant' || !Number.isInteger(value.generation) ||
+          value.lease_seconds !== 40) throw new ApiError('invalid-response');
+      return value as unknown as VoiceSessionConnection;
+    },
+    voiceRenew: async (id: string, control: string, reconnect = false): Promise<{ generation: number }> => {
+      const value = await request(`/api/voice/sessions/${encodeURIComponent(id)}/renew`, 'POST', { reconnect }, 10000,
+        { 'X-CiteRAG-Voice-Control': control });
+      if (!isRecord(value) || !Number.isInteger(value.generation)) throw new ApiError('invalid-response');
+      return { generation: Number(value.generation) };
+    },
+    voiceStop: async (id: string, control: string): Promise<{ generation: number }> => {
+      const value = await request(`/api/voice/sessions/${encodeURIComponent(id)}/stop`, 'POST', {}, 10000,
+        { 'X-CiteRAG-Voice-Control': control });
+      if (!isRecord(value) || !Number.isInteger(value.generation)) throw new ApiError('invalid-response');
+      return { generation: Number(value.generation) };
+    },
+    voiceCorrection: async (id: string, control: string, utterance: number, revision: number, text: string): Promise<{ generation: number }> => {
+      const value = await request(`/api/voice/sessions/${encodeURIComponent(id)}/correction`, 'POST', { utterance, revision, text }, 10000,
+        { 'X-CiteRAG-Voice-Control': control });
+      if (!isRecord(value) || value.status !== 'accepted' || !Number.isInteger(value.generation) || Number(value.generation) < 0)
+        throw new ApiError('invalid-response');
+      return { generation: Number(value.generation) };
+    },
+    voiceEnd: async (id: string, control: string) => {
+      const value = await request(`/api/voice/sessions/${encodeURIComponent(id)}/end`, 'POST', {}, 10000,
+        { 'X-CiteRAG-Voice-Control': control });
+      if (!isRecord(value) || value.status !== 'ended') throw new ApiError('invalid-response');
+      return value;
+    },
+    voiceEvents: async (id: string, control: string, signal: AbortSignal, changed: (event: VoiceEvent) => void) => {
+      const response = await fetcher(`/api/voice/sessions/${encodeURIComponent(id)}/events`, {
+        credentials: 'omit', headers: { Accept: 'text/event-stream', 'X-CiteRAG-Voice-Control': control }, signal,
+      });
+      if (!response.ok || !response.body || !response.headers.get('Content-Type')?.startsWith('text/event-stream'))
+        throw new ApiError('network', 'voice_events_failed');
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder(); let buffer = ''; let seq = -1;
+      try {
+        while (!signal.aborted) {
+          const chunk = await reader.read();
+          if (chunk.done) return;
+          buffer += decoder.decode(chunk.value, { stream: true });
+          buffer = buffer.replaceAll('\r\n', '\n');
+          if (buffer.length > 65536) throw new ApiError('invalid-response');
+          let boundary: number;
+          while ((boundary = buffer.indexOf('\n\n')) >= 0) {
+            const frame = buffer.slice(0, boundary); buffer = buffer.slice(boundary + 2);
+            if (frame.startsWith(':')) continue;
+            const lines = frame.split('\n');
+            if (lines[0] !== 'event: voice' || !lines[1]?.startsWith('data: ')) throw new ApiError('invalid-response');
+            const event: unknown = JSON.parse(lines[1].slice(6));
+            if (!isRecord(event) || event.session_id !== id || !Number.isInteger(event.seq) ||
+                !Number.isInteger(event.generation) || Number(event.generation) < 0 ||
+                !['ready', 'phase', 'transcript', 'answer', 'error', 'interrupted', 'ended', 'playout_drained'].includes(String(event.type)))
+              throw new ApiError('invalid-response');
+            if (Number(event.seq) <= seq) continue;
+            if (seq >= 0 && Number(event.seq) !== seq + 1) throw new ApiError('network', 'voice_event_gap');
+            seq = Number(event.seq);
+            if (event.type === 'answer') {
+              const answer = chatMessage(event.answer);
+              if (!answer.saved || answer.status === 'running') throw new ApiError('invalid-response');
+              event.answer = answer;
+            }
+            if (event.type === 'transcript' && (typeof event.text !== 'string' || event.text.length > 1000 ||
+                typeof event.final !== 'boolean' || !Number.isInteger(event.utterance) || !Number.isInteger(event.revision)))
+              throw new ApiError('invalid-response');
+            changed(event as unknown as VoiceEvent);
+          }
+        }
+      } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
     },
     health: async (): Promise<SystemHealth> => {
       const value = await request('/api/status');

@@ -33,3 +33,12 @@
   .official-voice-controls .ant-btn-lg { min-width: 0; max-width: 100%; font-size: 14px; }.standalone-brand { padding: 18px 12px; }
   .citerag-app .kb-cards .ant-card-head { flex-wrap: wrap; }.citerag-app .ant-card-body { padding: 18px; }.citerag-app .ant-descriptions-item-content { overflow-wrap: anywhere; }
 }
+/* Real subtitles and saved voice answers share the B theme. */
+.voice-dialogue { display: grid; gap: 16px; margin-top: 20px; min-width: 0; }
+.voice-dialogue .ant-card-head-title { white-space: normal; overflow-wrap: anywhere; }
+.voice-transcript, .voice-answer { white-space: pre-wrap; overflow-wrap: anywhere; }
+.voice-transcript { max-height: 180px; overflow-y: auto; }
+.voice-answer { line-height: 1.8; }
+.voice-source-button { height: auto; min-height: 36px; max-width: 100%; white-space: normal; }
+.voice-source-button > span { overflow-wrap: anywhere; }
+.voice-question p { max-height: 180px; overflow-y: auto; font-size: 14px; font-weight: normal; }

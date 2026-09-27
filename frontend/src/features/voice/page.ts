@@ -35,13 +35,17 @@ export async function mountVoicePage(root: HTMLElement, api: ApiClient, conversa
     if (disposed || hidden || leaving) return;
     leaving = true;
     await voice.hangup();
+    if (voice.state.error === 'voice_cleanup_failed') { leaving = false; update(); return; }
     if (!disposed) navigate(page, ownedChat);
   }
   const actions = () => ({ capability, checking, capabilityError, media: voice.state, refresh: load,
     connect: () => { if (!disposed && !hidden && !leaving && !checking && context.chatId && context.kbReady &&
-      !context.error && capability?.transport === 'configured') void voice.connect(context.chatId); },
+      !context.error && capability?.transport === 'configured') void voice.connect(context.chatId, capability.purpose === 'voice_assistant'); },
     hangup: () => { void voice.hangup(); }, microphone: () => { void voice.toggleMicrophone(); },
-    output: () => { void voice.toggleOutput(); }, back: () => leave('workbench'), status: () => leave('status') });
+    output: () => { void voice.toggleOutput(); }, stop: () => { void voice.stopAnswer(); },
+    correct: (text: string) => voice.correctTranscript(text),
+    originalUrl: api.originalUrl,
+    back: () => leave('workbench'), status: () => leave('status') });
   const view = options ? null : createVoiceView(context, actions());
   if (view) root.replaceChildren(view.element);
   function update() {

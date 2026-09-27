@@ -502,6 +502,11 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
   function navigate(next: Page) {
     if (disposed) return;
     const previous = state.page;
+    if (previous === 'voice' && next !== 'voice' &&
+        (!['idle', 'failed'].includes(voice.state.phase) || voice.state.error === 'voice_cleanup_failed')) {
+      void voice.hangup().then(() => { if (voice.state.error !== 'voice_cleanup_failed') navigate(next); });
+      return;
+    }
     ++healthGeneration;
     state.page = next;
     if (previous === 'voice' && next !== 'voice') {
@@ -512,7 +517,7 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
     render();
     if (next === 'status') void loadHealth();
     if (next === 'voice') void loadVoiceCapability();
-    if (next === 'workbench' && previous !== 'workbench' && !options.render) void refresh();
+    if (next === 'workbench' && previous !== 'workbench' && (!options.render || previous === 'voice')) void refresh();
     root.querySelector<HTMLElement>('h1')?.focus();
   }
 
@@ -528,8 +533,10 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
           levels, actions: { capability: voiceCapability, checking: voiceChecking, capabilityError: voiceCapabilityError,
             media: { ...voice.state }, refresh: loadVoiceCapability,
             connect: () => { if (!disposed && state.page === 'voice' && !voiceChecking && state.selectedChatId && base?.status === 'ready' && !state.chatPending &&
-              !state.chatMessages.some((item) => item.status === 'running') && voiceCapability?.transport === 'configured') void voice.connect(state.selectedChatId); },
+              !state.chatMessages.some((item) => item.status === 'running') && voiceCapability?.transport === 'configured') void voice.connect(state.selectedChatId, voiceCapability.purpose === 'voice_assistant'); },
             hangup: () => { void voice.hangup(); }, microphone: () => { void voice.toggleMicrophone(); }, output: () => { void voice.toggleOutput(); },
+            stop: () => { void voice.stopAnswer(); }, correct: (text: string) => voice.correctTranscript(text),
+            originalUrl: api.originalUrl,
             back: async () => { await voice.hangup(); navigate('workbench'); }, status: async () => { await voice.hangup(); navigate('status'); } } },
         actions: { navigate, refresh, loadHealth, selectChat, createChat, renameChat, deleteChat, loadMoreChats, sendChat, retryChat,
           selectKb: (id) => { if (disposed || state.chatPending || documentsPanel.snapshot.busy || !state.bases?.some((item) => item.id === id)) return;
@@ -551,9 +558,11 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
       const actions = { capability: voiceCapability, checking: voiceChecking, capabilityError: voiceCapabilityError,
         media: voice.state, refresh: loadVoiceCapability,
         connect: () => { if (context.chatId && !context.chatPending && context.kbReady &&
-          voiceCapability?.transport === 'configured') void voice.connect(context.chatId); },
+          voiceCapability?.transport === 'configured') void voice.connect(context.chatId, voiceCapability.purpose === 'voice_assistant'); },
         hangup: () => { void voice.hangup(); }, microphone: () => { void voice.toggleMicrophone(); },
         output: () => { void voice.toggleOutput(); },
+        stop: () => { void voice.stopAnswer(); }, correct: (text: string) => voice.correctTranscript(text),
+        originalUrl: api.originalUrl,
         back: async () => { await voice.hangup(); navigate('workbench'); },
         status: async () => { await voice.hangup(); navigate('status'); } };
       voiceView ??= createVoiceView(context, actions);

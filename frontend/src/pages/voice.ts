@@ -24,6 +24,9 @@ export interface VoiceActions {
   hangup: () => void;
   microphone: () => void;
   output: () => void;
+  stop?: () => void;
+  correct?: (text: string) => Promise<void>;
+  originalUrl?: (id: string) => string;
   back: () => void | Promise<void>;
   status: () => void | Promise<void>;
 }

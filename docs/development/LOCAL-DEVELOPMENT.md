@@ -1,5 +1,9 @@
 # CiteRAG 本地开发
 
+M2 当前启动及配置以 [语音集中验收](M2-VOICE-VALIDATION.md#启动与关闭) 为准：`uv sync --locked --extra rag --extra voice`，受控配置下启用正式语音；Silero固定校验，本地自托管 LiveKit，唯一 API worker。下面“ASR/TTS 未接入”及旧端口是历史快照。新增真实付费/音频数据验证须另获授权，不使用本轮合成服务冒充真实供应商。
+
+2026-09-27 语音收尾：一次公开合成 ASR/模型/TTS 路径已 [真实验证](M2-VOICE-REAL-SUPPLIERS.md)。正式后端 `Settings.from_env()` 在 `CITERAG_VOICE_ASSISTANT_ENABLED=true` 时，自动用既有 ACL/DPAPI 加载器读取缺失的 `.local/runtime/models/volcengine.credential.xml` 与 `minimax.credential.xml`；显式环境 Key 优先，默认关闭时不读取，不加载 `.env`。这只补配置来源，不自动启用问答/入库、迁移 schema 或调用供应商。损坏/缺失仍显示未配置；旧 App ID/Access Token 与新 API Key 不混用。两份已保存凭证不需复制到前端。真人/持续付费范围仍需单独确认，本轮一次额度已用完。
+
 **2026-09-27 当前前端：** 用户选定 B，正式入口为 React + TypeScript + Vite + Ant Design / X。LiveKit 官方欢迎/会话布局与 B 主题统一，沿用既有 SDK/控制器；无自动连接，ASR/TTS/字幕/助手未接入。本轮没有改变后端配置或数据库；下方原生 TS 和旧端口/服务描述为历史记录。完整证据和人工步骤见 [React 交付](REACT-UI-MIGRATION.md)。
 
 前端独立启动（先确认端口与进程归属，不能停止未知服务）：

@@ -1,4 +1,4 @@
-"""Explicit environment configuration. No dotenv files are loaded."""
+"""Explicit environment configuration with opt-in protected voice records; no dotenv."""
 
 import os
 from ipaddress import ip_address
@@ -42,6 +42,13 @@ class Settings(BaseModel):
     answer_enabled: bool = False
     backup_enabled: bool = False
     voice_transport_enabled: bool = False
+    voice_assistant_enabled: bool = False
+    voice_asr_key: SecretStr | None = None
+    voice_asr_app_key: SecretStr | None = None
+    voice_asr_resource: str = "volc.seedasr.sauc.duration"
+    voice_tts_key: SecretStr | None = None
+    voice_tts_voice: str = "male-qn-qingse"
+    voice_vad_model: Path | None = None
     livekit_url: str = "ws://127.0.0.1:7880"
     livekit_api_key: SecretStr | None = None
     livekit_api_secret: SecretStr | None = None
@@ -62,6 +69,28 @@ class Settings(BaseModel):
             or value != f"{parsed.scheme}://{parsed.netloc}"
             or (parsed.port is not None and parsed.port < 1)):
             raise ValueError("LiveKit must be an explicit loopback WebSocket origin")
+        return value
+
+    @field_validator("voice_vad_model")
+    @classmethod
+    def local_vad_model(cls, value: Path | None) -> Path | None:
+        if value is not None and not value.resolve().is_relative_to(PROJECT_ROOT / ".local"):
+            raise ValueError("VAD model must be prepared in the private project local directory")
+        return value.resolve() if value is not None else None
+
+    @field_validator("voice_asr_resource")
+    @classmethod
+    def speech_resource(cls, value: str) -> str:
+        if value not in {"volc.seedasr.sauc.duration", "volc.seedasr.sauc.concurrent",
+                         "volc.bigasr.sauc.duration", "volc.bigasr.sauc.concurrent"}:
+            raise ValueError("Unsupported ASR resource")
+        return value
+
+    @field_validator("voice_tts_voice")
+    @classmethod
+    def speech_voice(cls, value: str) -> str:
+        if not value or len(value) > 100 or any(ord(char) < 32 for char in value):
+            raise ValueError("Invalid TTS voice identifier")
         return value
 
     @model_validator(mode="after")
@@ -140,6 +169,13 @@ class Settings(BaseModel):
             "CITERAG_ANSWER_ENABLED": "answer_enabled",
             "CITERAG_BACKUP_ENABLED": "backup_enabled",
             "CITERAG_VOICE_TRANSPORT_ENABLED": "voice_transport_enabled",
+            "CITERAG_VOICE_ASSISTANT_ENABLED": "voice_assistant_enabled",
+            "CITERAG_VOICE_ASR_KEY": "voice_asr_key",
+            "CITERAG_VOICE_ASR_APP_KEY": "voice_asr_app_key",
+            "CITERAG_VOICE_ASR_RESOURCE": "voice_asr_resource",
+            "CITERAG_VOICE_TTS_KEY": "voice_tts_key",
+            "CITERAG_VOICE_TTS_VOICE": "voice_tts_voice",
+            "CITERAG_VOICE_VAD_MODEL": "voice_vad_model",
             "CITERAG_LIVEKIT_URL": "livekit_url",
             "CITERAG_LIVEKIT_API_KEY": "livekit_api_key",
             "CITERAG_LIVEKIT_API_SECRET": "livekit_api_secret",
@@ -156,4 +192,31 @@ class Settings(BaseModel):
             )
         if os.environ.get("WEB_CONCURRENCY") not in {None, "", "1"}:
             raise ValueError("CiteRAG requires exactly one API worker")
-        return cls(**values)
+        settings = cls(**values)
+        if not settings.voice_assistant_enabled:
+            return settings
+        # Explicitly enabled voice may use the workstation's existing DPAPI
+        # records. Environment keys take precedence; no file is written and
+        # no supplier request is made by configuration loading.
+        from app.credentials import CredentialError, load_credential
+
+        saved: dict = {}
+        for provider, field in (("volcengine", "voice_asr_key"), ("minimax", "voice_tts_key")):
+            if getattr(settings, field) is not None:
+                continue
+            # Do not combine an explicit legacy App ID with a saved API Key.
+            if provider == "volcengine" and settings.voice_asr_app_key is not None:
+                continue
+            try:
+                record = load_credential(
+                    PROJECT_ROOT / ".local/runtime/models" / f"{provider}.credential.xml",
+                    provider,
+                )
+            except CredentialError:
+                # The public capability remains not_configured. File/provider
+                # diagnostics and credential contents never cross this boundary.
+                continue
+            saved[field] = record.secret
+            if provider == "volcengine" and record.auth_mode == "app-token":
+                saved["voice_asr_app_key"] = SecretStr(record.username)
+        return settings.model_copy(update=saved)

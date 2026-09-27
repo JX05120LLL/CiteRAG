@@ -5,6 +5,15 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 const status = { status: 'partial', mode: 'local_single_user', database: 'available', rag: 'not_configured', models: 'not_configured' };
 
 describe('local same-origin API boundary', () => {
+  it('uses an in-memory control header for session actions, never URL credentials', async () => {
+    const calls: Array<[string, RequestInit | undefined]> = [];
+    const api = createApi(async (url, init) => { calls.push([String(url), init]); return json({ status: 'ended' }); });
+    await api.voiceEnd('session', 'synthetic-control');
+    expect(calls[0][0]).toBe('/api/voice/sessions/session/end');
+    expect(calls[0][1]?.headers).toMatchObject({ 'X-CiteRAG-Voice-Control': 'synthetic-control' });
+    expect(calls[0][1]?.credentials).toBe('omit');
+    expect(localStorage.length).toBe(0);
+  });
   it('reads media configuration and requests a chat-bound token without storing credentials', async () => {
     const calls: Array<[string, RequestInit | undefined]> = [];
     const capability = { transport: 'configured', assistant: 'not_configured', purpose: 'media_test' };
@@ -87,6 +96,14 @@ describe('local same-origin API boundary', () => {
       return json({ items: [] });
     });
     expect(await api.knowledgeBases()).toEqual([]);
+  });
+
+  it('requires a validated correction generation before accepting its acknowledgement', async () => {
+    const call = (value: unknown) => createApi(async () => json(value)).voiceCorrection('session', 'control', 1, 2, 'synthetic correction');
+    expect(await call({ status: 'accepted', generation: 2 })).toEqual({ generation: 2 });
+    for (const value of [{ status: 'accepted' }, { status: 'accepted', generation: -1 }, { status: 'stopped', generation: 2 }]) {
+      await expect(call(value)).rejects.toMatchObject({ kind: 'invalid-response' });
+    }
   });
 
   it.each([[401, 'http'], [403, 'forbidden'], [503, 'unavailable'], [500, 'http']])('distinguishes HTTP %s without leaking server details', async (httpStatus, kind) => {

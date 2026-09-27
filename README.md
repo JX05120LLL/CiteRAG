@@ -2,6 +2,10 @@
 
 # CiteRAG
 
+**提交说明（2026-09-27）：** 用户随后授权将本次 M2 语音改动提交并推送 GitHub main。下方“未提交/未推送”是开发验收时快照；提交及对应 CI 结果以 Git 历史和 GitHub Actions 为准，不改变真人设备与完整 M2 尚未验收的结论。
+
+**M2 语音实现增量（2026-09-27）：** 已接入正式会话/租约、同进程 LiveKit worker、火山 ASR、本地 Silero VAD、原 AnswerService、MiniMax TTS 与浏览器播放，保留字幕、真实来源、纠错、插话取消和文字降级。一次公开合成语音的真实供应商路径通过，消耗 ASR 1 流 / 模型 3 次 / TTS 1 次；走隔离库原文字面检索，未验证真人设备或真实 LightRAG 语义检索。后端171项、前端221项本机通过；完整 M2 尚未验收。配置默认关闭，无 schema/实际业务迁移，未提交或推送。[完整交付、控件对应与启动步骤](docs/development/M2-VOICE-VALIDATION.md)、[真实调用证据及桌面/手机截图](docs/development/M2-VOICE-REAL-SUPPLIERS.md)。下方“语音尚未接入”为早期快照。
+
 A local, single-user multimodal knowledge assistant, designed around answers with verifiable sources.
 
 **B 版 React UI（2026-09-27）：** 用户已确认本次 UI 升级交付完成，并授权提交。正式 `index.html` 与独立 `voice.html` 已迁移至 React + TypeScript + Vite + Ant Design + Ant Design X，采用 B「对话优先知识助手」，融合 LiveKit 官方 starter 的欢迎与通话布局，沿用既有 SSE、资料任务和媒体生命周期。本轮 A/C 候选已清理。未新增付费调用或修改业务数据；UI 确认不改变真实业务、模型与完整语音尚未验收的范围。[访问步骤与截图](design/ui/react-candidates/README.md)、[B 版设计](design/ui/react-candidates/DESIGN.md)、[迁移、接口对应与验证](docs/development/REACT-UI-MIGRATION.md)。下方原生 UI 描述为历史记录。

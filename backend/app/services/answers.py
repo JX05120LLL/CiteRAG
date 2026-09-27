@@ -100,8 +100,14 @@ def courtesy_reply(question: str) -> str:
 
 
 class AnswerService:
-    def __init__(self, session: AsyncSession):
+    def __init__(self, session: AsyncSession, *,
+                 admission: Callable[[UUID], None] | None = None,
+                 commit_allowed: Callable[[], bool] | None = None,
+                 expected_binding: tuple[int, str] | None = None):
         self.session = session
+        self.admission = admission
+        self.commit_allowed = commit_allowed
+        self.expected_binding = expected_binding
 
     async def _owned_conversation(self, owner: UUID, conversation_id: UUID, *, lock=False):
         query = select(Conversation).where(
@@ -117,6 +123,9 @@ class AnswerService:
         kb = await self.session.scalar(kb_query.with_for_update() if lock else kb_query)
         if kb is None:
             raise ServiceError(404, "conversation_not_found", "聊天不存在或不可访问")
+        if (self.expected_binding is not None
+            and (kb.revision, kb.active_workspace) != self.expected_binding):
+            raise ServiceError(409, "kb_changed", "通话的知识库修订或活动空间已失效")
         return conversation, kb
 
     async def list_messages(self, owner: UUID, conversation_id: UUID) -> list[dict]:
@@ -149,6 +158,8 @@ class AnswerService:
         on_preview: Callable[[UUID, str], Awaitable[None]] | None = None,
     ) -> dict:
         conversation, kb = await self._owned_conversation(owner, conversation_id, lock=True)
+        if self.admission:
+            self.admission(conversation_id)
         existing = await self.session.scalar(select(ConversationMessage).where(
             ConversationMessage.conversation_id == conversation_id,
             ConversationMessage.client_message_id == request_id,
@@ -196,6 +207,8 @@ class AnswerService:
     async def retry(self, owner: UUID, conversation_id: UUID, message_id: UUID,
                     retry_id: UUID, retriever: Retriever, answerer: Answerer) -> dict:
         _, kb = await self._owned_conversation(owner, conversation_id, lock=True)
+        if self.admission:
+            self.admission(conversation_id)
         message = await self.session.scalar(select(ConversationMessage).where(
             ConversationMessage.id == message_id,
             ConversationMessage.conversation_id == conversation_id,
@@ -317,17 +330,23 @@ class AnswerService:
         current_attempt = await self.session.get(
             AnswerAttempt, attempt.id, with_for_update=True, populate_existing=True,
         )
+        voice_cancelled = self.commit_allowed is not None and not self.commit_allowed()
         if (current_kb is None or current_kb.status != "ready"
             or current_kb.revision != attempt.kb_revision
             or current_kb.active_workspace != attempt.workspace
-            or current_attempt is None or current_attempt.status != "running"):
+            or current_attempt is None or current_attempt.status != "running"
+            or voice_cancelled):
             if current_attempt is None:
                 raise ServiceError(409, "answer_interrupted", "聊天已变化，本次回答未保存")
             current_attempt.status, current_attempt.text = "interrupted", None
-            current_attempt.citations, current_attempt.error_code = [], "kb_changed"
+            cancelled_in_same_kb = (voice_cancelled and current_kb is not None
+                and current_kb.status == "ready" and current_kb.revision == attempt.kb_revision
+                and current_kb.active_workspace == attempt.workspace)
+            code = "request_interrupted" if cancelled_in_same_kb else "kb_changed"
+            current_attempt.citations, current_attempt.error_code = [], code
             current_attempt.finished_at = datetime.now(UTC)
             await self.session.commit()
-            raise ServiceError(409, "kb_changed", "知识库已变化，本次回答已停止；请重新提问")
+            raise ServiceError(409, code, "本次回答已停止；请核对聊天与知识库后重试")
         current_attempt.status, current_attempt.text = status, text or None
         current_attempt.citations, current_attempt.error_code = citations, error_code
         current_attempt.finished_at = datetime.now(UTC)

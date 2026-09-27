@@ -111,7 +111,8 @@ export function StandaloneVoice({ api: suppliedApi, factory }: { api?: ApiClient
   const host = useRef<HTMLDivElement>(null); const [view, setView] = useState<AppView['voice'] | null>(null);
   useEffect(() => {
     let alive = true; let dispose = () => {}; const abort = new AbortController();
-    const api = suppliedApi ?? createApi((input, init) => fetch(input, { ...init, signal: abort.signal }));
+    const api = suppliedApi ?? createApi((input, init) => fetch(input, { ...init,
+      signal: init?.signal ? AbortSignal.any([init.signal, abort.signal]) : abort.signal }));
     let conversation = new URLSearchParams(window.location.search).get('conversation');
     if (!conversation) try { const stored = sessionStorage.getItem('citerag.workbench.selection'); if (stored) {
       const value: unknown = JSON.parse(stored); if (value && typeof value === 'object' && 'chatId' in value && typeof value.chatId === 'string') conversation = value.chatId;

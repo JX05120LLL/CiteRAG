@@ -15,7 +15,7 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "lint:preview": "eslint src/preview",
-    "lint": "eslint src/preview src/react"
+    "lint": "eslint src/preview src/react src/features/voice src/api/client.ts"
   },
   "pnpm": {
     "overrides": {

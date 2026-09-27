@@ -1,5 +1,9 @@
 # GitHub CI
 
+2026-09-27 提交授权补记：用户确认 B 版 UI 升级完成并授权本地提交，未授权推送。下方“未 commit/push”是开发交付快照；本次提交尚无新远端 Actions 结果，不将本机通过写成远端 CI 通过。
+
+2026-09-27 B 版 React 迁移：锁定 React / Ant Design / Ant Design X 和构建测试依赖；公开白名单增加 preview 与 react 的四个合成测试文件。原有 178 项加只读预览 23 项、React 11 项，共 **212 项 / 12 文件本机通过**。工作流运行 `pnpm lint`（React 产品与只读预览），资源门禁覆盖 `index.html`、`voice.html`、`ui-preview.html`。后端作业保持原隔离数据库和模型关闭规则，不使用私人资料、模型密钥或付费调用。正式 B 入口与官方语音布局已迁移，本轮 A/C 清理；未 commit/push，**新远端 CI 未运行**。浏览器矩阵和交互是本机证据，不属于当前远端 CI。见 [迁移与验证](REACT-UI-MIGRATION.md)。下方各日期保留历史范围。
+
 2026-09-26 集中提交前检查：本次包含文字问答分流、上下文追问、基于原文的总结及事实支持检查，以及本地语音媒体与独立页面。只含暂存文件的独立副本按锁文件安装依赖；公开后端九文件 **145 passed、无跳过**，前端八文件 **178 passed**，类型检查、构建、Ruff、编译、仓库边界、两个 HTML 入口资源检查及原工作流迁移/API 冒烟均通过。数据库为独立临时 PostgreSQL，模型调用为 0，未迁移实际业务库。保留既有 LiveKit 包大小、TestClient 弃用和合成开发密钥长度警告。远端 CI 结果以本次提交对应的 Actions 运行为准；下方“未提交/未推送”描述为各片实施时快照，不代表完整 M0/M1/M2 验收。
 
 2026-09-26 语音增量：公开测试白名单增加 `backend/tests/test_voice_transport.py`、`frontend/src/features/voice/controller.test.ts` 和 `frontend/src/features/voice/page.test.ts`，后端安装锁定的 `rag+voice` 依赖并执行九文件回归。新增测试使用合成配置检查 Token 权限、回环地址、资源门禁、迟到音轨、重复挂断及独立页上下文/清理/安全错误；前端同时构建 `index.html` 和 `voice.html`。CI 不启动 LiveKit 服务、不采集音频、不调用 ASR/TTS 或模型。本片未推送，远程结果尚未验证，详见 [M2-1](M2-LIVEKIT-TRANSPORT.md)。

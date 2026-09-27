@@ -52,13 +52,13 @@ const failureLabels: Record<string, string> = {
   attribute_value: '属性值须为 1–80 个可打印字符；清空字段表示不再确认该属性。',
 };
 
-function failureReason(code: string): string {
+export function failureReason(code: string): string {
   return (Object.hasOwn(failureLabels, code) ? failureLabels[code] : undefined) ?? (/^[a-z][a-z0-9_]{0,63}$/.test(code)
     ? `处理失败（错误代码：${code}）。请保留此代码以便排查。`
     : '处理失败，未收到可识别的错误代码，请检查服务状态。');
 }
 
-function stoppedStage(stage: IngestionJob['stage']): string {
+export function stoppedStage(stage: IngestionJob['stage']): string {
   const names: Record<IngestionJob['stage'], string> = {
     accepted: '受理阶段', parsing: '解析阶段', parsed: '解析完成阶段',
     indexing: '索引阶段', verifying: '核验阶段', cleanup: '清理阶段', complete: '完成阶段',
@@ -66,13 +66,13 @@ function stoppedStage(stage: IngestionJob['stage']): string {
   return `${names[stage]}（已停止）`;
 }
 
-function errorText(error: ApiError): string {
+export function errorText(error: ApiError): string {
   if (error.kind === 'local-storage') return '无法可靠保存或读取本次请求的恢复记录。请检查浏览器会话存储后重试；当前不会发起新请求。';
   return failureLabels[error.code] ?? (error.kind === 'validation' && !['file_count', 'file_size', 'file_type', 'pending_files_changed'].includes(error.code)
     ? '文件或请求未通过检查，请核对文件格式、大小和数量。' : error.message);
 }
 
-function locatorLabel(block: ParsedBlock): string {
+export function locatorLabel(block: ParsedBlock): string {
   const location = block.locator;
   const positive = (value: unknown): value is number => Number.isInteger(value) && Number(value) > 0;
   if (location.kind === 'lines' && positive(location.line_start) && positive(location.line_end)) return `第 ${location.line_start}–${location.line_end} 行`;
@@ -86,7 +86,8 @@ function documentSize(bytes: number): string {
   return bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KiB`;
 }
 
-export function createDocumentsPanel(api: ApiClient, changed: () => void, acceptBases: (bases: KnowledgeBase[]) => void) {
+export function createDocumentsPanel(api: ApiClient, changed: () => void, acceptBases: (bases: KnowledgeBase[]) => void,
+    confirm?: (text: string) => Promise<boolean>) {
   let base: KnowledgeBase | null = null;
   let documents: ManagedDocument[] | null = null;
   let jobs: IngestionJob[] | null = null;
@@ -152,6 +153,7 @@ export function createDocumentsPanel(api: ApiClient, changed: () => void, accept
   }
 
   function open(selected: KnowledgeBase): Promise<void> {
+    if (busy) return Promise.resolve();
     ++generation;
     base = selected; documents = jobs = null; files = []; pending = null; uncertain = busy = loading = recoveryBlocked = rebuildConfirmed = false;
     error = readError = null; notice = null; inspected = inspectedJob = null;
@@ -237,7 +239,9 @@ export function createDocumentsPanel(api: ApiClient, changed: () => void, accept
     const warning = failedDelete
       ? '删除会清理这份资料的原文、解析结果及已有索引；若影响索引，维护期间暂停问答并遮蔽旧知识回答。'
       : `${impact}后该库旧知识回答与来源会被遮蔽；维护期间暂停问答。`;
-    if (!window.confirm(`${warning}确认${impact}「${document.filename}」？`)) return;
+    const expected = generation;
+    const question = `${warning}确认${impact}「${document.filename}」？`;
+    if (!(confirm ? await confirm(question) : window.confirm(question)) || expected !== generation || mutationUnavailable()) return;
     busy = true; error = null; notice = null; inspected = null; changed();
     try {
       const key = crypto.randomUUID();
@@ -642,7 +646,22 @@ export function createDocumentsPanel(api: ApiClient, changed: () => void, accept
     return content;
   }
 
-  return { open, render, get isOpen() { return base !== null; }, get currentBaseId() { return base?.id ?? null; },
+  return { open, render, refresh, submit, retry, maintain, cleanup, inspect, inspectTask, saveAttributes,
+    get snapshot() { return { base, documents, jobs, files, pending, uncertain, busy, loading, error, readError, notice,
+      recoveryBlocked, rebuildConfirmed, inspected, inspectedJob, documentPage, jobPage, deletedPage,
+      documentOffset, deletedOffset, jobOffset, deletedOpen, historyOpen, unavailable: mutationUnavailable(), active: activeJob() }; },
+    setFiles(value: File[]) { if (busy || loading || recoveryBlocked) return; files = value; error = null;
+      if (files.length) try { validateFiles(files); } catch (reason) { error = reason instanceof ApiError ? reason : new ApiError('validation'); } changed(); },
+    setConfirmed(value: boolean) { rebuildConfirmed = value; changed(); },
+    setDeletedOpen(value: boolean) { deletedOpen = value; changed(); if (value) void refresh(); },
+    setHistoryOpen(value: boolean) { historyOpen = value; changed(); },
+    movePage(kind: 'current' | 'deleted' | 'history', offset: number) {
+      if (busy || loading || offset < 0 || !Number.isInteger(offset) || offset % 10) return;
+      if (kind === 'current') documentOffset = offset; else if (kind === 'deleted') deletedOffset = offset; else jobOffset = offset;
+      void refresh(); },
+    closeInspector() { inspected = inspectedJob = null; changed(); },
+    dispose() { ++generation; base = null; },
+    get isOpen() { return base !== null; }, get currentBaseId() { return base?.id ?? null; },
     close() { if (!busy) { base = null; ++generation; } } };
 }
 

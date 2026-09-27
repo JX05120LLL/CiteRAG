@@ -1,5 +1,19 @@
 # CiteRAG 本地开发
 
+**2026-09-27 当前前端：** 用户选定 B，正式入口为 React + TypeScript + Vite + Ant Design / X。LiveKit 官方欢迎/会话布局与 B 主题统一，沿用既有 SDK/控制器；无自动连接，ASR/TTS/字幕/助手未接入。本轮没有改变后端配置或数据库；下方原生 TS 和旧端口/服务描述为历史记录。完整证据和人工步骤见 [React 交付](REACT-UI-MIGRATION.md)。
+
+前端独立启动（先确认端口与进程归属，不能停止未知服务）：
+
+```powershell
+Get-NetTCPConnection -State Listen -LocalPort 5193 -ErrorAction SilentlyContinue
+pnpm --dir frontend install --frozen-lockfile
+pnpm --dir frontend dev --host 127.0.0.1 --port 5193 --strictPort
+```
+
+Node >=22.12.0，pnpm 10.33.0。正式工作台 `http://127.0.0.1:5193/index.html`、独立语音 `voice.html`；API 仍代理 8000，API 离线时显示安全错误。完整只读设计 `ui-preview.html?design=b&data=sample` 使用显式合成样例、不写入或采集。实际服务地址以启动命令为准，不保证此文档中的服务一直运行。
+
+在 frontend 运行 `pnpm test`、`pnpm typecheck`、`pnpm lint`、`pnpm build`、`node scripts/verify-entries.mjs`；根目录 `git diff --check`。截图浏览与步骤见 [B 页面](../../design/ui/react-candidates/README.md)。CI 不依赖真实模型密钥或私人资料。
+
 **2026-09-26 语音首片：** 新增可选 `voice` 依赖和默认关闭的本地 LiveKit 媒体测试，无 schema 变更。实际现有 API 未因本片重启；配置、端口检查、启动及集中验收步骤见 [M2 接入记录](M2-LIVEKIT-TRANSPORT.md)。ASR/TTS 和知识库语音对话尚未接入，下方旧服务状态均为历史快照。
 
 本轮 M1-3 源码迁移 head 为 `0005_answer_attempts`，仅在隔离 PostgreSQL 执行。普通/精确问答、受管来源和固定知识库聊天消息已实现；`CITERAG_ANSWER_ENABLED=false` 默认关闭真实模型检索/回答，`CITERAG_INGESTION_ENABLED=false` 默认只解析。实际业务库本轮不可达，未核实当前 schema，未升级或重启旧服务。启用前先停写，备份业务库、引擎库及 `.local/runtime/sources/`，显式迁移并核对任务、文档、消息、修订和 active_workspace，再重启；恢复不能只回退 schema。M1-3 迁移有消息/回答或确认属性时拒绝降级。以下 M1-2 启动说明和旧端口状态属于上轮记录。

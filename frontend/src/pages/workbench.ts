@@ -5,7 +5,7 @@ import { locationText } from './sources';
 import { kbStatuses } from '../state';
 import { action, el, icon, alert, heading } from '../shared/dom';
 
-function answerFailure(code: string | null): string {
+export function answerFailure(code: string | null): string {
   const reasons: Record<string, string> = {
     answer_unverifiable: '模型输出未通过格式或原文核验。请重试，或把问题缩小到资料中的具体内容。',
     answer_format_invalid: '模型返回的格式不完整或不符合要求。请重试，或缩小问题范围。',

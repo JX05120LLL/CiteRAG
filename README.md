@@ -4,6 +4,8 @@
 
 A local, single-user multimodal knowledge assistant, designed around answers with verifiable sources.
 
+**B 版 React UI（2026-09-27）：** 用户已确认本次 UI 升级交付完成，并授权提交。正式 `index.html` 与独立 `voice.html` 已迁移至 React + TypeScript + Vite + Ant Design + Ant Design X，采用 B「对话优先知识助手」，融合 LiveKit 官方 starter 的欢迎与通话布局，沿用既有 SSE、资料任务和媒体生命周期。本轮 A/C 候选已清理。未新增付费调用或修改业务数据；UI 确认不改变真实业务、模型与完整语音尚未验收的范围。[访问步骤与截图](design/ui/react-candidates/README.md)、[B 版设计](design/ui/react-candidates/DESIGN.md)、[迁移、接口对应与验证](docs/development/REACT-UI-MIGRATION.md)。下方原生 UI 描述为历史记录。
+
 **文字问答改进（2026-09-26）：** 单输入框自动区分普通交流、通用解释和知识库查询；支持结合上下文追问、基于真实证据的总结与独立事实支持检查。通用回答明确标记未检索知识库；详细机制、费用影响和集中验收步骤见[交流分流与有依据的总结](docs/development/INTENT-AND-GROUNDED-ANSWERS.md)。完整 M1 仍待验收。
 
 本地单用户知识助手，面向带可核查来源的文字问答，并计划扩展图片提问和实时语音。使用者直接管理自己的知识库、核查原文，并保存聊天继续交流。首版无需注册、登录或创建管理员。
@@ -52,7 +54,7 @@ A local, single-user multimodal knowledge assistant, designed around answers wit
 
 ## 产品与技术边界
 
-计划采用原生 TypeScript + HTML/CSS、Vite、FastAPI、LightRAG、PostgreSQL 与 LiveKit。具体依赖锁定及服务能力在 M0 实测；本项目不使用 React/Vue。
+前端采用 React + TypeScript + Vite + Ant Design + Ant Design X；主入口和独立语音入口共享 B 版主题。FastAPI、LightRAG、PostgreSQL 与 LiveKit 业务边界不变。依赖使用兼容稳定精确版本和锁文件，UI 升级不代表服务或完整 M0/M1/M2 已验收。
 
 - 一个聊天固定一个知识库；换库需新建聊天。
 - 知识库、聊天和附件属于同一本地安装；不同浏览器访问的是同一份本地资料。

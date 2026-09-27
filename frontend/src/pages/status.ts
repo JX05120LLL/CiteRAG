@@ -8,7 +8,7 @@ const statusLabels: Record<string, string> = {
   local_single_user: '本地单用户',
 };
 
-const backupErrors: Record<string, string> = {
+export const backupErrors: Record<string, string> = {
   engine_configuration_unavailable: '引擎库配置未就绪，未生成备份。',
   backup_verification_failed: '当天备份校验失败，需人工核查。',
   backup_interrupted: '备份中断，需重新核查。',

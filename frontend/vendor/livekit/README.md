@@ -2,7 +2,7 @@
 
 来源：[livekit-examples/agent-starter-react](https://github.com/livekit-examples/agent-starter-react)，固定提交 `c5d78a6c381a0ac80b081cf6aeb8ac454d00ca78`，MIT，许可全文见 [LICENSE](LICENSE)。
 
-用户选择保持原生 TypeScript，只移植语音页 UI。本项目不运行官方 React/Next.js 模板，不引入 React、Tailwind、官方云端示例 agent 或独立聊天数据。
+2026-09-27 用户选定 B 并要求官方语音界面融合。当前 [React Voice](../../src/react/Voice.tsx) 采用下述欢迎/会话布局，以 Ant Design 与 B tokens 重写，工作台和独立入口共用；媒体沿用现有 VoiceController / livekit-client 单生命周期。未安装 LiveKit React 组件包，不运行官方 Next.js/Cloud 或独立 Agents 后端，也不引入 Tailwind。许可全文继续保留。下方原生实现与蓝色 token 是 2026-09-26 的历史范围，当前主题为 B 的绿色。
 
 原生实现：[voice.ts](../../src/pages/voice.ts)、[voice.css](../../src/features/voice/voice.css)。移植范围：
 

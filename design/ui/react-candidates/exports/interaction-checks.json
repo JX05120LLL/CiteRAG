@@ -1,0 +1,20 @@
+{
+  "checks": [
+    "B source drawer: Enter opens, Escape closes, focus returns to source button",
+    "b: general / chat have no fake citations; partial is labeled and retry disabled",
+    "b: document failure details, metadata modal, maintenance and empty library selection",
+    "b: task detail refresh, history page two, system and shared read refresh",
+    "Actual local API unavailable: safe failure displayed, no automatic sample fallback",
+    "React index.html: formal entry mounts without a script exception; no media starts automatically",
+    "React voice.html: formal entry mounts without a script exception; no media starts automatically"
+  ],
+  "errors": [],
+  "writes": [],
+  "realReadResponseStatuses": [
+    500,
+    500,
+    500,
+    500,
+    500
+  ]
+}

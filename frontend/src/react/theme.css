@@ -1,0 +1,35 @@
+@import '../preview/preview.css';
+.citerag-app { --line: #e3e7ec; --muted: #596573; --accent: #24765d; min-height: 100dvh; display: flex; background: #fafbf9; }
+.citerag-app .primary-sidebar { position: sticky; top: 0; height: 100dvh; width: 82px; flex: 0 0 82px; background: #f1f5f1; color: #344a3d; padding: 24px 8px; }
+.citerag-app .primary-sidebar .brand { padding: 0 0 28px; justify-content: center; }.citerag-app .primary-sidebar .brand strong { display: none; }
+.citerag-app .primary-sidebar .ant-menu-item { height: 64px; line-height: normal; padding: 10px 0 !important; display: flex; flex-direction: column; justify-content: center; gap: 7px; font-size: 10px; }
+.citerag-app .primary-sidebar .ant-menu-title-content { margin: 0 !important; }.citerag-app .primary-sidebar .anticon { font-size: 20px; }
+.citerag-app .sidebar-foot { padding: 16px 0 0; text-align: center; border-color: #d8e3d9; font-size: 10px; }.citerag-app .sidebar-foot span { color: #596573; }
+.citerag-app .context-bar { position: sticky; top: 0; z-index: 5; }.citerag-app .page-content { max-width: 1080px; padding: 36px 48px; margin: 0 auto; }
+.citerag-app .page-content.page-workbench { max-width: 920px; }.citerag-app .context-actions { display: flex; }
+.citerag-app .ant-alert { margin: 12px 0; }.citerag-app .kb-cards { display: grid; gap: 18px; margin-top: 22px; }
+.citerag-app .ant-card-head-title { white-space: normal; overflow-wrap: anywhere; }.citerag-app .ant-card-extra { margin-left: 10px; }
+.citerag-app .message-scroll { min-height: 340px; }.citerag-app .retry-answer { margin-top: 12px; }
+.citerag-app .upload-section { margin: 24px 0; }.citerag-app .ant-upload-drag p { font-size: 13px; }
+.citerag-app .parsed-block { white-space: pre-wrap; overflow-wrap: anywhere; border-bottom: 1px solid var(--line); padding: 18px 0; }
+.official-voice { max-width: 720px; margin: 0 auto; }.official-voice-stage { text-align: center; border-radius: 20px; }
+.official-voice-stage .ant-card-body { padding: 32px; }.official-voice-stage h2 { font-size: 28px; }
+.official-welcome-bars, .official-voice-bars { min-height: 120px; display: flex; justify-content: center; align-items: center; gap: 10px; margin: 28px 0 22px; }
+.official-welcome-bars span { width: 14px; background: var(--accent); border-radius: 10px; }
+.official-voice-bars span { width: 44px; background: var(--accent); border-radius: 30px; transition: height .08s linear; }
+.official-voice-controls { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin: 28px 0; }
+.official-voice-controls .ant-btn-lg { min-width: 240px; }.official-voice .ant-alert { text-align: left; }.voice-capabilities { margin-top: 24px; }
+.standalone-voice { display: block; }.standalone-brand { display: flex; align-items: center; gap: 12px; background: #fff; border-bottom: 1px solid var(--line); padding: 22px 32px; }
+.standalone-brand img { width: 30px; height: 30px; }.standalone-brand strong { font-size: 23px; }.standalone-brand span { color: var(--muted); }
+.skip-link { position: fixed; left: 12px; top: -70px; z-index: 2000; background: #fff; padding: 12px; }.skip-link:focus { top: 12px; }
+.citerag-app button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+@media (max-width: 900px) { .citerag-app .primary-sidebar { display: none; }.mobile-nav-button { display: inline-flex; }
+  .candidate-preview .primary-sidebar { display: none; }.candidate-preview .page-content { padding: 24px 18px; }
+  .citerag-app .context-bar { position: static; }.citerag-app .page-content { padding: 24px 18px; } }
+@media (max-width: 600px) { .citerag-app .page-content { padding: 20px 12px; }.citerag-app .context-actions { flex-wrap: wrap; }.citerag-app .chat-context { flex-wrap: wrap; }
+  .candidate-preview .page-content { padding: 20px 12px; }
+  .citerag-app .message-scroll { min-height: 120px; }.citerag-app .context-actions { margin-left: 0; width: 100%; }
+  .official-voice-stage .ant-card-body { padding: 18px; }.official-voice-stage h2 { font-size: 23px; }.official-voice-bars span { width: 34px; }
+  .official-voice-controls .ant-btn-lg { min-width: 0; max-width: 100%; font-size: 14px; }.standalone-brand { padding: 18px 12px; }
+  .citerag-app .kb-cards .ant-card-head { flex-wrap: wrap; }.citerag-app .ant-card-body { padding: 18px; }.citerag-app .ant-descriptions-item-content { overflow-wrap: anywhere; }
+}

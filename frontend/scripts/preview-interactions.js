@@ -1,0 +1,81 @@
+async (page) => {
+  const checks = []; const errors = []; const writes = []; const responses = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  page.on('request', (request) => { if (request.method() !== 'GET') writes.push(request.method()); });
+  page.on('response', (response) => { if (/^https?:\/\/[^/]+\/api\//.test(response.url())) responses.push(response.status()); });
+  for (const design of ['b']) {
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    const url = `http://127.0.0.1:5193/ui-preview.html?design=${design}&data=sample`;
+    await page.goto(`${url}&page=workbench&source=closed`);
+    const source = page.getByRole('button', { name: '查看来源：合成产品手册.md' }); await source.waitFor();
+    await source.focus(); await page.keyboard.press('Enter');
+    if (design === 'b') {
+      await page.getByRole('dialog', { name: '原文来源' }).waitFor();
+      await page.keyboard.press('Escape');
+      await page.getByRole('dialog', { name: '原文来源' }).waitFor({ state: 'hidden' });
+      await page.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === '查看来源：合成产品手册.md', null, { timeout: 2000 });
+      const restored = await source.evaluate((element) => document.activeElement === element);
+      if (!restored) throw new Error('Source drawer did not restore keyboard focus');
+      checks.push('B source drawer: Enter opens, Escape closes, focus returns to source button');
+    } else await page.getByRole('button', { name: '关闭来源' }).filter({ visible: true }).click();
+    if (design === 'b') await page.getByRole('button', { name: '打开聊天记录' }).click();
+    await page.getByText('通用概念与普通交流', { exact: true }).filter({ visible: true }).click();
+    await page.getByText('通用回答 · 未检索资料', { exact: true }).waitFor();
+    if (await page.getByRole('button', { name: /查看来源：/ }).count()) throw new Error('General answer has sources');
+    if (design === 'b') await page.getByRole('button', { name: '打开聊天记录' }).click();
+    await page.getByText('中断恢复状态样例', { exact: true }).filter({ visible: true }).click();
+    await page.getByRole('button', { name: '重试回答', exact: true }).waitFor();
+    if (await page.getByRole('button', { name: '重试回答', exact: true }).isEnabled()) throw new Error('Partial retry enabled in preview');
+    if (await page.getByRole('button', { name: /查看来源：/ }).count()) throw new Error('Partial answer has sources');
+    checks.push(`${design}: general / chat have no fake citations; partial is labeled and retry disabled`);
+    await page.goto(`${url}&page=knowledge`);
+    await page.getByRole('button', { name: '查看详情', exact: true }).filter({ visible: true }).nth(2).click();
+    await page.getByText('处理失败原因', { exact: true }).filter({ visible: true }).waitFor();
+    await page.screenshot({ path: `D:/code/CiteRAG/design/ui/react-candidates/exports/${design}-document-detail-1440.png`, fullPage: false, animations: 'disabled' });
+    await page.keyboard.press('Escape');
+    await page.getByRole('button', { name: '知识库信息', exact: false }).click();
+    await page.getByRole('dialog', { name: '知识库信息' }).waitFor();
+    if (await page.getByRole('button', { name: '保存名称' }).isEnabled()) throw new Error('Metadata save enabled');
+    await page.keyboard.press('Escape');
+    const selector = page.getByRole('combobox', { name: '查看知识库' });
+    await selector.click(); await page.locator('.ant-select-item-option-content').getByText('团队制度与操作流程', { exact: true }).click();
+    await page.getByText('知识库维护或待修复，问答与原文核查受状态门禁限制。').waitFor();
+    await page.getByText('暂无记录', { exact: true }).waitFor();
+    await selector.click(); await page.locator('.ant-select-item-option-content').getByText('待整理资料', { exact: true }).click();
+    await page.getByText('暂无记录', { exact: true }).waitFor();
+    checks.push(`${design}: document failure details, metadata modal, maintenance and empty library selection`);
+    await page.goto(`${url}&page=tasks`);
+    await page.getByText(/已结束任务 ·/).click();
+    await page.getByRole('button', { name: '查看任务详情' }).nth(1).click();
+    await page.getByText('已记录的失败原因', { exact: true }).waitFor();
+    await page.getByRole('button', { name: '刷新任务详情' }).click();
+    await page.getByText('已记录的失败原因', { exact: true }).waitFor();
+    if (design === 'b') await page.keyboard.press('Escape');
+    await page.getByTitle('2', { exact: true }).click();
+    await page.getByText(/2026\/9\/16 14:37:00/).filter({ visible: true }).waitFor();
+    await page.goto(`${url}&page=status`);
+    await page.getByRole('button', { name: '刷新系统状态' }).click();
+    await page.getByText('尚无连通性验证结果', { exact: false }).waitFor();
+    await page.getByRole('button', { name: '刷新读取' }).click();
+    await page.getByText('尚无连通性验证结果', { exact: false }).waitFor();
+    checks.push(`${design}: task detail refresh, history page two, system and shared read refresh`);
+  }
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('http://127.0.0.1:5193/ui-preview.html?design=b&data=sample&page=knowledge');
+  await page.getByRole('button', { name: '查看详情', exact: true }).filter({ visible: true }).nth(2).click();
+  await page.getByRole('dialog', { name: '资料详情' }).waitFor();
+  await page.screenshot({ path: 'D:/code/CiteRAG/design/ui/react-candidates/exports/b-document-detail-390.png', fullPage: false, animations: 'disabled' });
+  await page.keyboard.press('Escape');
+  await page.goto('http://127.0.0.1:5193/ui-preview.html?design=b&data=live');
+  await page.getByText('无法读取现有 API', { exact: true }).waitFor();
+  if (await page.getByText('合成设计样例，不是实际业务或通话结果。', { exact: true }).count()) throw new Error('Live API failure fell back to samples');
+  await page.screenshot({ path: 'D:/code/CiteRAG/design/ui/react-candidates/exports/live-api-unavailable-390.png', fullPage: true, animations: 'disabled' });
+  checks.push('Actual local API unavailable: safe failure displayed, no automatic sample fallback');
+  for (const [entry, selector] of [['index.html', '#app'], ['voice.html', '#voice-app']]) {
+    await page.goto(`http://127.0.0.1:5193/${entry}`); await page.locator(selector).waitFor();
+    checks.push(`React ${entry}: formal entry mounts without a script exception; no media starts automatically`);
+  }
+  if (errors.length || writes.length) throw new Error(JSON.stringify({ errors, writes }));
+  await page.evaluate((value) => { window.__interactionReport = value; }, { checks, errors, writes, realReadResponseStatuses: responses });
+  return { checks, errors, writes, realReadResponseStatuses: responses };
+}

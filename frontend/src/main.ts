@@ -1,8 +1,6 @@
-import { mountApp } from './app';
-import { createApi } from './api/client';
-import './styles.css';
-import './ui-upgrade.css';
+import { createRoot } from 'react-dom/client';
+import { createElement, StrictMode } from 'react';
+import { CiteRagApp } from './react/App';
 
 const root = document.querySelector<HTMLElement>('#app');
-if (root) void mountApp(root, createApi(), undefined,
-  new URLSearchParams(window.location.search).get('view') === 'status' ? 'status' : 'workbench');
+if (root) createRoot(root).render(createElement(StrictMode, null, createElement(CiteRagApp)));

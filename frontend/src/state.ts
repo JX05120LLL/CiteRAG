@@ -1,6 +1,6 @@
 import type { ApiError, ChatMessage, Conversation, KnowledgeBase, SystemHealth } from './api/client';
 
-export type Page = 'workbench' | 'knowledge' | 'status' | 'voice';
+export type Page = 'workbench' | 'knowledge' | 'tasks' | 'status' | 'voice';
 
 export interface KnowledgeDraft {
   name: string;

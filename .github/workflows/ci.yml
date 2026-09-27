@@ -52,6 +52,10 @@ jobs:
               "frontend/src/pages/status.test.ts",
               "frontend/src/features/voice/controller.test.ts",
               "frontend/src/features/voice/page.test.ts",
+              "frontend/src/preview/data.test.ts",
+              "frontend/src/preview/app.test.tsx",
+              "frontend/src/react/controller.test.ts",
+              "frontend/src/react/app.test.tsx",
           }
           private_names = (
               ".env", ".env.*", "*.pem", "*.key", "*.p12", "*.pfx",
@@ -99,6 +103,8 @@ jobs:
         run: pnpm test
       - name: Build
         run: pnpm build
+      - name: Lint React product and read-only preview
+        run: pnpm lint
       - name: Verify built entry and assets
         run: |
           node --input-type=module <<'JS'
@@ -106,7 +112,7 @@ jobs:
           import { existsSync, readFileSync } from 'node:fs';
           import { JSDOM } from 'jsdom';
 
-          for (const [entry, root] of [['index.html', '#app'], ['voice.html', '#voice-app']]) {
+          for (const [entry, root] of [['index.html', '#app'], ['voice.html', '#voice-app'], ['ui-preview.html', '#preview-app']]) {
             const { document } = new JSDOM(readFileSync(`dist/${entry}`, 'utf8')).window;
             assert.ok(document.title.includes('CiteRAG'));
             assert.ok(document.querySelector(root));
@@ -118,7 +124,7 @@ jobs:
               assert.ok(existsSync(`dist/${path.replace(/^\//, '')}`), `Missing asset: ${path}`);
             }
           }
-          console.log('Both built HTML entries, JavaScript, styles, and icons passed.');
+          console.log('All three built HTML entries, JavaScript, styles, and icons passed.');
           JS
 
   backend:

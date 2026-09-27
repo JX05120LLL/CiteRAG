@@ -14,9 +14,31 @@ import { renderHeader, renderManagementSidebar, renderSidebar } from './shared/s
 import type { AppState, Page } from './state';
 import { isKnowledgePending, knowledgeLimit } from './state';
 import { clearPendingCreation, normalizeKnowledgeName, restorePendingCreation, savePendingCreation } from './knowledge-draft';
+import type { VoiceActions, VoiceContext } from './pages/voice';
+
+export interface AppView {
+  state: AppState; hasMoreChats: boolean; documents: ReturnType<typeof createDocumentsPanel>;
+  voice: { context: VoiceContext; actions: VoiceActions; levels: readonly number[] };
+  actions: {
+    navigate: (page: Page) => void; refresh: () => Promise<void>; loadHealth: () => Promise<void>;
+    selectChat: (id: string) => Promise<void>; createChat: () => Promise<void>;
+    renameChat: () => Promise<void>; deleteChat: () => Promise<void>; loadMoreChats: () => Promise<void>;
+    sendChat: () => Promise<void>; retryChat: (id: string) => Promise<void>; setDraft: (text: string) => void;
+    selectKb: (id: string) => void; selectCitation: (messageId: string, evidenceId: string) => void; closeCitation: () => void;
+    createKnowledgeBase: () => Promise<void>; beginRename: (id: string) => void;
+    renameKnowledgeBase: () => Promise<void>; cancelRename: () => void; setKnowledgeName: (name: string, rename?: boolean) => void;
+    openDocuments: (base: KnowledgeBase, tasks?: boolean) => void; closeDocuments: () => void;
+  };
+}
+export interface AppOptions {
+  render?: (view: AppView) => void; onDispose?: (dispose: () => void) => void;
+  confirm?: (text: string) => Promise<boolean>; prompt?: (title: string, value: string) => Promise<string | null>;
+}
 
 export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: RoomFactory = createMediaRoom,
-    initialPage: 'workbench' | 'status' = 'workbench'): Promise<void> {
+    initialPage: 'workbench' | 'status' = 'workbench', options: AppOptions = {}): Promise<void> {
+  let disposed = false;
+  let levels: readonly number[] = [];
   const selectionKey = 'citerag.workbench.selection';
   let restoredSelection: { kbId: string | null; chatId: string | null } = { kbId: null, chatId: null };
   try {
@@ -52,8 +74,13 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
   let voiceGeneration = 0;
   let voiceView: ReturnType<typeof createVoiceView> | null = null;
   const voice = new VoiceController(api, () => { if (state.page === 'voice') render(); }, roomFactory,
-    (levels) => { if (state.page === 'voice') voiceView?.levels(levels); });
-  window.addEventListener('pagehide', () => { void voice.hangup(); }, { once: true });
+    (value) => { if (!disposed && state.page === 'voice') { levels = value; if (options.render) render(); else voiceView?.levels(value); } });
+  const onPageHide = () => { ++voiceGeneration; voiceChecking = false; void voice.hangup(); };
+  window.addEventListener('pagehide', onPageHide);
+  options.onDispose?.(() => {
+    disposed = true; ++generation; ++chatGeneration; ++healthGeneration; ++voiceGeneration;
+    window.removeEventListener('pagehide', onPageHide); documentsPanel.dispose(); void voice.hangup();
+  });
   async function loadVoiceCapability() {
     const generation = ++voiceGeneration;
     voiceChecking = true; voiceCapabilityError = false; render();
@@ -67,6 +94,7 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
     }
   }
   function openDocuments(base: KnowledgeBase, focusTasks = false) {
+    if (disposed || documentsPanel.snapshot.busy) return;
     void documentsPanel.open(base).then(() => {
       if (state.page === 'knowledge' && documentsPanel.isOpen) {
         const target = root.querySelector<HTMLElement>(focusTasks ? '#persistent-jobs' : 'h1');
@@ -79,7 +107,7 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
     try { window.sessionStorage.setItem(selectionKey, JSON.stringify({ kbId: state.selectedKbId, chatId: state.selectedChatId })); }
     catch { /* No persisted selection; backend remains the source of truth. */ }
   }
-  const documentsPanel = createDocumentsPanel(api, render, (bases) => { state.bases = bases; });
+  const documentsPanel = createDocumentsPanel(api, render, (bases) => { state.bases = bases; }, options.confirm);
   try {
     const recovered = restorePendingCreation();
     if (recovered) Object.assign(state.createDraft, {
@@ -229,7 +257,8 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
     const id = state.selectedChatId;
     const chat = state.chats?.find((item) => item.id === id);
     if (!id || !chat || state.chatPending) return;
-    const requested = window.prompt('聊天名称', chat.title);
+    const requested = options.prompt ? await options.prompt('聊天名称', chat.title) : window.prompt('聊天名称', chat.title);
+    if (disposed || state.selectedChatId !== id || state.chatPending) return;
     if (requested === null) return;
     const title = requested.trim();
     if (!title || title.length > 120) {
@@ -247,7 +276,10 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
 
   async function deleteChat() {
     const id = state.selectedChatId;
-    if (!id || state.chatPending || !window.confirm('删除此聊天及其消息和摘要？此操作不可撤销。')) return;
+    if (!id || state.chatPending) return;
+    const warning = '删除此聊天及其消息和摘要？此操作不可撤销。';
+    if (!(options.confirm ? await options.confirm(warning) : window.confirm(warning)) ||
+        disposed || state.selectedChatId !== id || state.chatPending) return;
     state.chatPending = true;
     try {
       await api.deleteConversation(id);
@@ -468,6 +500,7 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
   }
 
   function navigate(next: Page) {
+    if (disposed) return;
     const previous = state.page;
     ++healthGeneration;
     state.page = next;
@@ -479,11 +512,37 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
     render();
     if (next === 'status') void loadHealth();
     if (next === 'voice') void loadVoiceCapability();
-    if (next === 'workbench' && previous !== 'workbench') void refresh();
+    if (next === 'workbench' && previous !== 'workbench' && !options.render) void refresh();
     root.querySelector<HTMLElement>('h1')?.focus();
   }
 
   function render() {
+    if (disposed) return;
+    if (options.render) {
+      const base = state.bases?.find((item) => item.id === state.selectedKbId);
+      options.render({ state: { ...state, createDraft: { ...state.createDraft }, renameDraft: state.renameDraft ? { ...state.renameDraft } : null },
+        hasMoreChats, documents: documentsPanel,
+        voice: { context: { chatId: state.selectedChatId,
+          chatTitle: state.chats?.find((item) => item.id === state.selectedChatId)?.title ?? '',
+          kbName: base?.name ?? '', kbReady: base?.status === 'ready', chatPending: state.chatPending || state.chatMessages.some((item) => item.status === 'running') },
+          levels, actions: { capability: voiceCapability, checking: voiceChecking, capabilityError: voiceCapabilityError,
+            media: { ...voice.state }, refresh: loadVoiceCapability,
+            connect: () => { if (!disposed && state.page === 'voice' && !voiceChecking && state.selectedChatId && base?.status === 'ready' && !state.chatPending &&
+              !state.chatMessages.some((item) => item.status === 'running') && voiceCapability?.transport === 'configured') void voice.connect(state.selectedChatId); },
+            hangup: () => { void voice.hangup(); }, microphone: () => { void voice.toggleMicrophone(); }, output: () => { void voice.toggleOutput(); },
+            back: async () => { await voice.hangup(); navigate('workbench'); }, status: async () => { await voice.hangup(); navigate('status'); } } },
+        actions: { navigate, refresh, loadHealth, selectChat, createChat, renameChat, deleteChat, loadMoreChats, sendChat, retryChat,
+          selectKb: (id) => { if (disposed || state.chatPending || documentsPanel.snapshot.busy || !state.bases?.some((item) => item.id === id)) return;
+            ++chatGeneration; state.selectedKbId = id; state.selectedChatId = null; rememberSelection();
+            state.chatMessages = []; state.chatError = null; state.chatDraft = ''; state.selectedCitation = null; state.chatRequestKey = state.chatRequestText = null; render(); },
+          setDraft: (text) => { state.chatDraft = text; if (text.trim() !== state.chatRequestText) state.chatRequestKey = state.chatRequestText = null; render(); },
+          selectCitation: (messageId, evidenceId) => { state.selectedCitation = { messageId, evidenceId }; render(); },
+          closeCitation: () => { state.selectedCitation = null; render(); }, createKnowledgeBase,
+          beginRename: (id) => { const base = state.bases?.find((item) => item.id === id); if (base) beginRename(base); }, renameKnowledgeBase, cancelRename,
+          setKnowledgeName: (name, rename = false) => { const draft = rename ? state.renameDraft : state.createDraft; if (draft && !draft.pending) { draft.name = name; render(); } },
+          openDocuments, closeDocuments: () => { documentsPanel.close(); render(); } } });
+      return;
+    }
     if (state.page === 'voice') {
       const base = state.bases?.find((item) => item.id === state.selectedKbId);
       const context = { chatId: state.selectedChatId,

@@ -3,8 +3,10 @@
 - 优先中文沟通。先读 `README.md`、`docs/README.md` 和相关模块说明。
 - 产品范围以当前 PRD 为准，技术边界以架构文档为准；不能从演示截图推断新增业务需求。
 - 首版本地单用户，无管理员、注册或登录；使用者管理自己的知识库。API 仅面向回环地址，后续多用户不属于首版。
-- 当前已确定：CiteRAG 名称、A 版 UI、无字「回响」Logo。正式资产在 `assets/brand/`，UI 在 `design/ui/`。
-- 阶段顺序以 `docs/development/ROADMAP.md` 为准。2026-09-24 用户授权在 Embedding 超长输入边界暂缓、M0 未完成时先推进 M1；M1-1 已提交为 `fbafd86`，M1-2 与 M1-3 问答首片已实现并通过本机分层验证。不把阶段顺序例外或隔离验证当成 M0/完整 M1 验收通过。前端原生 TypeScript + HTML/CSS，不引入 React/Vue。
+- 当前已确定：CiteRAG 名称、无字「回响」Logo。正式资产在 `assets/brand/`，UI 在 `design/ui/`。2026-09-27 用户已选择 B「对话优先知识助手」，正式工作台与独立语音入口使用 React；本轮 A/C 候选代码与截图已移除，旧历史资产不属于本轮清理范围。
+- 阶段顺序以 `docs/development/ROADMAP.md` 为准。2026-09-24 用户授权在 Embedding 超长输入边界暂缓、M0 未完成时先推进 M1；M1-1 已提交为 `fbafd86`，M1-2 与 M1-3 问答首片已实现并通过本机分层验证。不把阶段顺序例外或隔离验证当成 M0/完整 M1 验收通过。
+- 2026-09-27 用户明确授权 React + TypeScript + Vite + Ant Design + Ant Design X，替代“不引入 React”的旧限制。保留 Vite、现有 API、SSE、归属/维护/修订/活动空间及媒体生命周期；React 视图共用既有控制方法和状态，不创建第二套业务逻辑。语音采用 MIT 官方 starter 布局适配与现有 SDK 生命周期，许可见 `frontend/vendor/livekit/`。
+- 本次 UI 工作不新增真实模型、ASR、TTS 或付费调用，不改 schema、迁移/清空业务库或部署。开发交付阶段不 commit/push；2026-09-27 用户随后确认 UI 升级完成并授权本地提交，尚未授权推送。预览写操作及通话连接禁用并说明原因；合成样例明确标注，不计为实际业务验收。
 - 入库与问答默认关闭，`CITERAG_INGESTION_ENABLED=false`、`CITERAG_ANSWER_ENABLED=false`。真实模型请求必须先说明发送内容类别、次数上限、费用和数据影响并另获授权；已有模型/双库证据沿用，不重复付费验证。业务迁移、原文存储或配置变更先说明兼容性、数据影响及停写备份/恢复方式，不清空旧数据。
 - `.local/`、`LiveRAG/`、`LightRAG/`、`output/` 是本地材料或参考目录，不属于待发布项目，不递归加入 Git。
 - 不读取或输出真实凭证；不提交私人资料、运行数据或备份。

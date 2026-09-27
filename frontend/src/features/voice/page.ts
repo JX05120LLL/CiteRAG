@@ -1,11 +1,15 @@
 import type { ApiClient, Conversation, VoiceCapability } from '../../api/client';
 import { createVoiceView } from '../../pages/voice';
-import type { VoiceContext } from '../../pages/voice';
+import type { VoiceContext, VoiceActions } from '../../pages/voice';
 import { VoiceController } from './controller';
 import type { RoomFactory } from './controller';
 import { createMediaRoom } from './livekit';
 
 type Navigation = (page: 'workbench' | 'status', chat?: Conversation) => void;
+export interface VoicePageOptions {
+  render: (view: { context: VoiceContext; actions: VoiceActions; levels: readonly number[] }) => void;
+  onDispose: (dispose: () => void) => void;
+}
 
 export async function mountVoicePage(root: HTMLElement, api: ApiClient, conversationId: string | null,
     factory: RoomFactory = createMediaRoom, navigate: Navigation = (page, chat) => {
@@ -14,7 +18,7 @@ export async function mountVoicePage(root: HTMLElement, api: ApiClient, conversa
         catch { /* Navigation works without convenience storage. */ }
       }
       window.location.assign(page === 'status' ? './index.html?view=status' : './index.html');
-    }) {
+    }, options?: VoicePageOptions) {
   let disposed = false;
   let hidden = false;
   let leaving = false;
@@ -23,9 +27,10 @@ export async function mountVoicePage(root: HTMLElement, api: ApiClient, conversa
   let capabilityError = false;
   let capability: VoiceCapability | null = null;
   let ownedChat: Conversation | undefined;
+  let levels: readonly number[] = [];
   let context: VoiceContext = { chatId: null, chatTitle: '', kbName: '', kbReady: false, chatPending: false };
   const voice = new VoiceController(api, () => { if (!disposed && !hidden) update(); }, factory,
-    (levels) => { if (!disposed && !hidden) view.levels(levels); });
+    (value) => { if (!disposed && !hidden) { levels = value; if (options) update(); else view?.levels(value); } });
   async function leave(page: 'workbench' | 'status') {
     if (disposed || hidden || leaving) return;
     leaving = true;
@@ -37,8 +42,13 @@ export async function mountVoicePage(root: HTMLElement, api: ApiClient, conversa
       !context.error && capability?.transport === 'configured') void voice.connect(context.chatId); },
     hangup: () => { void voice.hangup(); }, microphone: () => { void voice.toggleMicrophone(); },
     output: () => { void voice.toggleOutput(); }, back: () => leave('workbench'), status: () => leave('status') });
-  const view = createVoiceView(context, actions()); root.replaceChildren(view.element);
-  function update() { view.update(context, actions()); }
+  const view = options ? null : createVoiceView(context, actions());
+  if (view) root.replaceChildren(view.element);
+  function update() {
+    if (disposed || hidden) return;
+    if (options) options.render({ context: { ...context }, actions: { ...actions(), media: { ...voice.state } }, levels });
+    else view?.update(context, actions());
+  }
   async function load() {
     if (disposed || hidden || leaving || !['idle', 'failed'].includes(voice.state.phase)) return;
     const current = ++generation;
@@ -76,6 +86,7 @@ export async function mountVoicePage(root: HTMLElement, api: ApiClient, conversa
   };
   window.addEventListener('pagehide', onPageHide);
   window.addEventListener('pageshow', onPageShow);
+  options?.onDispose(() => { void dispose(); });
   await load();
   return { dispose };
 }

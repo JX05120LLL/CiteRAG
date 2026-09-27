@@ -1,8 +1,10 @@
 # CiteRAG 文档导航
 
+2026-09-27 用户选择 B「对话优先知识助手」，正式 React/Ant Design 工作台与独立语音入口已接通既有方法；语音融合 LiveKit 官方 starter 布局。本轮 A/C 候选已清理。该授权替代旧的原生 UI 技术限制，不改变后端、资料语义或验收边界；见[访问地址与截图](../design/ui/react-candidates/README.md)、[B 版 UI 迁移与验证](development/REACT-UI-MIGRATION.md)和[设计说明](../design/ui/react-candidates/DESIGN.md)。下方原生 UI 和媒体记录为历史快照。
+
 当前阶段：**M0 未完成；M1-1 至 M1-4 本机主链路已实现，完整 M1 未验收**。最新文字改动支持普通交流、通用解释与知识库查询分流、多轮指代和资料总结；总结经原文摘录及独立事实支持检查、提交后才通过 SSE 展示正文与引用，保留旧 `partial` 记录和重试。此前已接通断线恢复、180 天保留、停写门禁和可选每日备份/空环境恢复。入库、问答和备份默认关闭，真实模型端到端仍须另获授权；详见分层验证。
 
-首版保持本地单用户、免登录、原生 TypeScript 与「回响」Logo。2026-09-26 已按确认的三张概念稿升级工作台、知识库与独立语音页，加入来源/任务详情栏和手机导航。随后已接本地 LiveKit 媒体测试，原生移植官方语音 UI 并新增 `voice.html`；图片、ASR/知识库语音回答/TTS 尚未接入。文字 UI 见 [UI 升级交付](../design/ui/UI-UPGRADE-20260926.md)，语音新截图、控件接线与验证边界见 [原生语音页交付](../design/ui/VOICE-NATIVE-20260926.md)。
+2026-09-26 历史记录：当时首版保持本地单用户、免登录、原生 TypeScript 与「回响」Logo，按三张概念稿升级工作台、知识库与独立语音页，加入来源/任务详情栏和手机导航。随后接入本地 LiveKit 媒体测试、原生官方语音布局与 `voice.html`。这些历史截图见 [UI 升级交付](../design/ui/UI-UPGRADE-20260926.md)和[原生语音页交付](../design/ui/VOICE-NATIVE-20260926.md)；当前 React B 以本文开头为准。图片、ASR/知识库语音回答/TTS 仍未接入。
 
 M0 五模型及真实双库证据沿用，超长 Embedding 输入仍未通过。隔离测试、真实模型验收和历史服务快照分别记录于 [M1 验证](development/M1-VALIDATION.md)；文档中的端口与数据库快照不代表当前在线状态。UI 自动验证不能替代真实资料和模型验收。
 
@@ -10,7 +12,7 @@ M0 五模型及真实双库证据沿用，超长 Embedding 输入仍未通过。
 |---|---|
 | [当前进度与下次交接](development/HANDOFF.md) | 本轮完成项、模型准备、M0 剩余条件与新会话提示词。 |
 | [本地单用户首版 PRD](多模态知识助手_PRD_v0.2_单企业首版.md) | 已修订产品范围、三模态闭环、数据边界和验收标准；保留旧文件名以兼容链接。 |
-| [技术选型与架构设计](多模态知识助手_技术选型与架构设计_v0.1.md) | 原生 TypeScript、FastAPI、LightRAG、PostgreSQL、LiveKit 的职责与接入约束。 |
+| [技术选型与架构设计](多模态知识助手_技术选型与架构设计_v0.1.md) | React B 正式入口、FastAPI、LightRAG、PostgreSQL、LiveKit 的职责与接入约束。 |
 | [开发路线与 M0 清单](development/ROADMAP.md) | 实施顺序、尚未完成的接入验证及分阶段所需资料。 |
 | [M1 分步实施计划](development/M1-IMPLEMENTATION.md) | 四步推进文字闭环；当前 M1-3 切片、M1-2/M1-1 历史范围、迁移及验收。 |
 | [M1 验证记录](development/M1-VALIDATION.md) | 本片实际检查、模拟与真实隔离 PostgreSQL/浏览器证据及未验证项。 |

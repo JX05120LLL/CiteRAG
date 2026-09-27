@@ -1,5 +1,7 @@
 # CiteRAG · UI 设计资产与可运行界面
 
+2026-09-27 用户已选 **B · 对话优先知识助手**。正式工作台和独立语音入口已使用 React + Ant Design，语音融合官方 LiveKit starter 布局。本轮 A/C 候选代码与截图已清理。完整页面、截图和访问步骤见[B 版交付](react-candidates/README.md)，技术、接口对应和验收见[迁移说明](../../docs/development/REACT-UI-MIGRATION.md)。下方原生实现、已选 A 和不引入 React 的描述均为历史记录。
+
 当前 UI 已按 2026-09-26 用户确认的[三张概念图](concepts/2026-09-26/README.md)升级。实现、控件—API 对应、桌面／手机截图与验收步骤见 [本轮交付](UI-UPGRADE-20260926.md)。历史实现记录见 [2026-09-25 可运行 UI 说明](RUNTIME-UI.md)。下方 A 版四张 SVG/PNG 保留为历史设计资产；当前实现以 `frontend/src/` 为准。运行截图均注明隔离响应与业务验收边界。
 
 随后接入本地 LiveKit 媒体测试，支持用户点击后连接、请求麦克风权限、静音、播放开关、挂断和真实断开说明。用户已选择原生 TypeScript 移植官方语音 UI，新增独立 `voice.html`，与工作台入口共享实现，没有 React/Next.js 依赖。[最新语音截图与验证](VOICE-NATIVE-20260926.md)和[启动步骤](../../docs/development/M2-LIVEKIT-TRANSPORT.md)不代表完整语音验收；语音助手/ASR/TTS 尚未接入。

@@ -33,6 +33,10 @@
 !/frontend/src/pages/status.test.ts
 !/frontend/src/features/voice/controller.test.ts
 !/frontend/src/features/voice/page.test.ts
+!/frontend/src/preview/data.test.ts
+!/frontend/src/preview/app.test.tsx
+!/frontend/src/react/controller.test.ts
+!/frontend/src/react/app.test.tsx
 
 # Credentials and local configuration
 .env

@@ -1,13 +1,5 @@
-import { createApi } from './api/client';
-import { mountVoicePage } from './features/voice/page';
-import './styles.css';
-
-let conversation = new URLSearchParams(window.location.search).get('conversation');
-if (!conversation) {
-  try {
-    const value: unknown = JSON.parse(sessionStorage.getItem('citerag.workbench.selection') ?? 'null');
-    if (value && typeof value === 'object' && 'chatId' in value && typeof value.chatId === 'string') conversation = value.chatId;
-  } catch { /* An unavailable selection leaves the connect action disabled. */ }
-}
+import { createRoot } from 'react-dom/client';
+import { createElement, StrictMode } from 'react';
+import { StandaloneVoice } from './react/App';
 const root = document.querySelector<HTMLElement>('#voice-app');
-if (root) void mountVoicePage(root, createApi(), conversation);
+if (root) createRoot(root).render(createElement(StrictMode, null, createElement(StandaloneVoice)));

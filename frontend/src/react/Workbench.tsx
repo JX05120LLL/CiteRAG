@@ -8,6 +8,7 @@ import { answerFailure } from '../pages/workbench';
 import { locationText } from '../pages/sources';
 import { displayCitations } from '../preview/model';
 import { StateTag } from '../preview/shared';
+import { answerRouteLabel } from './answerRoute';
 
 export function Workbench({ view, api }: { view: AppView; api: ApiClient }) {
   const { state: s, actions: a } = view;
@@ -43,14 +44,16 @@ export function Workbench({ view, api }: { view: AppView; api: ApiClient }) {
         const cited = base?.status === 'ready' && displayCitations(m).length > 0;
         const streaming = m.status === 'running' && s.chatStreamAttemptId === m.attempt_id;
         const content = !readable ? '知识库已变化，此回答与来源已暂停展示。' : m.status === 'running' || !m.saved ? '正在生成并核验，正文提交后再展示。'
-          : ['failed', 'interrupted'].includes(m.status) ? answerFailure(m.error_code) : m.text;
+          : ['failed', 'interrupted'].includes(m.status) ? answerFailure(m.error_code)
+            : m.status === 'insufficient_evidence' ? '当前知识库没有足够的可核查证据，暂不作答。'
+              : m.status === 'needs_clarification' ? m.text || '请补充查询对象或范围。'
+                : m.status === 'conflicting_evidence' ? m.text || '当前资料存在冲突，请核查原文。' : m.text;
         return <article key={m.message_id} className="message-pair"><Bubble placement="end" className="question-bubble" content={m.question} />
           <div><div className="answer-heading"><strong>CiteRAG</strong><StateTag value={m.status === 'answered' && !m.saved ? 'uncommitted' : m.status} />
             <Tag>{m.saved ? '已保存' : '尚未保存'}</Tag></div>
             <div className="answer-text">{content}</div>
             {streaming && <p className="muted">{s.chatStreamSaved ? '结果已保存，等待最终提交' : '核验与保存处理中'}</p>}
-            {readable && <p className="muted">{m.route === 'chat' ? '普通交流' : m.route === 'general' ? '通用回答 · 未检索知识库'
-              : m.status === 'answered' && m.saved ? '资料回答 · 已保存核验结果' : '结果状态以保存记录为准'}</p>}
+            {readable && <p className="muted">{answerRouteLabel(m.route)}</p>}
             {readable && m.error_code && <p className="failure-reason">{answerFailure(m.error_code)}{ /^[a-z][a-z0-9_]{0,63}$/.test(m.error_code) && <><br />错误代码：{m.error_code}</>}</p>}
             {cited && <div className="source-buttons">{m.citations.map((c) => <Button key={c.evidence_id} icon={<FileTextOutlined />} data-source-key={`${m.message_id}:${c.evidence_id}`}
               onClick={() => { trigger.current = `${m.message_id}:${c.evidence_id}`; a.selectCitation(m.message_id, c.evidence_id); }}>{c.filename} · {locationText(c)}</Button>)}</div>}

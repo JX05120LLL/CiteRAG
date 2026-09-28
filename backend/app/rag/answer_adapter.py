@@ -122,7 +122,7 @@ def checked_route(raw: str, candidates: list[dict], question: str,
                 or any(category(char).startswith("C") for char in query)):
                 raise ValueError
             return {"mode": mode, "query": query.strip()}
-        if mode in {"semantic", "general", "chat", "needs_clarification", "unsupported"}:
+        if mode in {"semantic", "general", "needs_clarification"}:
             if set(data) != {"mode"}:
                 raise ValueError
             return {"mode": mode}

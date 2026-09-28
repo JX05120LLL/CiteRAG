@@ -92,6 +92,39 @@ it('does not publish uncommitted text or sources', async () => {
   expect(screen.queryByText(sampleMessages[sampleChats[0].id][0].text)).toBeNull();
 }, 20000);
 
+it('shows the same ordinary and precise knowledge route labels in text and voice', async () => {
+  const original = sampleMessages[sampleChats[0].id][0];
+  const messages = [
+    { ...original, message_id: 'ordinary', question: '你好', text: '合成问候回答', route: 'general' as const, citations: [] },
+    { ...original, message_id: 'precise', question: '查询编号', route: 'literal' as const },
+  ];
+  const { api } = fixture(messages);
+  const mounted = render(<CiteRagApp api={api} />);
+  expect(await screen.findByText('普通回答 · 未检索知识库')).toBeTruthy();
+  expect(screen.getByText('知识库回答 · 精确检索')).toBeTruthy();
+  mounted.unmount();
+  const actions = assistantActions();
+  actions.media.answers = messages;
+  render(<Voice context={{ chatId: sampleChats[0].id, chatTitle: '合成聊天', kbName: '合成库',
+    kbReady: true, chatPending: false }} actions={actions} />);
+  expect(screen.getByText('普通回答 · 未检索知识库')).toBeTruthy();
+  expect(screen.getByText('知识库回答 · 精确检索')).toBeTruthy();
+});
+
+it('shows a knowledge evidence miss clearly without publishing a general answer or source', async () => {
+  const missing = { ...sampleMessages[sampleChats[0].id][0], status: 'insufficient_evidence' as const,
+    route: 'semantic' as const, text: '', citations: [] };
+  const clarification = { ...missing, message_id: 'clarification', status: 'needs_clarification' as const,
+    route: 'needs_clarification' as const, text: '请补充具体对象' };
+  const { api } = fixture([missing, clarification]);
+  render(<CiteRagApp api={api} />);
+  expect(await screen.findByText('当前知识库没有足够的可核查证据，暂不作答。')).toBeTruthy();
+  expect(screen.getByText('知识库回答 · 语义检索')).toBeTruthy();
+  expect(screen.getByText('需要澄清')).toBeTruthy();
+  expect(screen.getByText('请补充具体对象')).toBeTruthy();
+  expect(screen.queryByRole('button', { name: /合成产品手册.md/ })).toBeNull();
+});
+
 it('uses backend offset pagination for documents and preserves disabled maintenance gates', async () => {
   const { api, calls } = fixture(); render(<CiteRagApp api={api} />);
   fireEvent.click(await screen.findByRole('menuitem', { name: /知识库/ }));

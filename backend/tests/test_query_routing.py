@@ -3,6 +3,7 @@
 import asyncio
 import json
 from types import SimpleNamespace
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -14,13 +15,14 @@ from app.providers.dashscope import DashScopeClient
 from app.providers.types import Message
 from app.rag.answer_adapter import AnswerError, LightRAGAnswerAdapter, checked_answer, checked_route
 from app.rag.runtime import RagRuntime
-from app.services.answers import matching_candidates
+from app.services.answers import AnswerService, matching_candidates
 
 
 def test_context_route_resolves_followup_and_accepts_general_without_fake_filters():
     context = {"turns": [{"user": "介绍 Nimbus 项目", "assistant": "旧回答不是证据"}]}
     assert checked_route('{"mode":"general"}', [], "什么是 RAG？") == {"mode": "general"}
-    assert checked_route('{"mode":"chat"}', [], "谢谢") == {"mode": "chat"}
+    with pytest.raises(AnswerError):
+        checked_route('{"mode":"chat"}', [], "谢谢")
     assert checked_route(
         '{"mode":"semantic","query":"Nimbus 项目的并发控制"}', [], "它如何控制并发？",
         context=context,
@@ -92,7 +94,9 @@ async def test_runtime_route_receives_bounded_context_and_document_names():
             payload = json.loads(messages[1].content)
             assert payload["conversation_context"]["turns"][0]["user"] == "介绍 Nimbus 项目"
             assert payload["documents"] == [{"filename": "synthetic.txt", "status": "ready"}]
-            assert "general" in messages[0].content and "历史" in messages[0].content
+            assert "general" in messages[0].content and "近期对话" in messages[0].content
+            assert "简历" not in messages[0].content and "项目" not in messages[0].content
+            assert "当前库" in messages[0].content and "优先知识库检索" in messages[0].content
             return SimpleNamespace(content='{"mode":"semantic","query":"Nimbus 并发控制"}')
 
     runtime = RagRuntime(Settings())
@@ -103,6 +107,69 @@ async def test_runtime_route_receives_bounded_context_and_document_names():
         {"turns": [{"user": "介绍 Nimbus 项目"}]},
         [{"filename": "synthetic.txt", "status": "ready"}])
     assert json.loads(result)["query"] == "Nimbus 并发控制"
+
+
+@pytest.mark.asyncio
+async def test_legacy_chat_route_uses_model_with_recent_context():
+    context = {"turns": [{"user": "我喜欢简洁回答", "assistant": "收到", "answer_kind": "general"}]}
+
+    class Model:
+        async def general_answer(self, question, received):
+            assert question == "你好" and received == context
+            return '{"text":"你好，今天想聊什么？我会尽量简洁。"}'
+
+    status, text, citations = await AnswerService(None)._resolve(
+        uuid4(), "synthetic_workspace", "你好", None, Model(), "auto",
+        {"mode": "chat"}, context,
+    )
+    assert (status, text, citations) == ("answered", "你好，今天想聊什么？我会尽量简洁。", [])
+
+
+@pytest.mark.asyncio
+async def test_general_answer_keeps_dialogue_but_not_old_knowledge_answer_text():
+    context = {"summary": "用户关心温度", "turns": [
+        {"user": "手册规定多少度？", "assistant": "旧资料声称 42 度", "answer_kind": "knowledge"},
+        {"user": "谢谢", "assistant": "不客气", "answer_kind": "chat"},
+    ]}
+
+    class Model:
+        async def general_answer(self, question, received):
+            assert question == "聊聊温度的常见单位"
+            assert received["summary"] == "用户关心温度"
+            assert received["turns"][0] == {
+                "user": "手册规定多少度？", "assistant": "", "answer_kind": "knowledge",
+            }
+            assert received["turns"][1] == context["turns"][1]
+            return '{"text":"摄氏度和华氏度是两种常见温度单位。"}'
+
+    result = await AnswerService(None)._resolve(
+        uuid4(), "synthetic_workspace", "聊聊温度的常见单位", None, Model(), "auto",
+        {"mode": "general"}, context,
+    )
+    assert result == ("answered", "摄氏度和华氏度是两种常见温度单位。", [])
+
+
+@pytest.mark.asyncio
+async def test_general_runtime_sends_bounded_history_to_model():
+    context = {"summary": "用户希望简洁", "turns": [
+        {"user": "什么是 RAG？", "assistant": "检索增强生成。", "answer_kind": "general"},
+    ]}
+
+    class Client:
+        async def complete(self, model, messages, *, max_tokens):
+            assert model == "qwen-flash" and max_tokens == 1024
+            payload = json.loads(messages[1].content)
+            assert payload == {"question": "能举个例子吗？", "conversation_context": context}
+            assert "未检索知识库" in messages[0].content
+            return SimpleNamespace(content='{"text":"可以用技术文档说明 RAG 的检索步骤。"}')
+
+    runtime = RagRuntime(Settings())
+    runtime._started = True
+    runtime._owner_assertion = lambda: None
+    runtime._client = Client()
+    assert json.loads(await runtime.complete_general("能举个例子吗？", context)) == {
+        "text": "可以用技术文档说明 RAG 的检索步骤。",
+    }
 
 
 def test_only_literal_confirmed_attributes_become_candidates():
@@ -131,7 +198,8 @@ def test_model_route_accepts_only_known_candidate_ids_and_fields():
     assert checked_route('{"mode":"exact","candidate_ids":["C1","C2"]}', candidates, question) == {
         "mode": "exact", "filters": {"doc_code": "A001", "model_code": "X100"},
     }
-    assert checked_route('{"mode":"unsupported"}', [], question) == {"mode": "unsupported"}
+    with pytest.raises(AnswerError):
+        checked_route('{"mode":"unsupported"}', [], question)
     assert checked_route('{"mode":"literal","phrase":"ORD-001"}', [], question) == {
         "mode": "literal", "phrase": "ORD-001",
     }

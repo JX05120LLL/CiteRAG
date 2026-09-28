@@ -148,24 +148,24 @@ async def test_auto_route_uses_confirmed_literal_and_reuses_route_on_retry(
         assert retry.json()["citations"][0]["document_id"] == second_id
         assert router.routes == 1
 
-        class Unsupported:
+        class NeedsScope:
             async def route_query(self, question, candidates):
                 assert question == "一共有多少订单？"
                 assert candidates == []
-                return '{"mode":"unsupported"}'
+                return '{"mode":"needs_clarification"}'
 
             async def answer(self, *_args):
                 raise AssertionError("Unsupported business queries must not generate an answer")
 
-        app.state.answer_adapter = Unsupported()
+        app.state.answer_adapter = NeedsScope()
         unsupported = await api.post(f"/api/conversations/{chat}/messages", json={
             "client_message_id": str(uuid4()), "text": "一共有多少订单？", "mode": "auto",
         })
         assert unsupported.status_code == 200, unsupported.json()
         assert unsupported.json()["status"] == "needs_clarification"
-        assert unsupported.json()["route"] == "unsupported"
+        assert unsupported.json()["route"] == "needs_clarification"
         assert unsupported.json()["citations"] == []
-        assert "全集统计" in unsupported.json()["text"]
+        assert "补充" in unsupported.json()["text"]
 
         async with database.sessions() as session:
             source_key = (await session.get(Document, second_id)).source_key

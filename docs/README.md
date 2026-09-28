@@ -1,5 +1,7 @@
 # CiteRAG 文档导航
 
+当前文字／语音共用意图路由以[两级路由设计与验证](development/INTENT-AND-GROUNDED-ANSWERS.md)为准：普通回答覆盖问候与通用知识，知识库回答再选精确或语义检索。2026-09-26 的三类分流描述是历史快照。
+
 当前 M2 工程实现：[语音链路与集中验收](development/M2-VOICE-VALIDATION.md)、[实施设计](development/M2-VOICE-IMPLEMENTATION.md)、[一次真实供应商验证与新截图](development/M2-VOICE-REAL-SUPPLIERS.md)。会话/ASR/VAD/AnswerService/TTS/RTC 已接线；一次公开合成语音的真实 ASR/模型/TTS 与原文字面检索通过，后端171项、前端221项本机通过。真人设备、真实 LightRAG 语义路径及完整 M2 尚未验收。后文未接入描述属于此前快照。
 
 2026-09-27 用户选择 B「对话优先知识助手」，正式 React/Ant Design 工作台与独立语音入口已接通既有方法；语音融合 LiveKit 官方 starter 布局。本轮 A/C 候选已清理。该授权替代旧的原生 UI 技术限制，不改变后端、资料语义或验收边界；见[访问地址与截图](../design/ui/react-candidates/README.md)、[B 版 UI 迁移与验证](development/REACT-UI-MIGRATION.md)和[设计说明](../design/ui/react-candidates/DESIGN.md)。下方原生 UI 和媒体记录为历史快照。

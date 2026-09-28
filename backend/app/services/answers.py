@@ -81,22 +81,13 @@ def answer_view(message: ConversationMessage, attempt: AnswerAttempt) -> dict:
     return view
 
 
-def is_pure_greeting(question: str) -> bool:
-    # Match whole courtesy messages only; greetings inside a factual question still retrieve.
-    parts = re.split(
-        r"[ \t\r\n!?！？，。,.～~]+", question.strip(" \t\r\n!?！？，。,.～~").casefold(),
-    )
-    return all(
-        part in {"hello", "hi", "hey"}
-        or re.fullmatch(r"(?:你好|您好|早上好|下午好|晚上好|谢谢你|谢谢)+", part) is not None
-        for part in parts
-    )
-
-
-def courtesy_reply(question: str) -> str:
-    if "谢谢" in question or "thank" in question.casefold():
-        return "不客气！想继续了解资料或通用知识，可以直接提问。"
-    return "你好！我可以与你交流，也可以根据当前知识库的资料回答问题。"
+def ordinary_context(context: dict) -> dict:
+    """Keep conversational cues without treating a prior knowledge answer as evidence."""
+    return {**context, "turns": [
+        turn if turn.get("answer_kind") in {"general", "chat"}
+        else {**turn, "assistant": ""}
+        for turn in context.get("turns", [])
+    ]}
 
 
 class AnswerService:
@@ -279,22 +270,15 @@ class AnswerService:
                 await on_preview(attempt.id, delta)
 
         try:
-            if mode == "auto" and is_pure_greeting(question):
-                message.query_filter = {"mode": "chat"}
-                status, text, citations = (
-                    "answered",
-                    courtesy_reply(question), [],
-                )
-            else:
-                context = await prepare_context(self.session, conversation_id, kb, answerer)
-                if mode == "auto" and exact is None:
-                    exact = await self._route_auto(kb.id, question, answerer, context)
-                    message.query_filter = exact
-                    await self.session.commit()
-                status, text, citations = await self._resolve(
-                    kb.id, attempt.workspace, question, retriever, answerer, mode, exact, context,
-                    preview if on_preview is not None else None,
-                )
+            context = await prepare_context(self.session, conversation_id, kb, answerer)
+            if mode == "auto" and exact is None:
+                exact = await self._route_auto(kb, question, answerer, context)
+                message.query_filter = exact
+                await self.session.commit()
+            status, text, citations = await self._resolve(
+                kb.id, attempt.workspace, question, retriever, answerer, mode, exact, context,
+                preview if on_preview is not None else None,
+            )
             error_code = None
         except asyncio.CancelledError:
             # A disconnected request must not hold the conversation until restart.
@@ -353,13 +337,13 @@ class AnswerService:
         await self.session.commit()
         return answer_view(message, current_attempt)
 
-    async def _route_auto(self, kb_id: UUID, question: str, answerer: Answerer,
+    async def _route_auto(self, kb: KnowledgeBase, question: str, answerer: Answerer,
                           context: dict) -> dict:
         rows = list(await self.session.execute(select(
             Document.doc_code, Document.model_code, Document.edition, Document.filename,
         ).where(
-            Document.kb_id == kb_id, Document.status == "ready", Document.indexed_once.is_(True),
-        ).limit(501)))
+            Document.kb_id == kb.id, Document.status == "ready", Document.indexed_once.is_(True),
+        ).order_by(Document.created_at.desc(), Document.id.desc()).limit(501)))
         await self.session.commit()
         attributes = [
             (field, value)
@@ -375,7 +359,12 @@ class AnswerService:
         if contextual is not None:
             documents = [{"filename": row.filename[:200], "status": "ready"}
                          for row in rows[:20]]
-            raw = await contextual(question, candidates, context, documents)
+            route_context = {**context, "knowledge_base": {
+                "name": kb.name,
+                "ready_document_count": len(rows) if len(rows) <= 500 else None,
+                "document_list_truncated": len(rows) > 20,
+            }}
+            raw = await contextual(question, candidates, route_context, documents)
             return checked_route(raw, candidates, question, context=context)
         route_query = getattr(answerer, "route_query", None)
         if route_query is None:
@@ -390,13 +379,11 @@ class AnswerService:
         if mode == "auto":
             route = exact or {}
             routed_mode = route.get("mode")
-            if routed_mode == "chat":
-                return "answered", courtesy_reply(question), []
-            if routed_mode == "general":
+            if routed_mode in {"general", "chat"}:
                 general = getattr(answerer, "general_answer", None)
                 if general is None:
                     raise AnswerError("answer_unavailable")
-                raw = await general(route.get("query", question), context)
+                raw = await general(route.get("query", question), ordinary_context(context))
                 try:
                     data = json.loads(raw)
                     if (not isinstance(data, dict) or set(data) != {"text"}
@@ -417,7 +404,7 @@ class AnswerService:
                                                    context, on_preview)
             if routed_mode == "needs_clarification":
                 return ("needs_clarification",
-                        "请说明你指的是哪份资料或哪个项目，也可以补充具体编号或短语。", [])
+                        "请补充具体对象、资料或编号，以便确定该从哪里查找。", [])
             if routed_mode == "unsupported":
                 return ("needs_clarification",
                         "当前知识库不支持以检索片段计算全集统计；请缩小到具体资料或编号。", [])

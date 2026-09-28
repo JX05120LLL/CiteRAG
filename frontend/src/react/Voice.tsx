@@ -4,6 +4,7 @@ import { AudioOutlined, AudioMutedOutlined, ArrowLeftOutlined, PhoneOutlined, Re
 import type { VoiceActions, VoiceContext } from '../pages/voice';
 import { StateTag } from '../preview/shared';
 import { displayCitations } from '../preview/model';
+import { answerRouteLabel } from './answerRoute';
 import { locationText } from '../pages/sources';
 import { answerFailure } from '../pages/workbench';
 
@@ -62,7 +63,7 @@ export function Voice({ context, actions, levels = [], readOnly = false }: {
   const answerCard = (answer: typeof answers[number]) => <Card key={answer.message_id} title={answer.question.length > 160
     ? <details className="voice-question"><summary>{answer.question.slice(0, 80)}…（展开全文）</summary><p>{answer.question}</p></details>
     : answer.question}>
-    <Space wrap><StateTag value={answer.status} /><Tag>{answer.route === 'general' ? '通用回答 · 未检索知识库' : answer.route === 'chat' ? '普通交流' : '资料问答'}</Tag><Tag>{answer.saved ? '已保存文字' : '未保存'}</Tag></Space>
+    <Space wrap><StateTag value={answer.status} /><Tag>{answerRouteLabel(answer.route)}</Tag><Tag>{answer.saved ? '已保存文字' : '未保存'}</Tag></Space>
     <p className="voice-answer">{answer.hidden || answer.stale ? '资料已变化，旧回答与来源暂停展示。'
       : ['failed', 'interrupted'].includes(answer.status) ? answerFailure(answer.error_code)
         : answer.status === 'insufficient_evidence' ? '当前资料没有足够证据，请补充或缩小问题范围。'

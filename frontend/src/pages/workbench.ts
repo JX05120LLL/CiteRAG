@@ -187,8 +187,9 @@ export function renderWorkbench(main: HTMLElement, state: AppState,
           : answerFailure(message.error_code);
         const response = el('div', 'chat-response');
         const status = message.hidden ? '已隐藏' : message.status === 'answered'
-          ? message.route === 'general' ? '通用回答 · 未检索知识库'
-            : message.route === 'chat' ? '普通交流' : '已保存并核验'
+          ? message.route === 'general' || message.route === 'chat' ? '普通回答 · 未检索知识库'
+            : message.route === 'exact' || message.route === 'literal' ? '知识库回答 · 精确检索'
+              : '知识库回答 · 语义检索'
           : message.status === 'running' ? '处理中' : message.status === 'partial' ? '部分回答，未完成'
           : message.status === 'insufficient_evidence' ? '证据不足'
           : message.status === 'needs_clarification' && message.route === 'unsupported' ? '当前不可查询'

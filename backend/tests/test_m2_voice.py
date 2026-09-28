@@ -1,6 +1,7 @@
 """Public synthetic voice regressions. No speech provider credentials or paid requests."""
 
 import asyncio
+import json
 from uuid import uuid4
 
 import pytest
@@ -298,6 +299,30 @@ async def test_session_api_single_control_retry_end_and_durable_voice_input(
     chat = (await api.post("/api/conversations", json={"kb_id": kb})).json()["id"]
     runtime = app.state.voice_runtime
     app.state.answer_enabled = True
+
+    class OrdinaryModel:
+        route_turns = []
+
+        async def route_with_context(self, question, candidates, context, documents):
+            assert question == "你好" and documents
+            self.route_turns.append(len(context["turns"]))
+            return '{"mode":"general"}'
+
+        async def general_answer(self, question, context):
+            return json.dumps({"text": "合成问候回答" + str(len(context["turns"]))},
+                              ensure_ascii=False)
+
+    class NoRetrieval:
+        async def retrieve(self, *_args):
+            pytest.fail("Greeting should not retrieve knowledge")
+
+    ordinary = OrdinaryModel()
+    app.state.answer_adapter, app.state.query_adapter = ordinary, NoRetrieval()
+    typed = await api.post(f"/api/conversations/{chat}/messages", json={
+        "client_message_id": str(uuid4()), "text": "你好", "mode": "auto",
+    })
+    assert typed.status_code == 200 and typed.json()["route"] == "general", typed.json()
+    assert typed.json()["status"] == "answered", typed.json()["error_code"]
     app.state.settings = app.state.settings.model_copy(update={
         "livekit_api_key": SecretStr("synthetic-dev-key"),
         "livekit_api_secret": SecretStr("synthetic-secret-at-least-thirty-two-bytes"),
@@ -345,11 +370,13 @@ async def test_session_api_single_control_retry_end_and_durable_voice_input(
     assert (await api.post(route + "/renew", headers=control, json={})).status_code == 200
     call = runtime.registry.calls[UUID(value["session_id"])]
     worker = runtime.workers[call.id]
-    await worker.turns.submit(1, "你好")  # Real AnswerService courtesy route; no model request.
+    await worker.turns.submit(1, "你好")  # Final transcript shares the text AnswerService route.
     await call.turn_task
     history = (await api.get(f"/api/conversations/{chat}/messages")).json()["items"]
-    assert len(history) == 1 and history[0]["route"] == "chat" and history[0]["saved"]
-    assert history[0]["citations"] == []
+    assert len(history) == 2 and ordinary.route_turns == [0, 1]
+    assert all(item["route"] == "general" and item["saved"]
+               and item["citations"] == [] for item in history)
+    assert {item["text"] for item in history} == {"合成问候回答0", "合成问候回答1"}
     assert (await api.post(route + "/stop", headers=control)).status_code == 200
     ended = await api.post(route + "/end", headers=control)
     assert ended.status_code == 200 and worker.closed and call.closed
@@ -357,7 +384,7 @@ async def test_session_api_single_control_retry_end_and_durable_voice_input(
     assert call.transcripts == {} and call.id not in runtime.workers
     assert (await api.post(route + "/end", headers=control)).status_code == 200
     assert (await api.post(route + "/renew", headers=control, json={})).status_code == 409
-    assert len((await api.get(f"/api/conversations/{chat}/messages")).json()["items"]) == 1
+    assert len((await api.get(f"/api/conversations/{chat}/messages")).json()["items"]) == 2
     # The test-only API stand-in does not own a network client.
     runtime.api = None
 

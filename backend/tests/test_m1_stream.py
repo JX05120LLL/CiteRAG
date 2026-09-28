@@ -11,11 +11,11 @@ import pytest
 from test_ingestion_lifecycle import finished, new_kb, upload
 from test_m13_answer_api import Answer, Query, m13_environment, no_provider_access
 
-from app.models import KnowledgeBase
+from app.models import AnswerAttempt, ConversationMessage, KnowledgeBase
 from app.rag.answer_adapter import AnswerError, checked_answer
 from app.rag.query_adapter import RetrievedChunk
 from app.rag.streamed_answer import ExtractiveDraft
-from app.services.answers import AnswerService, is_pure_greeting
+from app.services.answers import AnswerService
 from app.services.errors import ServiceError
 
 pytest_plugins = ["test_postgres_local"]
@@ -129,21 +129,6 @@ async def test_general_question_skips_retrieval_and_kb_miss_never_falls_back(m13
     assert calls == ["general", "general", "retrieval"]
 
 
-@pytest.mark.parametrize("text", [
-    "你好！", "Hi", "您好。", "hello?", "你好你好", "你好，您好！", "hi hi", "谢谢谢谢你",
-])
-def test_whole_greeting_is_recognized(text):
-    assert is_pure_greeting(text)
-
-
-@pytest.mark.parametrize("text", [
-    "你好，请介绍这份简历", "hello world project", "您好，候选人掌握什么技能？",
-    "你好你好，介绍简历", "high availability", "hihello", "谢谢你，技能是什么？",
-])
-def test_question_with_greeting_still_uses_knowledge_routing(text):
-    assert not is_pure_greeting(text)
-
-
 @pytest.mark.parametrize(("raw", "code"), [
     ('{"status":', "answer_format_invalid"),
     ('{"status":"answered","text":"safe","evidence_ids":["E9"]}', "answer_reference_invalid"),
@@ -156,9 +141,13 @@ def test_invalid_model_answers_have_distinct_safe_reasons(raw, code):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("greeting", ["你好！", "你好你好", "谢谢"])
-async def test_pure_greeting_is_saved_as_chat_without_retrieval_or_model(
-    m13_environment, greeting,
+@pytest.mark.parametrize(("greeting", "reply"), [
+    ("你好！", "你好，今天想聊什么？"),
+    ("你好你好", "你好呀，接着聊吧。"),
+    ("谢谢", "不客气，需要时继续问我。"),
+])
+async def test_greeting_is_routed_to_model_without_retrieval(
+    m13_environment, greeting, reply,
 ):
     api, _, app, _ = m13_environment
     kb = await new_kb(api)
@@ -166,16 +155,18 @@ async def test_pure_greeting_is_saved_as_chat_without_retrieval_or_model(
     chat = (await api.post("/api/conversations", json={"kb_id": kb})).json()["id"]
     app.state.answer_enabled = True
 
-    class NoModel:
-        calls = 0
+    class Model:
+        calls = []
 
-        async def route_query(self, *args):
-            self.calls += 1
-            raise RuntimeError("Unexpected route call")
+        async def route_with_context(self, question, candidates, context, documents):
+            assert question == greeting and not candidates and documents
+            self.calls.append("route")
+            return '{"mode":"general"}'
 
-        async def answer(self, *args):
-            self.calls += 1
-            raise RuntimeError("Unexpected answer call")
+        async def general_answer(self, question, context):
+            assert question == greeting and context["turns"] == []
+            self.calls.append("answer")
+            return json.dumps({"text": reply}, ensure_ascii=False)
 
     class NoRetrieval:
         calls = 0
@@ -184,7 +175,7 @@ async def test_pure_greeting_is_saved_as_chat_without_retrieval_or_model(
             self.calls += 1
             raise RuntimeError("Unexpected retrieval call")
 
-    app.state.answer_adapter, app.state.query_adapter = NoModel(), NoRetrieval()
+    app.state.answer_adapter, app.state.query_adapter = Model(), NoRetrieval()
     response = await api.post(f"/api/conversations/{chat}/messages/stream", json={
         "client_message_id": str(uuid4()), "text": greeting, "mode": "auto",
     })
@@ -192,9 +183,139 @@ async def test_pure_greeting_is_saved_as_chat_without_retrieval_or_model(
     assert received[0][0] == "accepted" and received[-1][0] == "saved"
     saved = received[-1][1]
     assert saved["status"] == "answered" and saved["error_code"] is None
-    assert saved["route"] == "chat" and saved["citations"] == []
-    assert ("不客气" if greeting == "谢谢" else "你好") in saved["text"]
-    assert app.state.answer_adapter.calls == app.state.query_adapter.calls == 0
+    assert saved["route"] == "general" and saved["citations"] == []
+    assert saved["text"] == reply
+    assert app.state.answer_adapter.calls == ["route", "answer"]
+    assert app.state.query_adapter.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_auto_routes_use_each_current_library_and_recent_turns(m13_environment):
+    api, _, app, _ = m13_environment
+    topics = [
+        ("设备知识库", "device.txt",
+         "Device A-17 needs service every 30 days. Rated voltage is 24 V.",
+         "A-17", "它的维护周期呢", "A-17 的维护周期", "这里的设备如何维护？"),
+        ("咖啡知识库", "coffee.txt", "Coffee B-42 uses 18 g grounds and 36 g water at 93 C.",
+         "B-42", "它的用量呢", "B-42 的用量", "这里的咖啡怎么冲？"),
+    ]
+    app.state.answer_enabled = True
+    sources = {}
+    chats = []
+    for name, filename, source, code, followup, rewritten, dual in topics:
+        created = await api.post("/api/knowledge-bases", json={
+            "name": name, "client_request_id": str(uuid4()),
+        })
+        assert created.status_code == 201
+        kb = created.json()["id"]
+        job = await finished(api, await api.post(f"/api/knowledge-bases/{kb}/documents",
+            data={"client_request_id": str(uuid4())},
+            files=[("files", (filename, (source + "\n").encode(), "text/plain"))]))
+        assert job["status"] == "succeeded"
+        chat = (await api.post("/api/conversations", json={"kb_id": kb})).json()["id"]
+        sources[UUID(kb)] = ("source_" + job["document_ids"][0].replace("-", ""), source)
+        chats.append((kb, chat, name, filename, source, code, followup, rewritten, dual))
+
+    class Routes:
+        async def route_with_context(self, question, candidates, context, documents):
+            assert any(context["knowledge_base"]["name"] == item[2]
+                       and documents[0]["filename"] == item[3] for item in chats)
+            assert context["knowledge_base"]["ready_document_count"] == 1
+            if question in {"你好", "为什么天空是蓝色？"}:
+                return '{"mode":"general"}'
+            for _, _, _, _, _, code, followup, rewritten, dual in chats:
+                if question == f"{code} 的参数是什么？":
+                    return json.dumps({"mode": "literal", "phrase": code})
+                if question == followup:
+                    assert context["turns"][-1]["answer_kind"] == "knowledge"
+                    return json.dumps({"mode": "semantic", "query": rewritten}, ensure_ascii=False)
+                if question == dual:
+                    return '{"mode":"semantic"}'
+            if question == "那个是什么？":
+                return '{"mode":"needs_clarification"}'
+            return '{"mode":"semantic"}'
+
+        async def general_answer(self, question, context):
+            return json.dumps({"text": "合成普通回答：" + question}, ensure_ascii=False)
+
+        async def answer_with_context(self, question, evidence, context):
+            return json.dumps({"status": "answered", "text": evidence[0]["text"],
+                               "evidence_ids": ["E1"]})
+
+    class Retrieval:
+        async def retrieve(self, kb, workspace, question, source_ids):
+            if question == "库内不存在的事实":
+                return []
+            source_key, content = sources[kb]
+            assert source_key in source_ids
+            return [RetrievedChunk("synthetic_chunk", source_key, content)]
+
+    app.state.answer_adapter, app.state.query_adapter = Routes(), Retrieval()
+
+    async def ask(chat, question):
+        response = await api.post(f"/api/conversations/{chat}/messages/stream", json={
+            "client_message_id": str(uuid4()), "text": question, "mode": "auto",
+        })
+        assert response.status_code == 200
+        return events(response)[-1][1]
+
+    for kb_id, chat, _, _, source, code, followup, _, dual in chats:
+        for question in ("你好", "为什么天空是蓝色？"):
+            ordinary = await ask(chat, question)
+            assert ordinary["status"] == "answered" and ordinary["route"] == "general"
+            assert ordinary["citations"] == [] and ordinary["text"].startswith("合成普通回答")
+        for question, route in (("总结当前库的要求", "semantic"),
+                                (f"{code} 的参数是什么？", "literal"),
+                                (followup, "semantic"), (dual, "semantic")):
+            grounded = await ask(chat, question)
+            assert grounded["status"] == "answered" and grounded["route"] == route
+            assert grounded["text"] == source and grounded["citations"][0]["excerpt"] == source
+        missing = await ask(chat, "库内不存在的事实")
+        assert missing["status"] == "insufficient_evidence"
+        assert missing["route"] == "semantic" and missing["citations"] == []
+        fresh = (await api.post("/api/conversations", json={"kb_id": kb_id})).json()["id"]
+        unclear = await ask(fresh, "那个是什么？")
+        assert unclear["route"] == "needs_clarification" and unclear["citations"] == []
+
+
+@pytest.mark.asyncio
+async def test_failed_legacy_chat_retry_uses_model_without_changing_saved_route(m13_environment):
+    api, db, app, _ = m13_environment
+    kb = await new_kb(api)
+    await finished(api, await upload(api, kb))
+    chat = (await api.post("/api/conversations", json={"kb_id": kb})).json()["id"]
+    app.state.answer_enabled = True
+
+    class Model:
+        route_calls = 0
+
+        async def route_with_context(self, *_args):
+            self.route_calls += 1
+            return '{"mode":"general"}'
+
+        async def general_answer(self, question, context):
+            assert question == "你好" and not context["turns"]
+            return '{"text":"你好，这次我会结合你的问题回答。"}'
+
+    model = Model()
+    app.state.answer_adapter = model
+    original = events(await api.post(f"/api/conversations/{chat}/messages/stream", json={
+        "client_message_id": str(uuid4()), "text": "你好", "mode": "auto",
+    }))[-1][1]
+    async with db.sessions() as session:
+        message = await session.get(ConversationMessage, UUID(original["message_id"]))
+        attempt = await session.get(AnswerAttempt, UUID(original["attempt_id"]))
+        message.query_filter = {"mode": "chat"}  # Persisted route from older versions.
+        attempt.status, attempt.text, attempt.error_code = "failed", None, "answer_unavailable"
+        await session.commit()
+    retried = await api.post(
+        f"/api/conversations/{chat}/messages/{original['message_id']}/retry",
+        json={"attempt_id": str(uuid4())},
+    )
+    assert retried.status_code == 200, retried.text
+    assert retried.json()["status"] == "answered" and retried.json()["route"] == "chat"
+    assert retried.json()["text"] == "你好，这次我会结合你的问题回答。"
+    assert retried.json()["citations"] == [] and model.route_calls == 1
 
 
 def events(response):

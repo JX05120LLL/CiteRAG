@@ -30,7 +30,7 @@ describe('M0 local workbench', () => {
     });
     button(root, '合成聊天')?.click();
     await vi.waitFor(() => expect(root.textContent).toContain('合成通用回答'));
-    expect(root.textContent).toContain(route === 'general' ? '通用回答 · 未检索知识库' : '普通交流');
+    expect(root.textContent).toContain('普通回答 · 未检索知识库');
     expect(root.querySelector('.citation-trigger')).toBeNull();
     expect(root.querySelector('.message-status')?.textContent).not.toContain('核验');
   });

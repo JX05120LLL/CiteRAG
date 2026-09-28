@@ -42,3 +42,9 @@
 .voice-source-button { height: auto; min-height: 36px; max-width: 100%; white-space: normal; }
 .voice-source-button > span { overflow-wrap: anywhere; }
 .voice-question p { max-height: 180px; overflow-y: auto; font-size: 14px; font-weight: normal; }
+.message-images, .selected-images { display: flex; flex-wrap: wrap; gap: 12px; min-width: 0; }
+.message-image { width: min(100%, 280px); padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: #fff; overflow-wrap: anywhere; }
+.message-image img { display: block; max-width: 100%; max-height: 180px; object-fit: contain; margin: 8px 0; border-radius: 8px; }
+.message-image p { margin: 8px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.selected-images { margin: 0 0 10px; }
+.selected-images > span { padding: 5px 8px; border: 1px solid var(--line); border-radius: 8px; overflow-wrap: anywhere; }

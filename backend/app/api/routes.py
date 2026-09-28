@@ -107,6 +107,8 @@ async def rename_conversation(conversation_id: UUID, body: ConversationRename,
 
 
 @router.delete("/conversations/{conversation_id}")
-async def delete_conversation(conversation_id: UUID, owner: LocalOwner, session: Session):
-    await ConversationService(session).delete(owner, conversation_id)
+async def delete_conversation(conversation_id: UUID, request: Request,
+                              owner: LocalOwner, session: Session):
+    await ConversationService(session, image_store=request.app.state.image_store).delete(
+        owner, conversation_id)
     return {"deleted": True}

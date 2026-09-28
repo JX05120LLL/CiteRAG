@@ -14,10 +14,12 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.api.answers import router as answers_router
 from app.api.boundaries import require_local_request
 from app.api.documents import router as documents_router
+from app.api.images import router as images_router
 from app.api.routes import router
 from app.api.voice import router as voice_router
 from app.config import LOCAL_RUNTIME_ROOT, Settings
 from app.database import Database
+from app.images.storage import PrivateImageStore
 from app.ingestion.jobs import IngestionRunner
 from app.ingestion.storage import PrivateSourceStore
 from app.maintenance.gate import BackupGate
@@ -84,6 +86,7 @@ def create_app(
             if db is not None:
                 store = PrivateSourceStore(application.state.source_root)
                 application.state.source_store = store
+                application.state.image_store = PrivateImageStore(application.state.image_root)
                 adapter = application.state.ingestion_adapter or LightRAGIngestionAdapter(runtime)
                 runner = IngestionRunner(
                     db, store, adapter, application.state.owner.assert_owned,
@@ -106,7 +109,8 @@ def create_app(
                              finished_at=datetime.now(UTC)))
                     await session.commit()
                 retention = RetentionRunner(db, application.state.owner.assert_owned,
-                                            application.state.backup_gate)
+                                            application.state.backup_gate,
+                                            application.state.image_store)
                 stack.push_async_callback(retention.close)
                 await retention.start()
                 application.state.retention_runner = retention
@@ -130,7 +134,10 @@ def create_app(
     application.state.rag_runtime = None
     application.state.rag_probe = None
     application.state.source_root = LOCAL_RUNTIME_ROOT / "sources"
+    application.state.image_root = LOCAL_RUNTIME_ROOT / "attachments"
     application.state.source_store = None
+    application.state.image_store = None
+    application.state.image_observer = None
     application.state.ingestion_runner = None
     application.state.retention_runner = None
     application.state.ingestion_adapter = None
@@ -202,6 +209,7 @@ def create_app(
 
     application.include_router(router)
     application.include_router(documents_router)
+    application.include_router(images_router)
     application.include_router(answers_router)
     application.include_router(voice_router)
     return application

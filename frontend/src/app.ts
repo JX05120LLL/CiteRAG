@@ -24,6 +24,7 @@ export interface AppView {
     selectChat: (id: string) => Promise<void>; createChat: () => Promise<void>;
     renameChat: () => Promise<void>; deleteChat: () => Promise<void>; loadMoreChats: () => Promise<void>;
     sendChat: () => Promise<void>; retryChat: (id: string) => Promise<void>; setDraft: (text: string) => void;
+    selectChatImages: (files: File[]) => void; confirmChatImage: (messageId: string, imageId: string) => Promise<void>;
     selectKb: (id: string) => void; selectCitation: (messageId: string, evidenceId: string) => void; closeCitation: () => void;
     createKnowledgeBase: () => Promise<void>; beginRename: (id: string) => void;
     renameKnowledgeBase: () => Promise<void>; cancelRename: () => void; setKnowledgeName: (name: string, rename?: boolean) => void;
@@ -58,6 +59,7 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
     createDraft: { name: '', pending: false, error: null, requestId: null, requestName: null, uncertain: false },
     renameDraft: null, knowledgeNotice: null,
     selectedKbId: restoredSelection.kbId, selectedChatId: restoredSelection.chatId, chatMessages: [], chatDraft: '',
+    chatImages: [], chatUploadedImages: [],
     chatStreamText: '', chatStreamSaved: false, chatStreamAttemptId: null,
     chatPending: false, chatError: null, chatRequestKey: null, chatRequestText: null,
   };
@@ -188,6 +190,7 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
   async function selectChat(id: string) {
     const chat = state.chats?.find((item) => item.id === id);
     if (!chat || state.chatPending) return;
+    discardDraftImages();
     const currentChatGeneration = ++chatGeneration;
     state.navigationOpen = false;
     state.selectedKbId = chat.kb_id;
@@ -239,6 +242,7 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
       state.chats = [chat, ...(state.chats ?? [])];
       listedChatIds.add(chat.id);
       chatOffset += 1;
+      discardDraftImages();
       state.selectedChatId = chat.id;
       rememberSelection();
       state.chatMessages = [];
@@ -286,6 +290,7 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
       state.chats = (state.chats ?? []).filter((item) => item.id !== id);
       if (listedChatIds.delete(id)) chatOffset = Math.max(0, chatOffset - 1);
       state.selectedChatId = null;
+      discardDraftImages();
       rememberSelection();
       state.chatMessages = [];
       state.chatError = null;
@@ -308,6 +313,10 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
     state.chatError = null;
     render();
     try {
+      for (const file of state.chatImages.slice(state.chatUploadedImages.length)) {
+        state.chatUploadedImages.push(await api.uploadImage(state.selectedChatId, file));
+        render();
+      }
       const message = await api.askMessageStream(state.selectedChatId, question, state.chatRequestKey,
         'auto', undefined, (progress) => {
           if (progress.type === 'accepted') {
@@ -321,11 +330,13 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
             state.chatStreamSaved = progress.saved;
           }
           render();
-        });
+        }, state.chatUploadedImages.map((image) => image.id));
       state.chatMessages = [...state.chatMessages.filter((item) => item.message_id !== message.message_id), message];
       state.chatDraft = '';
       state.chatRequestKey = null;
       state.chatRequestText = null;
+      state.chatImages = [];
+      state.chatUploadedImages = [];
     } catch (error) {
       state.chatError = error instanceof ApiError ? error : new ApiError('http');
       try { state.chatMessages = await api.conversationMessages(state.selectedChatId); }
@@ -338,6 +349,8 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
         state.chatDraft = '';
         state.chatRequestKey = null;
         state.chatRequestText = null;
+        state.chatImages = [];
+        state.chatUploadedImages = [];
       }
     } finally {
       state.chatStreamText = '';
@@ -346,6 +359,47 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
       state.chatPending = false;
       render();
     }
+  }
+
+  function discardDraftImages() {
+    const chatId = state.selectedChatId;
+    if (chatId) for (const image of state.chatUploadedImages)
+      void api.deletePendingImage(chatId, image.id).catch(() => {});
+    state.chatImages = [];
+    state.chatUploadedImages = [];
+  }
+
+  function selectChatImages(files: File[]) {
+    if (state.chatPending || !state.selectedChatId) return;
+    if (files.length > 2 || files.some((file) =>
+        !['image/png', 'image/jpeg'].includes(file.type) || file.size < 1 || file.size > 10 * 1024 * 1024)) {
+      state.chatError = new ApiError('validation', files.length > 2 ? 'invalid_images'
+        : files.some((file) => file.size > 10 * 1024 * 1024) ? 'image_too_large' : 'invalid_image');
+      render(); return;
+    }
+    discardDraftImages();
+    state.chatImages = files;
+    state.chatUploadedImages = [];
+    state.chatRequestKey = state.chatRequestText = null;
+    state.chatError = null;
+    render();
+  }
+
+  async function confirmChatImage(messageId: string, imageId: string) {
+    const chatId = state.selectedChatId;
+    const message = state.chatMessages.find((item) => item.message_id === messageId);
+    if (!chatId || !message?.images?.some((image) => image.id === imageId && image.needs_confirmation)
+        || state.chatPending) return;
+    const identifier = (await options.prompt?.('请核对图片原文，输入确认的完整编号', ''))?.trim();
+    if (!identifier) return;
+    state.chatPending = true; state.chatError = null; render();
+    try {
+      await api.confirmImage(chatId, imageId, identifier);
+      state.chatMessages = await api.conversationMessages(chatId);
+    } catch (error) {
+      state.chatError = error instanceof ApiError ? error : new ApiError('http');
+    } finally { state.chatPending = false; render(); }
+    if (!state.chatError) await retryChat(messageId);
   }
 
   async function followSavedAnswer(chatId: string, messageId: string, expectedGeneration: number) {
@@ -371,7 +425,9 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
     if (!chatId || state.chatPending ||
         state.chatMessages.some((item) => item.status === 'running') ||
         !state.chatMessages.some((item) => item.message_id === messageId &&
-          !item.hidden && !item.stale && ['failed', 'interrupted', 'partial'].includes(item.status))) return;
+          !item.hidden && !item.stale && (['failed', 'interrupted', 'partial'].includes(item.status) ||
+            item.status === 'needs_clarification' && !!item.images?.some((image) => image.needs_confirmation) &&
+            !!item.images?.every((image) => !image.needs_confirmation || !!image.confirmed_identifier)))) return;
     const key = retryKeys.get(messageId) ?? crypto.randomUUID();
     retryKeys.set(messageId, key);
     state.chatPending = true;
@@ -539,8 +595,9 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
             originalUrl: api.originalUrl,
             back: async () => { await voice.hangup(); navigate('workbench'); }, status: async () => { await voice.hangup(); navigate('status'); } } },
         actions: { navigate, refresh, loadHealth, selectChat, createChat, renameChat, deleteChat, loadMoreChats, sendChat, retryChat,
+          selectChatImages, confirmChatImage,
           selectKb: (id) => { if (disposed || state.chatPending || documentsPanel.snapshot.busy || !state.bases?.some((item) => item.id === id)) return;
-            ++chatGeneration; state.selectedKbId = id; state.selectedChatId = null; rememberSelection();
+            discardDraftImages(); ++chatGeneration; state.selectedKbId = id; state.selectedChatId = null; rememberSelection();
             state.chatMessages = []; state.chatError = null; state.chatDraft = ''; state.selectedCitation = null; state.chatRequestKey = state.chatRequestText = null; render(); },
           setDraft: (text) => { state.chatDraft = text; if (text.trim() !== state.chatRequestText) state.chatRequestKey = state.chatRequestText = null; render(); },
           selectCitation: (messageId, evidenceId) => { state.selectedCitation = { messageId, evidenceId }; render(); },
@@ -582,7 +639,7 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
     else if (state.page === 'status') renderStatus(main, state, loadHealth);
     else renderWorkbench(main, state, navigate, {
       refresh, selectChat, createChat, renameChat, deleteChat, retryChat, sendChat,
-      selectKb: (id: string) => { state.selectedKbId = id; state.selectedChatId = null;
+      selectKb: (id: string) => { discardDraftImages(); state.selectedKbId = id; state.selectedChatId = null;
         rememberSelection();
         state.chatMessages = []; state.chatError = null; state.chatDraft = '';
         state.chatRequestKey = state.chatRequestText = null; render(); },

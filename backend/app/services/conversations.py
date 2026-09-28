@@ -8,15 +8,18 @@ from app.models import (
     Conversation,
     ConversationMessage,
     ConversationSummary,
+    ImageAttachment,
     KnowledgeBase,
+    MessageImage,
 )
 from app.services.conversation_retention import active_conversation
 from app.services.errors import ServiceError
 
 
 class ConversationService:
-    def __init__(self, session: AsyncSession):
+    def __init__(self, session: AsyncSession, *, image_store=None):
         self.session = session
+        self.image_store = image_store
 
     async def create(self, owner_id: UUID, kb_id: UUID, title: str) -> Conversation:
         kb = await self.session.scalar(
@@ -84,6 +87,19 @@ class ConversationService:
             AnswerAttempt.status == "running",
         ).limit(1)):
             raise ServiceError(409, "answer_in_progress", "回答仍在处理中，请稍后删除聊天")
+        image_keys = []
+        if self.image_store is not None:
+            images = list(await self.session.scalars(select(ImageAttachment).where(
+                ImageAttachment.conversation_id == conversation_id,
+                ImageAttachment.owner_id == owner_id,
+            )))
+            image_keys = [image.storage_key for image in images]
+            await self.session.execute(delete(MessageImage).where(
+                MessageImage.attachment_id.in_([image.id for image in images]),
+            ))
+            await self.session.execute(delete(ImageAttachment).where(
+                ImageAttachment.conversation_id == conversation_id,
+            ))
         await self.session.execute(delete(ConversationSummary).where(
             ConversationSummary.conversation_id == conversation_id,
         ))
@@ -95,3 +111,5 @@ class ConversationService:
         ))
         await self.session.delete(conversation)
         await self.session.commit()
+        for key in image_keys:
+            self.image_store.discard(key)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import math
 import re
@@ -23,6 +24,7 @@ from app.providers.types import (
 )
 
 PROVIDER = "dashscope"
+VISION_MODEL = "qwen3.8-omni-flash"
 EMBEDDING_SINGLE_TEXT_TOKEN_LIMIT = 8192
 TIMEOUT = httpx.Timeout(connect=5, read=45, write=10, pool=5)
 LIMITS = httpx.Limits(max_connections=5, max_keepalive_connections=2)
@@ -139,6 +141,48 @@ class DashScopeClient:
             request_id=_request_id(response, body),
             usage=_usage(body.get("usage"), model, response),
         )
+
+    async def observe_images(self, images: list[tuple[str, bytes]]) -> Completion:
+        """Extract bounded visual observations; never expose a private file URL."""
+        if not 1 <= len(images) <= 2 or any(
+            mime not in {"image/png", "image/jpeg"} or not data or len(data) > 10 * 1024 * 1024
+            for mime, data in images
+        ):
+            raise ValueError("vision input must contain one or two bounded PNG/JPEG images")
+        content = [{"type": "text", "text": (
+            "只观察图片中可直接看见的内容和文字，不推断外部资料。"
+            "返回 JSON 对象：observation 为最多 1000 字的中文描述；"
+            "uncertain_identifiers 为看不清或有多个候选的编号数组，最多 5 个。"
+            "若看不清，明确写出不确定，不猜测编号。"
+        )}]
+        content.extend({"type": "image_url", "image_url": {
+            "url": f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}"
+        }} for mime, data in images)
+        response = await self._post("/compatible-mode/v1/chat/completions", {
+            "model": VISION_MODEL,
+            "messages": [{"role": "user", "content": content}],
+            "modalities": ["text"],
+            "reasoning_effort": "none",
+            "response_format": {"type": "json_object"},
+            "max_tokens": 1200,
+        }, VISION_MODEL)
+        body = _json_object(response, VISION_MODEL)
+        try:
+            choices = body["choices"]
+            if not isinstance(choices, list) or len(choices) != 1:
+                raise ValueError
+            choice = choices[0]
+            content = choice["message"]["content"]
+            reason = choice.get("finish_reason")
+            if reason == "length":
+                raise ProviderError("output_limit", PROVIDER, VISION_MODEL,
+                                    status=response.status_code)
+            if not isinstance(content, str) or not content or reason != "stop":
+                raise ValueError
+        except (ValueError, KeyError, TypeError, IndexError):
+            raise _protocol_error(VISION_MODEL, response) from None
+        return Completion(VISION_MODEL, content, reason, _request_id(response, body),
+                          _usage(body.get("usage"), VISION_MODEL, response))
 
     async def stream_complete(
         self, model: str, messages: list[Message], *, max_tokens: int

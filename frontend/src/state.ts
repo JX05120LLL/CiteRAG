@@ -1,4 +1,4 @@
-import type { ApiError, ChatMessage, Conversation, KnowledgeBase, SystemHealth } from './api/client';
+import type { ApiError, ChatImage, ChatMessage, Conversation, KnowledgeBase, SystemHealth } from './api/client';
 
 export type Page = 'workbench' | 'knowledge' | 'tasks' | 'status' | 'voice';
 
@@ -41,6 +41,8 @@ export interface AppState {
   chatStreamSaved?: boolean;
   chatStreamAttemptId?: string | null;
   chatDraft: string;
+  chatImages: File[];
+  chatUploadedImages: ChatImage[];
   chatPending: boolean;
   chatError: ApiError | null;
   chatRequestKey: string | null;

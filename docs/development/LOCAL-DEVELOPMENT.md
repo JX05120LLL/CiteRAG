@@ -1,5 +1,7 @@
 # CiteRAG 本地开发
 
+M3 图片增量需在**停写、备份业务库/引擎库及私有运行目录后**将业务库显式升级到 `0008_image_attachments`，再重启唯一 API；本轮未触碰实际业务库或正在运行的验收服务。非实时图片观察复用受控后端百炼配置，真实 `qwen3.8-omni-flash` 请求需另获授权。添加 Pillow 锁定依赖；安装与验收边界见 [M3 图片记录](M3-MULTIMODAL-VALIDATION.md)。
+
 M2 当前启动及配置以 [语音集中验收](M2-VOICE-VALIDATION.md#启动与关闭) 为准：`uv sync --locked --extra rag --extra voice`，受控配置下启用正式语音；Silero固定校验，本地自托管 LiveKit，唯一 API worker。下面“ASR/TTS 未接入”及旧端口是历史快照。新增真实付费/音频数据验证须另获授权，不使用本轮合成服务冒充真实供应商。
 
 2026-09-27 语音收尾：一次公开合成 ASR/模型/TTS 路径已 [真实验证](M2-VOICE-REAL-SUPPLIERS.md)。正式后端 `Settings.from_env()` 在 `CITERAG_VOICE_ASSISTANT_ENABLED=true` 时，自动用既有 ACL/DPAPI 加载器读取缺失的 `.local/runtime/models/volcengine.credential.xml` 与 `minimax.credential.xml`；显式环境 Key 优先，默认关闭时不读取，不加载 `.env`。这只补配置来源，不自动启用问答/入库、迁移 schema 或调用供应商。损坏/缺失仍显示未配置；旧 App ID/Access Token 与新 API Key 不混用。两份已保存凭证不需复制到前端。真人/持续付费范围仍需单独确认，本轮一次额度已用完。

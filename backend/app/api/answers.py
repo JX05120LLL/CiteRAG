@@ -10,7 +10,14 @@ from uuid import UUID
 from fastapi import APIRouter, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, ConfigDict, StringConstraints, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 from app.api.dependencies import LocalOwner, Session
 from app.rag.answer_adapter import LightRAGAnswerAdapter
@@ -28,6 +35,7 @@ class AskRequest(BaseModel):
     text: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=1000)]
     mode: Literal["semantic", "exact", "auto"] = "semantic"
     exact: "ExactFilter | None" = None
+    image_ids: list[UUID] = Field(default_factory=list, max_length=2)
 
     @field_validator("text")
     @classmethod
@@ -43,6 +51,8 @@ class AskRequest(BaseModel):
     def valid_mode(self):
         if (self.mode == "exact") != (self.exact is not None):
             raise ValueError("Exact mode requires confirmed document filters")
+        if len(set(self.image_ids)) != len(self.image_ids):
+            raise ValueError("Image IDs must be unique")
         return self
 
 
@@ -89,9 +99,12 @@ async def ask(conversation_id: UUID, body: AskRequest, request: Request,
     retriever = request.app.state.query_adapter or LightRAGQueryAdapter(runtime)
     answerer = request.app.state.answer_adapter or LightRAGAnswerAdapter(runtime)
     return await AnswerService(session,
-        admission=request.app.state.voice_runtime.registry.require_text).ask(
+        admission=request.app.state.voice_runtime.registry.require_text,
+        image_store=request.app.state.image_store,
+        image_observer=request.app.state.image_observer or runtime).ask(
         owner, conversation_id, body.client_message_id, body.text, retriever, answerer,
         mode=body.mode, exact=body.exact.model_dump(exclude_none=True) if body.exact else None,
+        image_ids=body.image_ids,
     )
 
 
@@ -128,10 +141,13 @@ async def ask_stream(conversation_id: UUID, body: AskRequest, request: Request,
             try:
                 async with database.sessions() as session:
                     view = await AnswerService(session,
-                        admission=request.app.state.voice_runtime.registry.require_text).ask(
+                        admission=request.app.state.voice_runtime.registry.require_text,
+                        image_store=request.app.state.image_store,
+                        image_observer=request.app.state.image_observer or runtime).ask(
                         owner, conversation_id, body.client_message_id, body.text,
                         retriever, answerer, mode=body.mode,
                         exact=body.exact.model_dump(exclude_none=True) if body.exact else None,
+                        image_ids=body.image_ids,
                         on_accepted=accepted, on_preview=preview,
                     )
                 if view["status"] == "running":
@@ -173,8 +189,10 @@ async def ask_stream(conversation_id: UUID, body: AskRequest, request: Request,
 
 
 @router.get("/conversations/{conversation_id}/messages")
-async def list_messages(conversation_id: UUID, owner: LocalOwner, session: Session):
-    return {"items": await AnswerService(session).list_messages(owner, conversation_id)}
+async def list_messages(conversation_id: UUID, request: Request,
+                        owner: LocalOwner, session: Session):
+    return {"items": await AnswerService(session,
+        image_store=request.app.state.image_store).list_messages(owner, conversation_id)}
 
 
 @router.post("/conversations/{conversation_id}/messages/{message_id}/retry")
@@ -187,6 +205,8 @@ async def retry_answer(conversation_id: UUID, message_id: UUID, body: RetryReque
     retriever = request.app.state.query_adapter or LightRAGQueryAdapter(runtime)
     answerer = request.app.state.answer_adapter or LightRAGAnswerAdapter(runtime)
     return await AnswerService(session,
-        admission=request.app.state.voice_runtime.registry.require_text).retry(
+        admission=request.app.state.voice_runtime.registry.require_text,
+        image_store=request.app.state.image_store,
+        image_observer=request.app.state.image_observer or runtime).retry(
                                               owner, conversation_id, message_id,
                                               body.attempt_id, retriever, answerer)

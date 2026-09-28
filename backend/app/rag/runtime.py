@@ -414,6 +414,11 @@ class RagRuntime:
         ], max_tokens=300)
         return result.content
 
+    async def observe_images(self, images: list[tuple[str, bytes]]):
+        """Reuse the protected Beijing client for M3 visual observations."""
+        client = await self._get_client()
+        return await client.observe_images(images)
+
     async def _get_client(self) -> DashScopeClient:
         """Initialize models on first use, independently of an engine workspace."""
         async with self._lock:

@@ -125,6 +125,23 @@ it('shows a knowledge evidence miss clearly without publishing a general answer 
   expect(screen.queryByRole('button', { name: /合成产品手册.md/ })).toBeNull();
 });
 
+it('keeps a synthetic image observation separate from verified source citations', async () => {
+  const image = { id: 'image-1', filename: '合成铭牌.png', mime_type: 'image/png' as const,
+    width: 320, height: 240, size: 1024, observation: '编号字迹模糊',
+    observation_status: 'ready' as const, needs_confirmation: true, confirmed_identifier: null,
+    expires_at: '2026-10-01T00:00:00Z' };
+  const message = { ...sampleMessages[sampleChats[0].id][0],
+    status: 'needs_clarification' as const, route: 'needs_clarification' as const,
+    text: '请确认图片编号', citations: [], images: [image] };
+  const { api } = fixture([message]);
+  render(<CiteRagApp api={api} />);
+  expect(await screen.findByText('合成铭牌.png')).toBeTruthy();
+  expect(screen.getByText('编号字迹模糊')).toBeTruthy();
+  expect(screen.getByRole('button', { name: '确认图片编号' })).toBeTruthy();
+  expect(screen.queryByRole('button', { name: '重试回答' })).toBeNull();
+  expect(screen.queryByRole('button', { name: /合成产品手册.md/ })).toBeNull();
+});
+
 it('uses backend offset pagination for documents and preserves disabled maintenance gates', async () => {
   const { api, calls } = fixture(); render(<CiteRagApp api={api} />);
   fireEvent.click(await screen.findByRole('menuitem', { name: /知识库/ }));

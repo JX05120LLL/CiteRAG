@@ -84,6 +84,7 @@ def no_provider_access(monkeypatch):
 async def application(database, settings, root, adapter, *, enabled=True):
     app = create_app(settings.model_copy(update={"ingestion_enabled": enabled}), database=database)
     app.state.source_root = root
+    app.state.image_root = root.parent / "images"
     app.state.ingestion_adapter = adapter
     async with app.router.lifespan_context(app):
         async with AsyncClient(

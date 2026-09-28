@@ -18,6 +18,7 @@ export function Workbench({ view, api }: { view: AppView; api: ApiClient }) {
   const sourceMessage = base?.status === 'ready' ? s.chatMessages.find((item) => item.message_id === s.selectedCitation?.messageId && displayCitations(item).length > 0) : undefined;
   const citation = sourceMessage?.citations.find((item) => item.evidence_id === s.selectedCitation?.evidenceId);
   const root = useRef<HTMLDivElement>(null);
+  const imageInput = useRef<HTMLInputElement>(null);
   const trigger = useRef('');
   useEffect(() => {
     if (citation || !trigger.current) return;
@@ -49,22 +50,42 @@ export function Workbench({ view, api }: { view: AppView; api: ApiClient }) {
               : m.status === 'needs_clarification' ? m.text || '请补充查询对象或范围。'
                 : m.status === 'conflicting_evidence' ? m.text || '当前资料存在冲突，请核查原文。' : m.text;
         return <article key={m.message_id} className="message-pair"><Bubble placement="end" className="question-bubble" content={m.question} />
+          {!!m.images?.length && <div className="message-images">{m.images.map((image) =>
+            <div key={image.id} className="message-image"><span>{image.filename}</span>
+              {Date.parse(image.expires_at) > Date.now() ?
+                <img src={api.imageUrl(s.selectedChatId!, image.id)} alt={`提问图片：${image.filename}`} /> :
+                <span className="muted">图片已过期</span>}
+              {image.observation && <p><strong>图片观察：</strong>{image.observation}</p>}
+              {image.observation_status === 'failed' && <p className="failure-reason">图片识别失败，具体原因见下方。排除原因后可重试回答。</p>}
+              {image.needs_confirmation && !image.confirmed_identifier && <Button disabled={busy}
+                onClick={() => void a.confirmChatImage(m.message_id, image.id)}>确认图片编号</Button>}
+              {image.confirmed_identifier && <p>已确认编号：{image.confirmed_identifier}</p>}
+            </div>)}</div>}
           <div><div className="answer-heading"><strong>CiteRAG</strong><StateTag value={m.status === 'answered' && !m.saved ? 'uncommitted' : m.status} />
             <Tag>{m.saved ? '已保存' : '尚未保存'}</Tag></div>
             <div className="answer-text">{content}</div>
             {streaming && <p className="muted">{s.chatStreamSaved ? '结果已保存，等待最终提交' : '核验与保存处理中'}</p>}
             {readable && <p className="muted">{answerRouteLabel(m.route)}</p>}
-            {readable && m.error_code && <p className="failure-reason">{answerFailure(m.error_code)}{ /^[a-z][a-z0-9_]{0,63}$/.test(m.error_code) && <><br />错误代码：{m.error_code}</>}</p>}
+            {readable && m.error_code && <p className="failure-reason">{!['failed', 'interrupted'].includes(m.status) && <>{answerFailure(m.error_code)}<br /></>}{ /^[a-z][a-z0-9_]{0,63}$/.test(m.error_code) && <>错误代码：{m.error_code}</>}</p>}
             {cited && <div className="source-buttons">{m.citations.map((c) => <Button key={c.evidence_id} icon={<FileTextOutlined />} data-source-key={`${m.message_id}:${c.evidence_id}`}
               onClick={() => { trigger.current = `${m.message_id}:${c.evidence_id}`; a.selectCitation(m.message_id, c.evidence_id); }}>{c.filename} · {locationText(c)}</Button>)}</div>}
-            {readable && ['failed', 'interrupted', 'partial'].includes(m.status) && <Button className="retry-answer" disabled={busy || base?.status !== 'ready'} onClick={() => void a.retryChat(m.message_id)}>重试回答</Button>}
+            {readable && (['failed', 'interrupted', 'partial'].includes(m.status) || m.status === 'needs_clarification' &&
+              !!m.images?.some((image) => image.needs_confirmation) &&
+              !!m.images?.every((image) => !image.needs_confirmation || !!image.confirmed_identifier)) && <Button className="retry-answer" disabled={busy || base?.status !== 'ready'}
+                onClick={() => void a.retryChat(m.message_id)}>重试回答</Button>}
           </div></article>;
       })}
     </div>
-    <div className="composer"><Sender value={s.chatDraft} onChange={(value) => a.setDraft(value.slice(0, 1000))} onSubmit={() => { if (enabled && s.chatDraft.trim()) void a.sendChat(); }}
+    <div className="composer"><input ref={imageInput} type="file" accept="image/png,image/jpeg" multiple hidden
+      aria-label="选择提问图片" onChange={(event) => { a.selectChatImages(Array.from(event.target.files ?? [])); event.target.value = ''; }} />
+      {!!s.chatImages.length && <div className="selected-images" aria-label="待发送图片">{s.chatImages.map((file, index) =>
+        <span key={`${file.name}-${index}`}>{file.name} <Button size="small" disabled={busy}
+          onClick={() => a.selectChatImages(s.chatImages.filter((_, item) => item !== index))}>移除</Button></span>)}</div>}
+      <Sender value={s.chatDraft} onChange={(value) => a.setDraft(value.slice(0, 1000))} onSubmit={() => { if (enabled && s.chatDraft.trim()) void a.sendChat(); }}
       disabled={!enabled} loading={busy} autoSize={{ minRows: 2, maxRows: 6 }}
       placeholder={enabled ? '输入问题，自动识别普通交流或知识库查询' : '先选择就绪知识库并打开聊天'}
-      suffix={false} footer={<div className="composer-controls"><Space wrap><Tooltip title="图片提问尚未接入"><Button icon={<PictureOutlined />} disabled>添加图片</Button></Tooltip>
+      suffix={false} footer={<div className="composer-controls"><Space wrap><Tooltip title="每条问题最多 2 张 PNG/JPEG，每张 10 MiB"><Button icon={<PictureOutlined />}
+        disabled={!enabled} onClick={() => imageInput.current?.click()}>添加图片</Button></Tooltip>
         <span className="composer-kb"><BookOutlined />{base?.name || '未选择知识库'}</span></Space>
         <Space wrap><Button icon={<AudioOutlined />} disabled={busy} onClick={() => a.navigate('voice')}>语音通话</Button>
           <Button type="primary" loading={busy} disabled={!enabled || !s.chatDraft.trim()} onClick={() => void a.sendChat()}>发送问题 ↑</Button></Space></div>} />

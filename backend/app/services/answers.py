@@ -9,15 +9,19 @@ from typing import Any, Protocol
 from unicodedata import category
 from uuid import UUID, uuid4
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.images.service import ImageService, image_view
+from app.images.storage import PrivateImageStore
 from app.models import (
     AnswerAttempt,
     Conversation,
     ConversationMessage,
     Document,
+    ImageAttachment,
     KnowledgeBase,
+    MessageImage,
     ParsedBlockRecord,
 )
 from app.rag.answer_adapter import AnswerError, checked_answer, checked_route
@@ -37,6 +41,10 @@ class Retriever(Protocol):
 
 class Answerer(Protocol):
     async def answer(self, question: str, evidence: list[dict]) -> str: ...
+
+
+class _ImageNeedsConfirmation(Exception):
+    """Stop before retrieval until a human confirms an uncertain identifier."""
 
 
 def matching_candidates(question: str, attributes: list[tuple[str, str]]) -> list[dict]:
@@ -94,11 +102,22 @@ class AnswerService:
     def __init__(self, session: AsyncSession, *,
                  admission: Callable[[UUID], None] | None = None,
                  commit_allowed: Callable[[], bool] | None = None,
-                 expected_binding: tuple[int, str] | None = None):
+                 expected_binding: tuple[int, str] | None = None,
+                 image_store: PrivateImageStore | None = None,
+                 image_observer: object | None = None):
         self.session = session
         self.admission = admission
         self.commit_allowed = commit_allowed
         self.expected_binding = expected_binding
+        self.images = ImageService(session, image_store) if image_store is not None else None
+        self.image_observer = image_observer
+
+    async def _view(self, message: ConversationMessage, attempt: AnswerAttempt) -> dict:
+        view = answer_view(message, attempt)
+        if self.images is not None:
+            view["images"] = [image_view(image)
+                              for image in await self.images.for_message(message.id)]
+        return view
 
     async def _owned_conversation(self, owner: UUID, conversation_id: UUID, *, lock=False):
         query = select(Conversation).where(
@@ -121,6 +140,15 @@ class AnswerService:
 
     async def list_messages(self, owner: UUID, conversation_id: UUID) -> list[dict]:
         _, kb = await self._owned_conversation(owner, conversation_id)
+        expired_image_at = None
+        if self.images is not None:
+            expired_image_at = await self.session.scalar(
+                select(func.min(ConversationMessage.created_at))
+                .join(MessageImage, MessageImage.message_id == ConversationMessage.id)
+                .join(ImageAttachment, ImageAttachment.id == MessageImage.attachment_id)
+                .where(ConversationMessage.conversation_id == conversation_id,
+                       ImageAttachment.expires_at <= datetime.now(UTC))
+            )
         rows = await self.session.execute(
             select(ConversationMessage, AnswerAttempt)
             .join(AnswerAttempt, AnswerAttempt.message_id == ConversationMessage.id)
@@ -131,13 +159,16 @@ class AnswerService:
         )
         messages: dict[UUID, dict] = {}
         for message, attempt in rows:
-            view = answer_view(message, attempt)
+            view = await self._view(message, attempt)
             hidden = (kb.status != "ready"
-                      or attempt.kb_revision < kb.hide_history_before_revision)
+                      or attempt.kb_revision < kb.hide_history_before_revision
+                      or (expired_image_at is not None
+                          and message.created_at >= expired_image_at))
             view["stale"] = attempt.kb_revision != kb.revision or kb.status != "ready"
             view["hidden"] = hidden
             if hidden:
                 view["text"], view["citations"] = "", []
+                view["images"] = []
             messages.setdefault(message.id, view)
         return list(reversed(list(messages.values())))
 
@@ -145,10 +176,14 @@ class AnswerService:
         self, owner: UUID, conversation_id: UUID, request_id: UUID, question: str,
         retriever: Retriever, answerer: Answerer, *, mode: str = "semantic",
         exact: dict | None = None,
+        image_ids: list[UUID] | None = None,
         on_accepted: Callable[[dict], Awaitable[None]] | None = None,
         on_preview: Callable[[UUID, str], Awaitable[None]] | None = None,
     ) -> dict:
         conversation, kb = await self._owned_conversation(owner, conversation_id, lock=True)
+        image_ids = image_ids or []
+        if image_ids and (self.images is None or self.image_observer is None):
+            raise ServiceError(503, "image_unavailable", "图片识别服务尚未启用")
         if self.admission:
             self.admission(conversation_id)
         existing = await self.session.scalar(select(ConversationMessage).where(
@@ -156,8 +191,10 @@ class AnswerService:
             ConversationMessage.client_message_id == request_id,
         ))
         if existing is not None:
+            bound_images = (await self.images.for_message(existing.id)) if self.images else []
             if (existing.content != question or existing.mode != mode
-                or (mode != "auto" and existing.query_filter != exact)):
+                or (mode != "auto" and existing.query_filter != exact)
+                or {image.id for image in bound_images} != set(image_ids)):
                 raise ServiceError(409, "idempotency_conflict", "同一提问请求不能更换正文")
             attempt = await self.session.scalar(select(AnswerAttempt).where(
                 AnswerAttempt.message_id == existing.id,
@@ -168,7 +205,7 @@ class AnswerService:
                 or attempt.workspace != kb.active_workspace):
                 raise ServiceError(409, "kb_changed", "知识库已变化，请重新提问")
             await self.session.commit()
-            return answer_view(existing, attempt)
+            return await self._view(existing, attempt)
         if kb.status != "ready":
             raise ServiceError(409, "kb_not_ready", "知识库未就绪，暂不能问答")
         active = await self.session.scalar(select(AnswerAttempt.id).where(
@@ -188,10 +225,12 @@ class AnswerService:
         )
         self.session.add(message)
         await self.session.flush()
+        if image_ids:
+            await self.images.bind(owner, conversation_id, message.id, image_ids)
         self.session.add(attempt)
         await self.session.commit()
         if on_accepted is not None:
-            await on_accepted(answer_view(message, attempt))
+            await on_accepted(await self._view(message, attempt))
         return await self._finish_attempt(owner, conversation_id, kb, message, attempt,
                                           retriever, answerer, mode, exact, on_preview)
 
@@ -216,7 +255,7 @@ class AnswerService:
             if existing.status == "running":
                 raise ServiceError(409, "answer_in_progress", "回答仍在处理中，请稍后读取结果")
             await self.session.commit()
-            return answer_view(message, existing)
+            return await self._view(message, existing)
         if kb.status != "ready":
             raise ServiceError(409, "kb_not_ready", "知识库未就绪，暂不能重试")
         active = await self.session.scalar(select(AnswerAttempt.id).where(
@@ -228,7 +267,15 @@ class AnswerService:
         last = await self.session.scalar(select(AnswerAttempt).where(
             AnswerAttempt.message_id == message_id,
         ).order_by(AnswerAttempt.created_at.desc(), AnswerAttempt.id.desc()))
-        if last is None or last.status not in {"failed", "interrupted", "partial"}:
+        linked_images = (await self.images.for_message(message.id)
+                         if self.images is not None else [])
+        image_retry = (last is not None and last.status == "needs_clarification"
+                       and bool(linked_images)
+                       and any(image.needs_confirmation for image in linked_images)
+                       and all(not image.needs_confirmation or image.confirmed_identifier
+                               for image in linked_images))
+        if last is None or (last.status not in {"failed", "interrupted", "partial"}
+                            and not image_retry):
             raise ServiceError(409, "answer_not_retryable", "仅失败、中断或部分回答可以重试")
         if last.kb_revision != kb.revision or last.workspace != kb.active_workspace:
             raise ServiceError(409, "kb_changed", "知识库已变化，请重新提问")
@@ -270,6 +317,19 @@ class AnswerService:
                 await on_preview(attempt.id, delta)
 
         try:
+            if self.images is not None and await self.images.for_message(message.id):
+                if self.image_observer is None:
+                    raise ServiceError(503, "image_unavailable", "图片识别服务尚未启用")
+                observation, unsure = await self.images.observe(message.id, self.image_observer)
+                if unsure:
+                    status, text, citations = (
+                        "needs_clarification",
+                        "图片中的编号尚不确定，请核对图片观察并确认编号。", [],
+                    )
+                    error_code = None
+                    raise _ImageNeedsConfirmation
+                question = (f"{question}\n【当前提问的图片观察，非知识库原文或引用】\n"
+                            f"{observation[:2200]}")
             context = await prepare_context(self.session, conversation_id, kb, answerer)
             if mode == "auto" and exact is None:
                 exact = await self._route_auto(kb, question, answerer, context)
@@ -280,6 +340,8 @@ class AnswerService:
                 preview if on_preview is not None else None,
             )
             error_code = None
+        except _ImageNeedsConfirmation:
+            pass
         except asyncio.CancelledError:
             # A disconnected request must not hold the conversation until restart.
             async def interrupt() -> None:
@@ -303,6 +365,10 @@ class AnswerService:
             status, text, citations, error_code = (
                 "partial" if previewed else "failed", previewed, [], str(error)
             )
+        except ServiceError as error:
+            status, text, citations, error_code = (
+                "partial" if previewed else "failed", previewed, [], error.code,
+            )
         except Exception:
             # Provider, SDK, and DB diagnostics can contain private content.
             status, text, citations, error_code = (
@@ -314,19 +380,24 @@ class AnswerService:
         current_attempt = await self.session.get(
             AnswerAttempt, attempt.id, with_for_update=True, populate_existing=True,
         )
+        image_expired = self.images is not None and any(
+            image.expires_at <= datetime.now(UTC)
+            for image in await self.images.for_message(message.id)
+        )
         voice_cancelled = self.commit_allowed is not None and not self.commit_allowed()
         if (current_kb is None or current_kb.status != "ready"
             or current_kb.revision != attempt.kb_revision
             or current_kb.active_workspace != attempt.workspace
             or current_attempt is None or current_attempt.status != "running"
-            or voice_cancelled):
+            or voice_cancelled or image_expired):
             if current_attempt is None:
                 raise ServiceError(409, "answer_interrupted", "聊天已变化，本次回答未保存")
             current_attempt.status, current_attempt.text = "interrupted", None
             cancelled_in_same_kb = (voice_cancelled and current_kb is not None
                 and current_kb.status == "ready" and current_kb.revision == attempt.kb_revision
                 and current_kb.active_workspace == attempt.workspace)
-            code = "request_interrupted" if cancelled_in_same_kb else "kb_changed"
+            code = ("image_expired" if image_expired else
+                    "request_interrupted" if cancelled_in_same_kb else "kb_changed")
             current_attempt.citations, current_attempt.error_code = [], code
             current_attempt.finished_at = datetime.now(UTC)
             await self.session.commit()
@@ -335,7 +406,7 @@ class AnswerService:
         current_attempt.citations, current_attempt.error_code = citations, error_code
         current_attempt.finished_at = datetime.now(UTC)
         await self.session.commit()
-        return answer_view(message, current_attempt)
+        return await self._view(message, current_attempt)
 
     async def _route_auto(self, kb: KnowledgeBase, question: str, answerer: Answerer,
                           context: dict) -> dict:

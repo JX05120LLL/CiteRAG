@@ -1,5 +1,7 @@
 # CiteRAG 文档导航
 
+当前 M3 图片提问增量见 [图片闭环、隔离测试与真实验收边界](development/M3-MULTIMODAL-VALIDATION.md)。`qwen3.8-omni-flash` 只接非实时图片观察；文件/音频/视频上传及真实新模型调用未验收。
+
 当前文字／语音共用意图路由以[两级路由设计与验证](development/INTENT-AND-GROUNDED-ANSWERS.md)为准：普通回答覆盖问候与通用知识，知识库回答再选精确或语义检索。2026-09-26 的三类分流描述是历史快照。
 
 当前 M2 工程实现：[语音链路与集中验收](development/M2-VOICE-VALIDATION.md)、[实施设计](development/M2-VOICE-IMPLEMENTATION.md)、[一次真实供应商验证与新截图](development/M2-VOICE-REAL-SUPPLIERS.md)。会话/ASR/VAD/AnswerService/TTS/RTC 已接线；一次公开合成语音的真实 ASR/模型/TTS 与原文字面检索通过，后端171项、前端221项本机通过。真人设备、真实 LightRAG 语义路径及完整 M2 尚未验收。后文未接入描述属于此前快照。

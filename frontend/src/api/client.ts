@@ -86,6 +86,21 @@ export interface ChatMessage {
   saved: boolean;
   stale?: boolean;
   hidden?: boolean;
+  images?: ChatImage[];
+}
+
+export interface ChatImage {
+  id: string;
+  filename: string;
+  mime_type: 'image/png' | 'image/jpeg';
+  width: number;
+  height: number;
+  size: number;
+  observation: string | null;
+  observation_status: 'pending' | 'ready' | 'failed';
+  needs_confirmation: boolean;
+  confirmed_identifier: string | null;
+  expires_at: string;
 }
 
 export type AnswerProgress = { type: 'accepted'; message: ChatMessage } |
@@ -216,6 +231,9 @@ const documentErrors: Record<string, string> = {
   file_type: '请选择 UTF-8 TXT、Markdown、文字 PDF 或普通 DOCX。',
   pending_files_changed: '请选择原请求中的同名、同大小文件。服务端会再次核对文件内容。',
   exact_filter: '精确查询须填写至少一项已确认的文档属性。',
+  invalid_image: '请选择有效的 PNG 或 JPEG 图片。',
+  image_too_large: '每张图片最多 10 MiB。',
+  invalid_images: '每条问题最多添加两张不同图片。',
 };
 
 const databaseErrors: Record<string, string> = {
@@ -223,6 +241,7 @@ const databaseErrors: Record<string, string> = {
   database_unavailable: '业务数据库暂不可用。请检查数据库连接和初始化迁移，然后重试。',
   persistence_failed: '业务数据库操作未完成。请检查数据库连接和初始化迁移，然后重试。',
   answer_disabled: '文字问答尚未启用；解析完成不等于已入库。',
+  image_observation_unavailable: '图片识别未完成，请重试或补充文字。',
 };
 
 export class ApiError extends Error {
@@ -332,8 +351,22 @@ function chatMessage(value: unknown): ChatMessage {
       (value.stale !== undefined && typeof value.stale !== 'boolean') ||
       (value.route !== undefined && !['semantic', 'exact', 'literal', 'general', 'chat', 'needs_clarification', 'unsupported'].includes(String(value.route))) ||
       (['general', 'chat'].includes(String(value.route)) && value.citations.length !== 0) ||
-      (value.hidden !== undefined && typeof value.hidden !== 'boolean')) throw new ApiError('invalid-response');
+      (value.hidden !== undefined && typeof value.hidden !== 'boolean') ||
+      (value.images !== undefined && (!Array.isArray(value.images) || !value.images.every(isChatImage)))) throw new ApiError('invalid-response');
   return value as unknown as ChatMessage;
+}
+
+function isChatImage(value: unknown): value is ChatImage {
+  return isRecord(value) && typeof value.id === 'string' && typeof value.filename === 'string' &&
+    ['image/png', 'image/jpeg'].includes(String(value.mime_type)) &&
+    Number.isInteger(value.width) && Number(value.width) > 0 &&
+    Number.isInteger(value.height) && Number(value.height) > 0 &&
+    Number.isInteger(value.size) && Number(value.size) > 0 &&
+    (value.observation === null || typeof value.observation === 'string') &&
+    ['pending', 'ready', 'failed'].includes(String(value.observation_status)) &&
+    typeof value.needs_confirmation === 'boolean' &&
+    (value.confirmed_identifier === null || typeof value.confirmed_identifier === 'string') &&
+    isVerificationTime(value.expires_at);
 }
 
 export function createApi(fetcher: typeof fetch = globalThis.fetch) {
@@ -348,6 +381,7 @@ export function createApi(fetcher: typeof fetch = globalThis.fetch) {
         headers: { Accept: 'application/json', ...extraHeaders, ...(body === undefined || multipart ? {} : { 'Content-Type': 'application/json' }) },
         ...(body === undefined ? {} : { body: multipart ? body : JSON.stringify(body) }), signal: controller.signal,
       });
+      if (response.status === 204 && response.ok) return null;
       let value: unknown = null;
       try { value = await response.json(); }
       catch { if (response.ok) throw new ApiError('invalid-response'); }
@@ -367,14 +401,14 @@ export function createApi(fetcher: typeof fetch = globalThis.fetch) {
 
   async function askMessageStream(id: string, text: string, key: string,
       mode: 'semantic' | 'exact' | 'auto' = 'semantic', exact?: ExactFilter,
-      onProgress?: (progress: AnswerProgress) => void): Promise<ChatMessage> {
+      onProgress?: (progress: AnswerProgress) => void, imageIds: string[] = []): Promise<ChatMessage> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 120000);
     try {
       const response = await fetcher(`/api/conversations/${encodeURIComponent(id)}/messages/stream`, {
         method: 'POST', credentials: 'omit',
         headers: { Accept: 'text/event-stream', 'Content-Type': 'application/json' },
-        body: JSON.stringify({ client_message_id: key, text, mode,
+        body: JSON.stringify({ client_message_id: key, text, mode, image_ids: imageIds,
           ...(mode === 'exact' ? { exact } : {}) }), signal: controller.signal,
       });
       if (!response.ok) {
@@ -538,6 +572,24 @@ export function createApi(fetcher: typeof fetch = globalThis.fetch) {
     conversationMessages: async (id: string): Promise<ChatMessage[]> =>
       collection<Record<string, unknown>>(await request(`/api/conversations/${encodeURIComponent(id)}/messages`),
         () => true).map(chatMessage),
+    imageUrl: (chatId: string, imageId: string): string =>
+      `/api/conversations/${encodeURIComponent(chatId)}/attachments/${encodeURIComponent(imageId)}`,
+    uploadImage: async (chatId: string, file: File): Promise<ChatImage> => {
+      const form = new FormData(); form.append('file', file);
+      const value = await request(`/api/conversations/${encodeURIComponent(chatId)}/attachments`,
+        'POST', form, 60000);
+      if (!isChatImage(value)) throw new ApiError('invalid-response');
+      return value;
+    },
+    deletePendingImage: async (chatId: string, imageId: string): Promise<void> => {
+      await request(`/api/conversations/${encodeURIComponent(chatId)}/attachments/${encodeURIComponent(imageId)}`, 'DELETE');
+    },
+    confirmImage: async (chatId: string, imageId: string, identifier: string): Promise<ChatImage> => {
+      const value = await request(`/api/conversations/${encodeURIComponent(chatId)}/attachments/${encodeURIComponent(imageId)}/confirm`,
+        'POST', { identifier });
+      if (!isChatImage(value)) throw new ApiError('invalid-response');
+      return value;
+    },
     askMessage: async (id: string, text: string, key: string,
                        mode: 'semantic' | 'exact' | 'auto' = 'semantic', exact?: ExactFilter): Promise<ChatMessage> =>
       chatMessage(await request(`/api/conversations/${encodeURIComponent(id)}/messages`, 'POST',

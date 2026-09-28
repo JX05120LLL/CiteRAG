@@ -5,6 +5,35 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 const status = { status: 'partial', mode: 'local_single_user', database: 'available', rag: 'not_configured', models: 'not_configured' };
 
 describe('local same-origin API boundary', () => {
+  it('uploads private image bytes, validates metadata, and confirms uncertain IDs through same-origin APIs', async () => {
+    const image = { id: 'image-1', filename: 'synthetic.png', mime_type: 'image/png',
+      width: 16, height: 12, size: 81, observation: null, observation_status: 'pending',
+      needs_confirmation: false, confirmed_identifier: null, expires_at: '2026-10-01T00:00:00Z' };
+    const calls: Array<[string, RequestInit | undefined]> = [];
+    const api = createApi(async (input, init) => {
+      calls.push([String(input), init]);
+      if (init?.method === 'DELETE') return new Response(null, { status: 204 });
+      return json(image, init?.body instanceof FormData ? 201 : 200);
+    });
+    const file = new File(['synthetic bytes'], 'synthetic.png', { type: 'image/png' });
+    expect(await api.uploadImage('chat/1', file)).toEqual(image);
+    expect(calls[0][0]).toBe('/api/conversations/chat%2F1/attachments');
+    expect(calls[0][1]?.body).toBeInstanceOf(FormData);
+    expect(new Headers(calls[0][1]?.headers).has('Content-Type')).toBe(false);
+    expect(await api.confirmImage('chat/1', 'image-1', 'AB-42')).toEqual(image);
+    expect(JSON.parse(String(calls[1][1]?.body))).toEqual({ identifier: 'AB-42' });
+    await expect(api.deletePendingImage('chat/1', 'image-1')).resolves.toBeUndefined();
+    expect(api.imageUrl('chat/1', 'image-1')).toBe('/api/conversations/chat%2F1/attachments/image-1');
+    expect(calls.every(([, init]) => init?.credentials === 'omit')).toBe(true);
+  });
+
+  it('rejects malformed image metadata rather than claiming the upload succeeded', async () => {
+    const api = createApi(async () => json({ id: 'image', filename: 'bad.png', mime_type: 'image/png',
+      width: 0, height: 0, size: 10, observation: null, observation_status: 'ready',
+      needs_confirmation: false, confirmed_identifier: null, expires_at: '2026-10-01T00:00:00Z' }, 201));
+    await expect(api.uploadImage('chat', new File(['x'], 'bad.png', { type: 'image/png' })))
+      .rejects.toMatchObject({ kind: 'invalid-response' });
+  });
   it('uses an in-memory control header for session actions, never URL credentials', async () => {
     const calls: Array<[string, RequestInit | undefined]> = [];
     const api = createApi(async (url, init) => { calls.push([String(url), init]); return json({ status: 'ended' }); });

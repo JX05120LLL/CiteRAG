@@ -205,6 +205,55 @@ class ConversationMessage(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class ImageAttachment(Base):
+    """Private image bound to one local owner and conversation."""
+
+    __tablename__ = "image_attachments"
+    __table_args__ = (
+        Index("ix_image_attachments_expiry", "expires_at"),
+        Index("ix_image_attachments_conversation", "conversation_id"),
+        CheckConstraint("size > 0 AND size <= 10485760", name="ck_image_attachments_size"),
+        CheckConstraint("width > 0 AND height > 0 AND width * height <= 16000000",
+                        name="ck_image_attachments_pixels"),
+        CheckConstraint("mime_type IN ('image/png','image/jpeg')",
+                        name="ck_image_attachments_mime"),
+        CheckConstraint("observation_status IN ('pending','ready','failed')",
+                        name="ck_image_attachments_observation"),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    owner_id: Mapped[UUID] = mapped_column(ForeignKey("local_profiles.id", ondelete="RESTRICT"))
+    conversation_id: Mapped[UUID] = mapped_column(
+        ForeignKey("conversations.id", ondelete="RESTRICT"))
+    storage_key: Mapped[str] = mapped_column(String(100), unique=True)
+    filename: Mapped[str] = mapped_column(String(240))
+    mime_type: Mapped[str] = mapped_column(String(30))
+    size: Mapped[int] = mapped_column(Integer)
+    sha256: Mapped[str] = mapped_column(String(64))
+    width: Mapped[int] = mapped_column(Integer)
+    height: Mapped[int] = mapped_column(Integer)
+    observation: Mapped[str | None] = mapped_column(Text)
+    observation_status: Mapped[str] = mapped_column(String(20), default="pending")
+    needs_confirmation: Mapped[bool] = mapped_column(Boolean, default=False,
+                                                       server_default="false")
+    confirmed_identifier: Mapped[str | None] = mapped_column(String(80))
+    observation_model: Mapped[str | None] = mapped_column(String(80))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class MessageImage(Base):
+    __tablename__ = "message_images"
+    __table_args__ = (Index("ix_message_images_attachment", "attachment_id"),)
+
+    message_id: Mapped[UUID] = mapped_column(
+        ForeignKey("conversation_messages.id", ondelete="CASCADE"), primary_key=True,
+    )
+    attachment_id: Mapped[UUID] = mapped_column(
+        ForeignKey("image_attachments.id", ondelete="CASCADE"), primary_key=True,
+    )
+
+
 class AnswerAttempt(Base):
     __tablename__ = "answer_attempts"
     __table_args__ = (

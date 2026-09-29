@@ -8,6 +8,19 @@
 </p>
 
 <p align="center">
+  <a href="backend/pyproject.toml"><img alt="Python 3.12" src="https://img.shields.io/badge/Python-3.12-3776AB?style=flat-square&amp;logo=python&amp;logoColor=white"></a>
+  <a href="backend/pyproject.toml"><img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-API-009688?style=flat-square&amp;logo=fastapi&amp;logoColor=white"></a>
+  <a href="frontend/package.json"><img alt="React 19" src="https://img.shields.io/badge/React-19-149ECA?style=flat-square&amp;logo=react&amp;logoColor=white"></a>
+  <a href="frontend/package.json"><img alt="TypeScript 5.9" src="https://img.shields.io/badge/TypeScript-5.9-3178C6?style=flat-square&amp;logo=typescript&amp;logoColor=white"></a>
+  <a href="docs/多模态知识助手_技术选型与架构设计_v0.1.md"><img alt="PostgreSQL" src="https://img.shields.io/badge/PostgreSQL-Storage-4169E1?style=flat-square&amp;logo=postgresql&amp;logoColor=white"></a>
+</p>
+<p align="center">
+  <a href="https://github.com/HKUDS/LightRAG"><img alt="LightRAG 知识引擎" src="https://img.shields.io/badge/LightRAG-Knowledge_Engine-355C7D?style=flat-square"></a>
+  <a href="frontend/vendor/livekit/README.md"><img alt="LiveKit 实时音频" src="https://img.shields.io/badge/LiveKit-Real--time_Audio-6C3EF4?style=flat-square&amp;logo=livekit&amp;logoColor=white"></a>
+  <a href="https://github.com/JX05120LLL/CiteRAG/actions/workflows/ci.yml"><img alt="GitHub CI 状态" src="https://img.shields.io/github/actions/workflow/status/JX05120LLL/CiteRAG/ci.yml?branch=main&amp;style=flat-square&amp;logo=githubactions&amp;label=CI"></a>
+</p>
+
+<p align="center">
   <a href="#-快速开始">快速开始</a> ·
   <a href="#-工作台预览">界面预览</a> ·
   <a href="docs/README.md">文档导航</a> ·

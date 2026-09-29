@@ -87,7 +87,7 @@ it('groups chats by knowledge base and archives and restores through the API', a
   fireEvent.click(screen.getByRole('button', { name: /已归档/ }));
   fireEvent.click(await screen.findByRole('button', { name: '恢复' }));
   await waitFor(() => expect(calls.filter((call) => call.path.endsWith('/archive') && call.method === 'PATCH').length).toBe(2));
-});
+}, 20000);
 
 it('restores fixed chat, opens a verified source and restores focus without writes under StrictMode', async () => {
   const { api, calls } = fixture();

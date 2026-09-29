@@ -24,6 +24,7 @@
 !/backend/tests/test_m14_lifecycle.py
 !/backend/tests/test_voice_transport.py
 !/backend/tests/test_m2_voice.py
+!/backend/tests/test_voice_latency.py
 !/backend/tests/test_m3_image_storage.py
 !/backend/tests/test_m3_images_api.py
 !/backend/tests/test_m3_image_provider.py

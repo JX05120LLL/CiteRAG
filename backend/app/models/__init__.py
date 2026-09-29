@@ -96,6 +96,10 @@ class Conversation(Base):
     __table_args__ = (
         Index("ix_conversations_owner_created", "owner_id", "created_at", "id"),
         Index("ix_conversations_local_owner_created", "local_owner_id", "created_at", "id"),
+        Index(
+            "ix_conversations_owner_archive_created",
+            "local_owner_id", "archived_at", "created_at", "id",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
@@ -108,6 +112,7 @@ class Conversation(Base):
     kb_id: Mapped[UUID] = mapped_column(ForeignKey("knowledge_bases.id", ondelete="RESTRICT"))
     title: Mapped[str] = mapped_column(String(120), default="新聊天")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class Document(Base):

@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, StringConstraints, field_validator
 
 from app.validation import CapabilityState
 
-__all__ = ["CapabilityState", "ConversationCreate", "ConversationRename",
+__all__ = ["CapabilityState", "ConversationArchive", "ConversationCreate", "ConversationRename",
            "ConversationView", "KnowledgeBaseView"]
 
 
@@ -26,6 +26,12 @@ class ConversationRename(BaseModel):
     ]
 
 
+class ConversationArchive(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    archived: bool
+
+
 class ConversationView(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: UUID
@@ -33,6 +39,7 @@ class ConversationView(BaseModel):
     kb_id: UUID
     title: str
     created_at: datetime
+    archived_at: datetime | None = None
 
 
 class KnowledgeBaseView(BaseModel):

@@ -181,6 +181,8 @@ class AnswerService:
         on_preview: Callable[[UUID, str], Awaitable[None]] | None = None,
     ) -> dict:
         conversation, kb = await self._owned_conversation(owner, conversation_id, lock=True)
+        if conversation.archived_at is not None:
+            raise ServiceError(409, "conversation_archived", "聊天已归档，请恢复后再提问")
         image_ids = image_ids or []
         if image_ids and (self.images is None or self.image_observer is None):
             raise ServiceError(503, "image_unavailable", "图片识别服务尚未启用")
@@ -236,7 +238,9 @@ class AnswerService:
 
     async def retry(self, owner: UUID, conversation_id: UUID, message_id: UUID,
                     retry_id: UUID, retriever: Retriever, answerer: Answerer) -> dict:
-        _, kb = await self._owned_conversation(owner, conversation_id, lock=True)
+        conversation, kb = await self._owned_conversation(owner, conversation_id, lock=True)
+        if conversation.archived_at is not None:
+            raise ServiceError(409, "conversation_archived", "聊天已归档，请恢复后再重试")
         if self.admission:
             self.admission(conversation_id)
         message = await self.session.scalar(select(ConversationMessage).where(

@@ -35,6 +35,8 @@ async def token(conversation_id: UUID, request: Request, owner: LocalOwner, sess
     if runtime:
         runtime.registry.require_text(conversation_id)
     conversation = await ConversationService(session).get_owned(owner, conversation_id)
+    if conversation.archived_at is not None:
+        raise ServiceError(409, "conversation_archived", "聊天已归档，请恢复后再通话")
     state = await session.scalar(select(KnowledgeBase.status).where(
         KnowledgeBase.id == conversation.kb_id, KnowledgeBase.owner_id == owner,
     ))

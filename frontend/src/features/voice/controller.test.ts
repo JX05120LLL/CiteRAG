@@ -21,6 +21,17 @@ function fixture() {
 }
 
 describe('LiveKit media lifecycle', () => {
+  it('reads the existing chat record without connecting media or requesting a token', async () => {
+    const { controller, room, api } = fixture();
+    const message = { message_id: 'saved', created_at: '2026-09-29T00:00:00Z' } as ChatMessage;
+    const history = vi.fn(async () => [message]);
+    Object.assign(api, { conversationMessages: history });
+    await controller.readHistory('chat');
+    expect(history).toHaveBeenCalledWith('chat');
+    expect(controller.state.answers).toEqual([message]);
+    expect(api.voiceToken).not.toHaveBeenCalled();
+    expect(room.connect).not.toHaveBeenCalled();
+  });
   it('rejects old events while correction is pending and accepts its new generation', async () => {
     const { controller, room, api } = fixture();
     let push!: (event: import('../../api/client').VoiceEvent) => void;

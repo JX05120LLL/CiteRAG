@@ -304,7 +304,7 @@ async def test_token_route_rejects_unowned_or_unready_chat(monkeypatch):
     assert caught.value.code == "conversation_not_found"
 
     async def owned(*args):
-        return SimpleNamespace(kb_id=uuid4())
+        return SimpleNamespace(kb_id=uuid4(), archived_at=None)
 
     async def blocked(*args):
         return "blocked"
@@ -324,7 +324,7 @@ async def test_token_route_rejects_running_answer_and_accepts_ready_chat(monkeyp
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(settings=configured())))
     owner, chat = uuid4(), uuid4()
     monkeypatch.setattr("app.api.voice.ConversationService.get_owned",
-                        AsyncMock(return_value=SimpleNamespace(kb_id=uuid4())))
+                        AsyncMock(return_value=SimpleNamespace(kb_id=uuid4(), archived_at=None)))
     session = SimpleNamespace(scalar=AsyncMock(side_effect=["ready", uuid4()]))
     with pytest.raises(ServiceError) as caught:
         await token(chat, request, owner, session)
@@ -333,3 +333,11 @@ async def test_token_route_rejects_running_answer_and_accepts_ready_chat(monkeyp
     value = await token(chat, request, owner, session)
     assert value["conversation_id"] == str(chat)
     assert value["purpose"] == "media_test"
+
+    monkeypatch.setattr(
+        "app.api.voice.ConversationService.get_owned",
+        AsyncMock(return_value=SimpleNamespace(kb_id=uuid4(), archived_at="archived")),
+    )
+    with pytest.raises(ServiceError) as caught:
+        await token(chat, request, owner, SimpleNamespace(scalar=AsyncMock()))
+    assert caught.value.code == "conversation_archived"

@@ -1,5 +1,7 @@
 # CiteRAG 文档导航
 
+最新桌面界面细化、对话归档接口及迁移边界见 [UI 细化记录](development/UI-POLISH-2026-09-29.md)。正式业务库尚未应用新迁移；浏览器截图只使用合成资料。
+
 当前 M3 图片提问增量见 [图片闭环、隔离测试与真实验收边界](development/M3-MULTIMODAL-VALIDATION.md)。`qwen3.8-omni-flash` 只接非实时图片观察；文件/音频/视频上传及真实新模型调用未验收。
 
 当前文字／语音共用意图路由以[两级路由设计与验证](development/INTENT-AND-GROUNDED-ANSWERS.md)为准：普通回答覆盖问候与通用知识，知识库回答再选精确或语义检索。2026-09-26 的三类分流描述是历史快照。

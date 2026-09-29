@@ -1,5 +1,5 @@
 import { ApiError } from './api/client';
-import type { ApiClient, KnowledgeBase, VoiceCapability } from './api/client';
+import type { ApiClient, Conversation, KnowledgeBase, VoiceCapability } from './api/client';
 import { renderKnowledge } from './pages/knowledge';
 import { createDocumentsPanel } from './pages/documents';
 import { renderStatus } from './pages/status';
@@ -18,11 +18,13 @@ import type { VoiceActions, VoiceContext } from './pages/voice';
 
 export interface AppView {
   state: AppState; hasMoreChats: boolean; documents: ReturnType<typeof createDocumentsPanel>;
+  archivedChats: Conversation[]; hasMoreArchivedChats: boolean; archivedChatLoading: boolean; archivedChatError: ApiError | null;
   voice: { context: VoiceContext; actions: VoiceActions; levels: readonly number[] };
   actions: {
     navigate: (page: Page) => void; refresh: () => Promise<void>; loadHealth: () => Promise<void>;
     selectChat: (id: string) => Promise<void>; createChat: () => Promise<void>;
-    renameChat: () => Promise<void>; deleteChat: () => Promise<void>; loadMoreChats: () => Promise<void>;
+    renameChat: (id?: string) => Promise<void>; deleteChat: (id?: string) => Promise<void>; loadMoreChats: () => Promise<void>;
+    loadArchivedChats: (reset?: boolean) => Promise<void>; setChatArchived: (id: string, archived: boolean) => Promise<void>;
     sendChat: () => Promise<void>; retryChat: (id: string) => Promise<void>; setDraft: (text: string) => void;
     selectChatImages: (files: File[]) => void; confirmChatImage: (messageId: string, imageId: string) => Promise<void>;
     selectKb: (id: string) => void; selectCitation: (messageId: string, evidenceId: string) => void; closeCitation: () => void;
@@ -67,6 +69,11 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
   let healthGeneration = 0;
   let chatGeneration = 0;
   let hasMoreChats = false;
+  let archivedChats: Conversation[] = [];
+  let archivedChatOffset = 0;
+  let hasMoreArchivedChats = false;
+  let archivedChatLoading = false;
+  let archivedChatError: ApiError | null = null;
   let chatOffset = 0;
   let listedChatIds = new Set<string>();
   const retryKeys = new Map<string, string>();
@@ -156,8 +163,13 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
         const older = await api.conversation(requestedChatId);
         if (currentGeneration !== generation || currentChatGeneration !== chatGeneration ||
             state.selectedChatId !== requestedChatId) return;
-        state.chats?.unshift(older);
-        restoredChat = older;
+        if (older.archived_at) {
+          state.selectedChatId = null;
+          rememberSelection();
+        } else {
+          state.chats?.unshift(older);
+          restoredChat = older;
+        }
       } catch (error) {
         if (currentGeneration !== generation || currentChatGeneration !== chatGeneration ||
             state.selectedChatId !== requestedChatId) return;
@@ -232,6 +244,36 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
     } finally { state.chatPending = false; render(); }
   }
 
+  async function loadArchivedChats(reset = false) {
+    if (archivedChatLoading || (!reset && !hasMoreArchivedChats && archivedChatOffset > 0)) return;
+    archivedChatLoading = true; archivedChatError = null; render();
+    try {
+      const page = await api.conversations(20, reset ? 0 : archivedChatOffset, true);
+      if (disposed) return;
+      archivedChats = reset ? page : [...archivedChats, ...page.filter((item) => !archivedChats.some((old) => old.id === item.id))];
+      archivedChatOffset = (reset ? 0 : archivedChatOffset) + page.length;
+      hasMoreArchivedChats = page.length === 20;
+    } catch (error) {
+      archivedChatError = error instanceof ApiError ? error : new ApiError('http');
+    } finally { archivedChatLoading = false; if (!disposed) render(); }
+  }
+
+  async function setChatArchived(id: string, archived: boolean) {
+    if (state.chatPending || archivedChatLoading) return;
+    state.chatPending = true; archivedChatError = null; render();
+    try {
+      await api.archiveConversation(id, archived);
+      if (state.selectedChatId === id) {
+        state.selectedChatId = null; state.chatMessages = [];
+        discardDraftImages(); rememberSelection();
+      }
+      await refresh();
+      await loadArchivedChats(true);
+    } catch (error) {
+      archivedChatError = error instanceof ApiError ? error : new ApiError('http');
+    } finally { state.chatPending = false; if (!disposed) render(); }
+  }
+
   async function createChat() {
     if (!state.selectedKbId || state.chatPending) return;
     state.chatPending = true;
@@ -257,12 +299,12 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
     }
   }
 
-  async function renameChat() {
-    const id = state.selectedChatId;
+  async function renameChat(targetId?: string) {
+    const id = targetId ?? state.selectedChatId;
     const chat = state.chats?.find((item) => item.id === id);
     if (!id || !chat || state.chatPending) return;
     const requested = options.prompt ? await options.prompt('聊天名称', chat.title) : window.prompt('聊天名称', chat.title);
-    if (disposed || state.selectedChatId !== id || state.chatPending) return;
+    if (disposed || !state.chats?.some((item) => item.id === id) || state.chatPending) return;
     if (requested === null) return;
     const title = requested.trim();
     if (!title || title.length > 120) {
@@ -278,21 +320,23 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
     } finally { state.chatPending = false; render(); }
   }
 
-  async function deleteChat() {
-    const id = state.selectedChatId;
-    if (!id || state.chatPending) return;
+  async function deleteChat(targetId?: string) {
+    const id = targetId ?? state.selectedChatId;
+    if (!id || !state.chats?.some((item) => item.id === id) || state.chatPending) return;
     const warning = '删除此聊天及其消息和摘要？此操作不可撤销。';
     if (!(options.confirm ? await options.confirm(warning) : window.confirm(warning)) ||
-        disposed || state.selectedChatId !== id || state.chatPending) return;
+        disposed || !state.chats?.some((item) => item.id === id) || state.chatPending) return;
     state.chatPending = true;
     try {
       await api.deleteConversation(id);
       state.chats = (state.chats ?? []).filter((item) => item.id !== id);
       if (listedChatIds.delete(id)) chatOffset = Math.max(0, chatOffset - 1);
-      state.selectedChatId = null;
-      discardDraftImages();
-      rememberSelection();
-      state.chatMessages = [];
+      if (state.selectedChatId === id) {
+        state.selectedChatId = null;
+        discardDraftImages();
+        rememberSelection();
+        state.chatMessages = [];
+      }
       state.chatError = null;
       state.chatDraft = '';
     } catch (error) {
@@ -572,7 +616,10 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
     state.selectedCitation = null;
     render();
     if (next === 'status') void loadHealth();
-    if (next === 'voice') void loadVoiceCapability();
+    if (next === 'voice') {
+      void loadVoiceCapability();
+      if (state.selectedChatId) void voice.readHistory(state.selectedChatId);
+    }
     if (next === 'workbench' && previous !== 'workbench' && (!options.render || previous === 'voice')) void refresh();
     root.querySelector<HTMLElement>('h1')?.focus();
   }
@@ -582,7 +629,8 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
     if (options.render) {
       const base = state.bases?.find((item) => item.id === state.selectedKbId);
       options.render({ state: { ...state, createDraft: { ...state.createDraft }, renameDraft: state.renameDraft ? { ...state.renameDraft } : null },
-        hasMoreChats, documents: documentsPanel,
+        hasMoreChats, archivedChats: [...archivedChats], hasMoreArchivedChats, archivedChatLoading, archivedChatError,
+        documents: documentsPanel,
         voice: { context: { chatId: state.selectedChatId,
           chatTitle: state.chats?.find((item) => item.id === state.selectedChatId)?.title ?? '',
           kbName: base?.name ?? '', kbReady: base?.status === 'ready', chatPending: state.chatPending || state.chatMessages.some((item) => item.status === 'running') },
@@ -594,7 +642,8 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
             stop: () => { void voice.stopAnswer(); }, correct: (text: string) => voice.correctTranscript(text),
             originalUrl: api.originalUrl,
             back: async () => { await voice.hangup(); navigate('workbench'); }, status: async () => { await voice.hangup(); navigate('status'); } } },
-        actions: { navigate, refresh, loadHealth, selectChat, createChat, renameChat, deleteChat, loadMoreChats, sendChat, retryChat,
+        actions: { navigate, refresh, loadHealth, selectChat, createChat, renameChat, deleteChat, loadMoreChats,
+          loadArchivedChats, setChatArchived, sendChat, retryChat,
           selectChatImages, confirmChatImage,
           selectKb: (id) => { if (disposed || state.chatPending || documentsPanel.snapshot.busy || !state.bases?.some((item) => item.id === id)) return;
             discardDraftImages(); ++chatGeneration; state.selectedKbId = id; state.selectedChatId = null; rememberSelection();

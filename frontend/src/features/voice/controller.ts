@@ -178,6 +178,11 @@ export class VoiceController {
     }
   }
 
+  async readHistory(conversation: string): Promise<void> {
+    if (!conversation || !['idle', 'failed'].includes(this.state.phase)) return;
+    await this.loadHistory(conversation, this.generation);
+  }
+
   async stopAnswer(): Promise<void> {
     const session = this.session;
     if (!session || !this.api.voiceStop || this.state.busy) return;

@@ -86,7 +86,9 @@ class ImageService:
         return row
 
     async def accept(self, owner: UUID, conversation_id: UUID, stored: StoredImage) -> dict:
-        _, kb = await self._owned_chat(owner, conversation_id, lock=True)
+        conversation, kb = await self._owned_chat(owner, conversation_id, lock=True)
+        if conversation.archived_at is not None:
+            raise ServiceError(409, "conversation_archived", "聊天已归档，请恢复后再上传图片")
         if kb.status != "ready":
             raise ServiceError(409, "kb_not_ready", "知识库未就绪，暂不能上传图片")
         image = ImageAttachment(
@@ -106,8 +108,12 @@ class ImageService:
         await self.session.commit()
         return image_view(image)
 
-    async def owned(self, owner: UUID, conversation_id: UUID, image_id: UUID) -> ImageAttachment:
-        await self._owned_chat(owner, conversation_id)
+    async def owned(
+        self, owner: UUID, conversation_id: UUID, image_id: UUID, *, writable: bool = False
+    ) -> ImageAttachment:
+        conversation, _ = await self._owned_chat(owner, conversation_id)
+        if writable and conversation.archived_at is not None:
+            raise ServiceError(409, "conversation_archived", "聊天已归档，请恢复后再修改图片")
         image = await self.session.scalar(
             select(ImageAttachment).where(
                 ImageAttachment.id == image_id,
@@ -210,7 +216,7 @@ class ImageService:
     async def confirm(
         self, owner: UUID, conversation_id: UUID, image_id: UUID, identifier: str
     ) -> dict:
-        image = await self.owned(owner, conversation_id, image_id)
+        image = await self.owned(owner, conversation_id, image_id, writable=True)
         if not image.needs_confirmation:
             raise ServiceError(409, "image_confirmation_not_needed", "该图片无需确认编号")
         image.confirmed_identifier = identifier
@@ -218,7 +224,7 @@ class ImageService:
         return image_view(image)
 
     async def remove_pending(self, owner: UUID, conversation_id: UUID, image_id: UUID) -> None:
-        image = await self.owned(owner, conversation_id, image_id)
+        image = await self.owned(owner, conversation_id, image_id, writable=True)
         bound = await self.session.scalar(
             select(MessageImage.message_id)
             .where(

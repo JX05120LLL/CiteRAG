@@ -1,5 +1,7 @@
 # GitHub CI
 
+2026-09-29 UI 细化：既有 CI 白名单已覆盖 `test_postgres_local.py` 中的 `0008` 到 `0009` 旧聊天保留用例，以及 `test_m13_answer_api.py` 中的归档/恢复接口用例；`alembic upgrade head` 冒烟会核对新的 `EXPECTED_SCHEMA_REVISION`。本机临时 PostgreSQL 两个文件 25 项通过；推送后的远端结果须按新提交 SHA 核对。详见 [UI 细化记录](UI-POLISH-2026-09-29.md)。
+
 2026-09-28 M3 增量：工作流公开白名单增加合成图片存储及隔离 PostgreSQL 图片 API 测试；后端 Ruff/pytest 随之执行，`0008_image_attachments` 迁移 SQL 和新库 API 冒烟仍按工作流运行。前端 Vitest 增加图片上传/确认/删除边界。CI 没有模型密钥，不执行 Qwen3.8 Omni Flash、真人图片或实际业务库迁移。本轮尚未提交/推送，**没有对应远端 Actions 结果**。详情见 [M3 记录](M3-MULTIMODAL-VALIDATION.md)。
 
 2026-09-27 提交补记：用户已授权提交并推送本次 M2 代码、公开回归和文档。下方“没有新远端结果”为提交前验证快照；推送后须按新提交 SHA 核对三个作业，不沿用旧615ec4d的成功结果。

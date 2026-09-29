@@ -10,6 +10,7 @@ export interface Conversation {
   kb_id: string;
   title: string;
   created_at: string;
+  archived_at?: string | null;
 }
 
 export interface VoiceCapability {
@@ -222,6 +223,7 @@ const conflictMessages: Record<string, string> = {
   idempotency_conflict: '请求与先前的名称不一致，请刷新列表并检查已创建的知识库。',
   kb_not_ready: '知识库尚未就绪，当前不能问答。',
   answer_in_progress: '当前聊天已有提问正在处理。',
+  conversation_archived: '聊天已归档。请先恢复对话，再继续提问或通话。',
   kb_changed: '知识库在回答期间发生变化，本次结果已停止；请刷新后重新提问。',
 };
 
@@ -544,8 +546,8 @@ export function createApi(fetcher: typeof fetch = globalThis.fetch) {
       ingestionJob(await request(`/api/knowledge-bases/${encodeURIComponent(kbId)}/rebuild`, 'POST', { client_request_id: clientRequestId })),
     blocks: async (id: string): Promise<ParsedBlock[]> =>
       collection(await request(`/api/documents/${encodeURIComponent(id)}/blocks`), parsedBlock),
-    conversations: async (limit = 20, offset = 0): Promise<Conversation[]> => collection(await request(
-      `/api/conversations?limit=${limit}&offset=${offset}`), (item) =>
+    conversations: async (limit = 20, offset = 0, archived = false): Promise<Conversation[]> => collection(await request(
+      `/api/conversations?limit=${limit}&offset=${offset}${archived ? '&archived=true' : ''}`), (item) =>
       ['id', 'owner_id', 'kb_id', 'title', 'created_at'].every((key) => typeof item[key] === 'string')),
     conversation: async (id: string): Promise<Conversation> => {
       const value = await request(`/api/conversations/${encodeURIComponent(id)}`);
@@ -563,6 +565,13 @@ export function createApi(fetcher: typeof fetch = globalThis.fetch) {
       const value = await request(`/api/conversations/${encodeURIComponent(id)}`, 'PATCH', { title });
       if (!isRecord(value) || !['id', 'owner_id', 'kb_id', 'title', 'created_at'].every((key) =>
         typeof value[key] === 'string')) throw new ApiError('invalid-response');
+      return value as unknown as Conversation;
+    },
+    archiveConversation: async (id: string, archived: boolean): Promise<Conversation> => {
+      const value = await request(`/api/conversations/${encodeURIComponent(id)}/archive`, 'PATCH', { archived });
+      if (!isRecord(value) || !['id', 'owner_id', 'kb_id', 'title', 'created_at'].every((key) =>
+        typeof value[key] === 'string') || (value.archived_at !== null && typeof value.archived_at !== 'string'))
+        throw new ApiError('invalid-response');
       return value as unknown as Conversation;
     },
     deleteConversation: async (id: string): Promise<void> => {

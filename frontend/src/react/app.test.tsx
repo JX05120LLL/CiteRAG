@@ -33,6 +33,11 @@ it('distinguishes configured, connecting and ready voice states without false co
   expect(screen.getByRole('status').textContent).toBe('等待助手就绪');
   expect(screen.queryByText('已配置 · 未验证连接')).toBeNull();
   view.rerender(<Voice context={context} actions={{ ...actions,
+    media: { ...actions.media, phase: 'idle', assistantPhase: 'ended' } }} />);
+  expect(screen.getByRole('status').textContent).toBe('尚未开始，助手连接待验证');
+  expect(screen.getByText('媒体待连接')).toBeTruthy();
+  expect(screen.getByText('助手待连接')).toBeTruthy();
+  view.rerender(<Voice context={context} actions={{ ...actions,
     media: { ...actions.media, phase: 'connected', assistantPhase: 'listening' } }} />);
   expect(screen.getByRole('status').textContent).toBe('助手就绪，等待说话');
 });
@@ -48,8 +53,15 @@ it('downloads a voice source without navigating the active call document', async
 });
 function fixture(messages = sampleMessages[sampleChats[0].id], chats = sampleChats) {
   const calls: { path: string; method: string; body: unknown }[] = [];
+  let archived = false;
   const fetcher: typeof fetch = async (input, init) => {
     const path = String(input); const method = init?.method ?? 'GET'; calls.push({ path, method, body: init?.body });
+    if (path.endsWith(`/conversations/${sampleChats[0].id}/archive`) && method === 'PATCH') {
+      archived = JSON.parse(String(init?.body)).archived as boolean;
+      return json({ ...sampleChats[0], archived_at: archived ? '2026-09-29T00:00:00Z' : null });
+    }
+    if (path.startsWith('/api/conversations?')) return json({ items: path.includes('archived=true')
+      ? archived ? [sampleChats[0]] : [] : archived ? chats.filter((item) => item.id !== sampleChats[0].id) : chats });
     if (path === '/api/knowledge-bases') return json({ items: sampleBases });
     if (path.endsWith('/voice/token')) return json({ server_url: 'ws://127.0.0.1:7880', token: 'synthetic', room: 'synthetic', conversation_id: sampleChats[0].id, assistant: 'not_configured', purpose: 'media_test' });
     if (path === '/api/voice/status') return json(sampleVoice);
@@ -63,6 +75,19 @@ function fixture(messages = sampleMessages[sampleChats[0].id], chats = sampleCha
   };
   return { api: createApi(fetcher), calls };
 }
+
+it('groups chats by knowledge base and archives and restores through the API', async () => {
+  const { api, calls } = fixture();
+  render(<CiteRagApp api={api} />);
+  const rowMenu = await screen.findByRole('button', { name: `${sampleChats[0].title}的更多操作` });
+  expect(screen.getByLabelText('按知识库分组的聊天').textContent).toContain(sampleBases[0].name);
+  fireEvent.click(rowMenu);
+  fireEvent.click(await screen.findByRole('menuitem', { name: '归档对话' }));
+  await waitFor(() => expect(calls.some((call) => call.path.endsWith('/archive') && call.method === 'PATCH')).toBe(true));
+  fireEvent.click(screen.getByRole('button', { name: /已归档/ }));
+  fireEvent.click(await screen.findByRole('button', { name: '恢复' }));
+  await waitFor(() => expect(calls.filter((call) => call.path.endsWith('/archive') && call.method === 'PATCH').length).toBe(2));
+});
 
 it('restores fixed chat, opens a verified source and restores focus without writes under StrictMode', async () => {
   const { api, calls } = fixture();
@@ -173,9 +198,7 @@ it('loads tasks for the newly selected chat knowledge base rather than the previ
   fireEvent.click((await screen.findAllByRole('button', { name: '管理资料' }))[0]);
   await screen.findByText('合成产品手册.md');
   fireEvent.click(screen.getByRole('menuitem', { name: /对话工作台/ }));
-  fireEvent.click(screen.getByRole('button', { name: '打开聊天记录' }));
-  fireEvent.click(await screen.findByText('其他知识库聊天'));
-  await waitFor(() => expect(screen.queryByRole('dialog', { name: '我的聊天' })).toBeNull());
+  fireEvent.click(await screen.findByRole('button', { name: '其他知识库聊天' }));
   fireEvent.click(screen.getByRole('menuitem', { name: /处理任务/ }));
   await waitFor(() => expect(calls.some((call) => call.path.startsWith(`/api/knowledge-bases/${other.kb_id}/documents?`))).toBe(true));
 }, 20000);

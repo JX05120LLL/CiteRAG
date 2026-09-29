@@ -136,6 +136,36 @@ async def test_chat_rename_and_delete_remove_messages_and_summary(m13_environmen
 
 
 @pytest.mark.asyncio
+async def test_archive_keeps_history_but_blocks_new_questions_until_restored(m13_environment):
+    api, _, app, _ = m13_environment
+    kb = await new_kb(api)
+    job = await finished(api, await upload(api, kb, data=b"The safe limit is 42 C.\n"))
+    chat = (await api.post("/api/conversations", json={"kb_id": kb})).json()["id"]
+    app.state.answer_enabled = True
+    app.state.query_adapter = Query([RetrievedChunk(
+        "chunk_a", "source_" + job["document_ids"][0].replace("-", ""),
+        "The safe limit is 42 C.",
+    )])
+    app.state.answer_adapter = Answer()
+    question = {"client_message_id": str(uuid4()), "text": "What is the limit?"}
+    assert (await api.post(f"/api/conversations/{chat}/messages", json=question)).status_code == 200
+    archived = await api.patch(f"/api/conversations/{chat}/archive", json={"archived": True})
+    assert archived.status_code == 200 and archived.json()["archived_at"]
+    assert (await api.get("/api/conversations")).json()["items"] == []
+    archived_list = await api.get("/api/conversations", params={"archived": True})
+    assert [item["id"] for item in archived_list.json()["items"]] == [chat]
+    assert len((await api.get(f"/api/conversations/{chat}/messages")).json()["items"]) == 1
+    blocked = await api.post(f"/api/conversations/{chat}/messages", json={
+        "client_message_id": str(uuid4()), "text": "What is the limit?",
+    })
+    assert blocked.status_code == 409
+    assert blocked.json()["detail"]["code"] == "conversation_archived"
+    restored = await api.patch(f"/api/conversations/{chat}/archive", json={"archived": False})
+    assert restored.json()["archived_at"] is None
+    assert [item["id"] for item in (await api.get("/api/conversations")).json()["items"]] == [chat]
+
+
+@pytest.mark.asyncio
 async def test_retry_creates_new_attempt_for_same_message_and_replay_is_idempotent(m13_environment):
     api, db, app, _ = m13_environment
     kb = await new_kb(api)

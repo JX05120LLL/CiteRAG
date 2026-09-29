@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async
 
 from app.config import Settings
 
-EXPECTED_SCHEMA_REVISION = "0008_image_attachments"
+EXPECTED_SCHEMA_REVISION = "0009_conversation_archive"
 
 
 class Database:

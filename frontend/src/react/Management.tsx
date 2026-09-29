@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Alert, Button, Card, Checkbox, Collapse, Descriptions, Drawer, Empty, Form, Input, Modal, Pagination, Skeleton, Space, Tag, Tooltip, Upload } from 'antd';
-import { BookOutlined, FileTextOutlined, PlusOutlined, ReloadOutlined, UploadOutlined } from '@ant-design/icons';
+import { Alert, Button, Card, Checkbox, Collapse, Descriptions, Drawer, Dropdown, Empty, Form, Input, Modal, Pagination, Skeleton, Space, Tag, Upload } from 'antd';
+import { BookOutlined, DatabaseOutlined, FileTextOutlined, MoreOutlined, PlusOutlined, ReloadOutlined, UploadOutlined } from '@ant-design/icons';
 import type { ApiClient, IngestionJob, ManagedDocument } from '../api/client';
 import type { AppView } from '../app';
 import { isKnowledgePending, knowledgeLimit } from '../state';
@@ -16,16 +16,18 @@ export function Knowledge({ view, api }: { view: AppView; api: ApiClient }) {
   useEffect(() => { if (s.knowledgeNotice && !s.createDraft.pending && !s.createDraft.error && !s.createDraft.name) setCreateOpen(false); },
     [s.knowledgeNotice, s.createDraft.pending, s.createDraft.error, s.createDraft.name]);
   if (view.documents.isOpen) return <Documents view={view} api={api} />;
-  return <><div className="section-heading"><h2>我的知识库 <Tag>{s.bases?.length ?? '—'} / {knowledgeLimit}</Tag></h2>
+  return <><div className="section-heading knowledge-heading"><span>{s.bases?.length ?? '—'} / {knowledgeLimit}</span>
     <Button aria-label="创建知识库" type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)} disabled={s.loading || !!s.basesError || pending || (s.bases?.length ?? 0) >= knowledgeLimit}>创建知识库</Button></div>
     {s.loading && <Skeleton active />}{s.basesError && <Alert type="error" showIcon title={s.basesError.message} action={<Button onClick={() => void a.refresh()}>重新读取</Button>} />}
     {s.knowledgeNotice && <Alert showIcon type="info" title={s.knowledgeNotice} />}
     {!s.loading && !s.basesError && !s.bases?.length && <Empty description="还没有知识库，创建后添加资料" image={Empty.PRESENTED_IMAGE_SIMPLE} />}
-    <div className="kb-cards">{s.bases?.map((base) => <Card key={base.id} title={<Space><BookOutlined />{base.name}</Space>} extra={<StateTag value={base.status} />}>
-      <p className="muted">聊天固定资料范围，维护期间暂停资料问答。</p>
-      <Space wrap><Button type="primary" disabled={pending} onClick={() => a.openDocuments(base)}>管理资料</Button>
-        <Button disabled={pending} onClick={() => a.beginRename(base.id)}>知识库改名</Button>
-        <Button disabled={pending || s.chatPending || base.status !== 'ready'} onClick={() => { a.selectKb(base.id); a.navigate('workbench'); }}>开始问答</Button></Space></Card>)}</div>
+    <div className="kb-cards">{s.bases?.map((base) => <Card key={base.id} className={`knowledge-card is-${base.status}`}><div className="knowledge-card-title"><span className="knowledge-card-icon"><BookOutlined /></span><h2>{base.name}</h2><StateTag value={base.status} /></div>
+      <p className="knowledge-card-note">聊天固定在此知识库；维护期间暂停资料问答。</p>
+      {base.status !== 'ready' && <Alert type="warning" title="此库当前不能开始资料问答，请查看任务状态。" />}
+      <div className="knowledge-card-actions"><Button icon={<FileTextOutlined />} aria-label="管理资料" disabled={pending} onClick={() => a.openDocuments(base)}>管理资料</Button>
+        <Button type="primary" disabled={pending || s.chatPending || base.status !== 'ready'} onClick={() => { a.selectKb(base.id); a.navigate('workbench'); }}>开始问答</Button>
+        <Button disabled={pending} onClick={() => a.beginRename(base.id)}>知识库改名</Button></div></Card>)}</div>
+    <Alert className="knowledge-tip" type="info" showIcon title="一个聊天固定一个知识库；切换知识库会新建聊天。" />
     <Modal title="创建知识库" open={createOpen || s.createDraft.uncertain} onCancel={() => { if (!pending) setCreateOpen(false); }}
       confirmLoading={s.createDraft.pending} okText={s.createDraft.uncertain ? '同键重试创建' : '创建'}
       okButtonProps={{ disabled: !s.createDraft.name.trim() || s.loading || !!s.basesError || pending || s.createDraft.error?.code === 'recovery_read_failed' }}
@@ -55,6 +57,7 @@ export function Documents({ view, api }: { view: AppView; api: ApiClient }) {
   const panel = view.documents; const d = panel.snapshot;
   const [selected, setSelected] = useState<ManagedDocument | null>(null);
   const [rebuildOpen, setRebuildOpen] = useState(false);
+  const [uploadOpen, setUploadOpen] = useState(false);
   if (!d.base) return <Empty description="请先选择知识库" />;
   const uploadDisabled = d.unavailable || d.pending?.operation === 'rebuild' || (!d.pending && (d.active || ['maintaining', 'blocked'].includes(d.base.status)));
   const mutateDisabled = d.unavailable || !!d.pending || d.active;
@@ -62,28 +65,32 @@ export function Documents({ view, api }: { view: AppView; api: ApiClient }) {
   const readable = !['maintaining', 'blocked'].includes(d.base.status);
   function rows(items: ManagedDocument[], deleted = false) {
     return <div className="document-list">{items.map((document) => <article className="document-list-row" key={document.id}>
-      <FileTextOutlined className="file-icon" /><div className="document-info"><strong>{document.filename}</strong>
-        <p>{sizeLabel(document.size)} · {dateLabel(document.created_at)}</p><StateTag value={document.status} />
+      <FileTextOutlined className={`file-icon file-${document.filename.split('.').pop()?.toLowerCase() ?? 'other'}`} /><div className="document-info"><strong>{document.filename}</strong>
+        <p>{sizeLabel(document.size)} · {dateLabel(document.created_at)}</p></div>
+      <div className="document-status"><StateTag value={document.status} />
         {document.error_code && !deleted && <p className="failure-reason">{failureReason(document.error_code)}</p>}</div>
-      <div className="row-actions">{!deleted && <>
-        {readable && !['deleting', 'replacing', 'deleted'].includes(document.status) ? <Button type="link" href={api.originalUrl(document.id)}>下载原文</Button>
-          : <span className="muted">原文核查暂停</span>}
-        <Tooltip title={readable && ['parsed', 'ready'].includes(document.status) ? '读取真实解析片段' : '维护期间或尚未解析，定位不可用'}>
-          <Button disabled={!readable || !['parsed', 'ready'].includes(document.status)} onClick={() => void panel.inspect(document)}>查看解析位置</Button></Tooltip>
-        <Button onClick={() => setSelected(document)}>资料详情</Button>
-        {(document.status === 'ready' && d.base?.status === 'ready' || document.status === 'failed' && ['empty', 'ready', 'blocked'].includes(d.base?.status ?? '')) &&
-          <Button danger disabled={mutateDisabled} onClick={() => void panel.maintain(document, 'delete')}>{document.status === 'failed' ? '删除失败资料' : '删除资料'}</Button>}
-      </>}{deleted && <span className="muted">保留删除标记与历史任务</span>}</div></article>)}</div>;
+      <div className="row-actions">{!deleted ? <><Button onClick={() => setSelected(document)}>资料详情</Button>
+        <Dropdown trigger={['click']} menu={{ items: [
+          { key: 'download', label: readable && !['deleting', 'replacing', 'deleted'].includes(document.status)
+            ? <a href={api.originalUrl(document.id)}>下载原文</a> : '原文核查暂停', disabled: !readable || ['deleting', 'replacing', 'deleted'].includes(document.status) },
+          { key: 'location', label: '查看解析位置', disabled: !readable || !['parsed', 'ready'].includes(document.status) },
+          { key: 'delete', label: document.status === 'failed' ? '删除失败资料' : '删除资料', danger: true,
+            disabled: mutateDisabled || !(document.status === 'ready' && d.base?.status === 'ready' || document.status === 'failed' && ['empty', 'ready', 'blocked'].includes(d.base?.status ?? '')) },
+        ], onClick: ({ key }) => { if (key === 'location') void panel.inspect(document);
+          if (key === 'delete') void panel.maintain(document, 'delete'); } }}>
+          <Button type="text" icon={<MoreOutlined />} aria-label={`${document.filename}的更多操作`} /></Dropdown></> : <span className="muted">保留删除标记与历史任务</span>}</div></article>)}</div>;
   }
   const paginator = (kind: 'current' | 'deleted', offset: number, total: number) => <Pagination aria-label={kind === 'current' ? '当前资料分页' : '已删除资料分页'}
     current={Math.floor(offset / 10) + 1} pageSize={10} total={total} showSizeChanger={false} showTotal={(n) => `共 ${n} 份`} disabled={d.busy || d.loading} onChange={(page) => panel.movePage(kind, (page - 1) * 10)} />;
-  return <div className="management-main"><div className="library-summary"><div><h2>{d.base.name}</h2><StateTag value={d.base.status} />
-    <span className="muted">上传受理、解析完成和入库就绪分别记录。</span></div><Space wrap>
+  return <div className="management-main"><div className="library-summary"><Space wrap>
       <Button disabled={d.busy} onClick={view.actions.closeDocuments}>返回知识库</Button><Button icon={<ReloadOutlined />} disabled={d.busy || d.loading} onClick={() => void panel.refresh()}>刷新资料与任务</Button></Space></div>
     {['maintaining', 'blocked'].includes(d.base.status) && <Alert showIcon type="warning" title={d.base.status === 'blocked' ? '此库待修复，问答与新上传暂停。' : '此库维护中，请等待任务核验。'} />}
     {d.readError && <Alert showIcon type="error" title={errorText(d.readError)} />}{d.error && <Alert showIcon type="error" title={errorText(d.error)} />}
     {d.notice && <Alert showIcon type="info" title={d.notice} />}
-    <Collapse className="upload-section" defaultActiveKey={d.uncertain ? ['upload'] : []} items={[{ key: 'upload', label: d.uncertain ? '添加资料 · 原受理结果待确认' : '添加资料', children: <>
+    <div className="upload-strip"><Button type="primary" icon={<PlusOutlined />} aria-expanded={uploadOpen || d.uncertain}
+      disabled={uploadDisabled && !d.uncertain} onClick={() => setUploadOpen(!uploadOpen)}>添加资料</Button><span>支持格式：TXT / MD / 文字 PDF / DOCX</span>
+      {uploadDisabled && <small>读取未完成、维护中或已有任务，暂不接收新资料。</small>}</div>
+    {(uploadOpen || d.uncertain) && <div className="upload-section">
       <Upload.Dragger accept=".txt,.md,.pdf,.docx" multiple disabled={uploadDisabled} fileList={d.files.map((file, i) => ({ uid: `${i}:${file.name}`, name: file.name, originFileObj: file as never }))}
         beforeUpload={() => false} onChange={({ fileList }) => panel.setFiles(fileList.flatMap((file) => file.originFileObj ? [file.originFileObj] : []))}>
         <p><UploadOutlined /> 选择或拖入资料</p><p>UTF-8 TXT、Markdown、文字 PDF、普通 DOCX</p></Upload.Dragger>
@@ -91,7 +98,7 @@ export function Documents({ view, api }: { view: AppView; api: ApiClient }) {
       {d.uncertain && <Alert type="warning" showIcon title="受理结果尚未确认，重新选择原文件后同键重试。" description={d.pending?.files.map((file) => file.name).join('、')} />}
       <Button type="primary" loading={d.busy} disabled={uploadDisabled || !d.files.length || d.error?.kind === 'validation' || (!!d.pending && !matchesPendingFiles(d.pending, d.files))}
         onClick={() => void panel.submit('upload')}>{d.uncertain ? '同键重试上传' : '上传并处理'}</Button>
-      {uploadDisabled && <p className="muted">读取未完成、维护中、已有任务或恢复记录不可用时暂停新增上传。</p>}</> }]} />
+      {uploadDisabled && <p className="muted">读取未完成、维护中、已有任务或恢复记录不可用时暂停新增上传。</p>}</div>}
     <div className="section-heading"><h2>当前资料</h2><Tag>{d.documentPage?.total ?? '—'} 份</Tag></div>
     {d.loading && <Skeleton active />}{!d.loading && d.documents?.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无当前资料" />}
     {rows(d.documents ?? [])}{d.documentPage && paginator('current', d.documentOffset, d.documentPage.total)}
@@ -127,26 +134,34 @@ export function Tasks({ view }: { view: AppView }) {
   const panel = view.documents; const d = panel.snapshot;
   const disabled = d.unavailable || d.active || !!d.pending;
   if (!d.base) return <Empty description="选择知识库后查看资料与任务" />;
-  const rows = (jobs: IngestionJob[]) => <div className="jobs-list">{jobs.map((job) => <article className="job-row" key={job.id}>
-    <div><h3>{operations[job.operation]}</h3><p>{dateLabel(job.created_at)} · {job.document_ids.length} 份资料</p>
-      <div className="job-stage">{['failed', 'interrupted'].includes(job.status) ? stoppedStage(job.stage) : stages[job.stage]}</div>
-      {job.error_code && <p className="failure-reason">{failureReason(job.error_code)}</p>}</div>
-    <div className="job-row-actions"><StateTag value={job.status} /><Space wrap><Button disabled={d.busy} onClick={() => void panel.inspectTask(job)}>查看任务详情</Button>
-      {job.can_retry && <Button disabled={disabled} onClick={() => void panel.retry(job)}>重试任务</Button>}
-      {job.can_cleanup && <Button disabled={disabled} onClick={() => void panel.cleanup(job)}>重试清理</Button>}</Space></div></article>)}</div>;
+  const jobName = (item: IngestionJob) => {
+    const related = d.documents?.find((document) => item.document_ids.includes(document.id));
+    return related ? `${operations[item.operation]} · ${related.filename}` : operations[item.operation];
+  };
+  const rows = (jobs: IngestionJob[]) => <div className="jobs-list">{jobs.map((item) => <button type="button" className={`job-row${d.inspectedJob?.job?.id === item.id ? ' selected' : ''}`} key={item.id}
+    disabled={d.busy} onClick={() => void panel.inspectTask(item)} aria-label={`查看任务详情：${jobName(item)}`}>
+    <span className="job-name"><FileTextOutlined /><span><strong>{jobName(item)}</strong><small>{item.document_ids.length} 份资料</small></span></span>
+    <span className="job-stage">{['failed', 'interrupted'].includes(item.status) ? stoppedStage(item.stage) : stages[item.stage]}</span>
+    <StateTag value={item.status} /><time dateTime={item.created_at}>{dateLabel(item.created_at)}</time><span aria-hidden="true">›</span></button>)}</div>;
   const job = d.inspectedJob?.job;
-  return <div><div className="section-heading"><h2>{d.base.name} · 活动任务</h2><Button icon={<ReloadOutlined />} disabled={d.busy || d.loading} onClick={() => void panel.refresh()}>刷新资料与任务</Button></div>
+  return <div className="tasks-layout"><div className="task-summary">
+      <div><span>进行中</span><strong>{d.jobPage?.active_items.length ?? '—'}</strong></div>
+      <div><span>需要处理</span><strong>{d.jobPage?.failed_count ?? '—'}</strong></div>
+      <div><span>已结束</span><strong>{d.jobPage?.total ?? '—'}</strong></div></div>
     {d.error && <Alert type="error" title={errorText(d.error)} />}{d.readError && <Alert type="error" title={errorText(d.readError)} />}
     {d.notice && <Alert type="info" title={d.notice} />}{d.loading && <Skeleton active />}
-    {rows(d.jobPage?.active_items ?? [])}{!d.loading && d.jobPage?.active_items.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无活动任务" />}
-    <Alert className="task-history-note" type="info" showIcon title="历史任务保留当次结果，后续成功不会覆盖旧失败记录。" />
-    <Collapse activeKey={d.historyOpen ? ['history'] : []} onChange={(keys) => panel.setHistoryOpen(keys.includes('history'))}
-      items={[{ key: 'history', label: `已结束任务 · ${d.jobPage?.total ?? '—'} 项 · 失败 ${d.jobPage?.failed_count ?? '—'} 项`, children: <>
-        {rows(d.jobPage?.items ?? [])}<Pagination current={Math.floor(d.jobOffset / 10) + 1} total={d.jobPage?.total ?? 0} pageSize={10} showSizeChanger={false}
-          disabled={d.busy || d.loading} onChange={(page) => panel.movePage('history', (page - 1) * 10)} /></> }]} />
-    <Drawer title="任务详情" open={!!d.inspectedJob} onClose={panel.closeInspector} size={460} destroyOnHidden>
+    <div className="task-columns"><section className="task-table"><div className="task-table-header"><strong>共 {(d.jobPage?.total ?? 0) + (d.jobPage?.active_items.length ?? 0)} 项任务</strong>
+      <Button icon={<ReloadOutlined />} disabled={d.busy || d.loading} onClick={() => void panel.refresh()}>刷新任务</Button></div>
+      <div className="job-columns" aria-hidden="true"><span>任务名称 / 资料文件</span><span>当前阶段</span><span>处理结果</span><span>创建时间</span></div>
+      {rows(d.jobPage?.active_items ?? [])}{rows(d.jobPage?.items ?? [])}
+      {!d.loading && !d.jobPage?.active_items.length && !d.jobPage?.items.length && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无任务" />}
+      <Pagination current={Math.floor(d.jobOffset / 10) + 1} total={d.jobPage?.total ?? 0} pageSize={10} showSizeChanger={false}
+        disabled={d.busy || d.loading} onChange={(page) => panel.movePage('history', (page - 1) * 10)} />
+      <p className="muted task-history-note">历史任务保留当次结果；后续成功不会覆盖旧失败记录。</p></section>
+    <section className="task-detail" aria-label="任务详情"><div className="task-detail-header"><h2>任务详情</h2>{d.inspectedJob && <Button type="text" onClick={panel.closeInspector}>关闭</Button>}</div>
       {d.inspectedJob?.error && <Alert type="error" title={errorText(d.inspectedJob.error)} />}
-      {!job && !d.inspectedJob?.error && <Skeleton active />}{job && <><Descriptions column={1} items={[
+      {!d.inspectedJob && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="选择左侧任务查看详情" />}
+      {d.inspectedJob && !job && !d.inspectedJob.error && <Skeleton active />}{job && <><Descriptions column={1} items={[
         { key: 'operation', label: '任务类型', children: operations[job.operation] }, { key: 'status', label: '任务状态', children: <StateTag value={job.status} /> },
         { key: 'stage', label: '实际阶段', children: ['failed', 'interrupted'].includes(job.status) ? stoppedStage(job.stage) : stages[job.stage] },
         { key: 'docs', label: '关联资料', children: `${job.document_ids.length} 份` }, { key: 'engine', label: '引擎写入', children: job.engine_mutated ? '已发生' : '未发生' },
@@ -156,29 +171,35 @@ export function Tasks({ view }: { view: AppView }) {
         <Space wrap><Button disabled={d.busy || d.loading} onClick={() => void panel.inspectTask(job)}>刷新任务详情</Button>
           {job.can_retry && <Button disabled={disabled} onClick={() => void panel.retry(job)}>重试任务</Button>}
           {job.can_cleanup && <Button disabled={disabled} onClick={() => void panel.cleanup(job)}>重试清理</Button>}</Space></>}
-    </Drawer></div>;
+    </section></div></div>;
 }
 
 export function Status({ view }: { view: AppView }) {
   const s = view.state; const h = s.health;
-  return <div className="status-layout"><Alert type="info" showIcon title="配置存在不代表连通；未执行的检查不会标为通过。" />
-    <div className="section-heading"><h2>服务能力</h2><Button icon={<ReloadOutlined />} loading={s.healthLoading} onClick={() => { void view.actions.loadHealth(); void view.voice.actions.refresh(); }}>刷新系统状态</Button></div>
+  const capabilities = [
+    { name: '业务数据库', value: h?.database ?? 'unverified', icon: <DatabaseOutlined />, note: '聊天、知识库与任务记录的本地存储。' },
+    { name: '模型服务', value: h?.models ?? 'unverified', icon: <BookOutlined />, note: '配置状态与真实调用验证分别记录。' },
+    { name: '知识引擎', value: h?.rag ?? 'unverified', icon: <FileTextOutlined />, note: '检索与问答引擎的当前状态。' },
+    { name: '语音与媒体', value: view.voice.actions.capability?.assistant ?? 'unverified', icon: <UploadOutlined />, note: '通话条件须在语音页实际验证。' },
+  ];
+  return <div className="status-layout"><div className="status-actions"><Button type="primary" icon={<ReloadOutlined />} loading={s.healthLoading} onClick={() => { void view.actions.loadHealth(); void view.voice.actions.refresh(); }}>刷新系统状态</Button>
+    {s.healthCheckedAt && <span>本次读取 {new Date(s.healthCheckedAt).toLocaleTimeString('zh-CN')}</span>}</div>
+    <Alert type="info" showIcon title="以下显示接口报告的状态；配置存在不代表实际供应商调用或真人设备验收通过。" />
+    <div className="section-heading"><h2>服务能力</h2><span className="muted">本地服务与组件的当前配置和可用性</span></div>
     {s.healthLoading && <Skeleton active />}{s.healthError && <Alert showIcon type="error" title={s.healthError.message} />}
-    {h && <Descriptions bordered column={1} items={[
-      { key: 'mode', label: '使用方式', children: '本地单用户' }, { key: 'database', label: '业务数据库', children: <StateTag value={h.database} /> },
-      { key: 'models', label: '模型服务', children: <StateTag value={h.models} /> }, { key: 'rag', label: 'LightRAG', children: <StateTag value={h.rag} /> },
-      { key: 'backup', label: '备份', children: <><StateTag value={h.backup ?? 'unverified'} />{h.last_backup_at && <p>最近完成：{dateLabel(h.last_backup_at)}</p>}
-        {h.backup_error_code && <Alert type="error" title={backupErrors[h.backup_error_code] ?? '备份状态待核查。'} />}</> }, { key: 'retention', label: '保留清理', children: <StateTag value={h.retention ?? 'unverified'} /> },
-    ]} />}
-    <div className="status-panels"><Card title="模型与引擎信息"><Descriptions column={1} items={[
+    <div className="status-capabilities">{capabilities.map((item) => <Card key={item.name} className={`status-capability tone-${['available', 'ready', 'succeeded'].includes(item.value) ? 'ok' : ['unavailable', 'failed', 'blocked', 'not_configured'].includes(item.value) ? 'off' : 'caution'}`}><div className="status-capability-head"><span className="status-capability-icon">{item.icon}</span><div><h3>{item.name}</h3><StateTag value={item.value} /></div></div><p>{item.note}</p></Card>)}</div>
+    <div className="status-panels"><Card title="模型与引擎"><Descriptions column={1} items={[
       { key: 'names', label: '模型名称', children: h?.models_info?.model_names.join(' / ') || '未提供' },
       { key: 'region', label: '地区', children: h?.models_info?.region || '未提供' },
       { key: 'modelsverified', label: '模型验证时间', children: h?.models_info?.last_verified_at ? dateLabel(h.models_info.last_verified_at) : '尚无记录' },
       { key: 'ragverified', label: '引擎验证时间', children: h?.rag_info?.last_verified_at ? dateLabel(h.rag_info.last_verified_at) : '尚无记录' },
       { key: 'commit', label: 'LightRAG 版本', children: h?.rag_info?.lightrag_commit.slice(0, 8) || '未提供' },
       { key: 'pg', label: 'PostgreSQL / pgvector', children: `${h?.rag_info?.postgresql_major ?? '未提供'} / ${h?.rag_info?.vector_version ?? '未提供'}` },
-    ]} /></Card><Card title="语音与媒体"><StateTag value={view.voice.actions.capability?.transport ?? 'unverified'} />
+    ]} /></Card><Card title="备份与保留"><div className="status-backup"><StateTag value={h?.backup ?? 'unverified'} /><p>最近完成：{h?.last_backup_at ? dateLabel(h.last_backup_at) : '尚无记录'}</p>
+      {h?.backup_error_code && <Alert type="error" title={backupErrors[h.backup_error_code] ?? '备份状态待核查。'} />}
+      <p>保留清理：<StateTag value={h?.retention ?? 'unverified'} /></p>
+      <p>语音媒体：<StateTag value={view.voice.actions.capability?.transport ?? 'unverified'} /></p>
       {view.voice.actions.capabilityError && <Alert type="error" title="媒体状态读取失败，请刷新后重试。" />}
-      <p>仅本地媒体测试；语音助手、ASR、TTS 与字幕尚未接入。</p><Button onClick={() => view.actions.navigate('voice')}>查看通话条件</Button></Card></div>
+      <Button onClick={() => view.actions.navigate('voice')}>查看通话条件</Button></div></Card></div>
     {s.healthCheckedAt && <p className="muted">状态读取时间：{new Date(s.healthCheckedAt).toLocaleString('zh-CN')}。本次刷新不调用供应商或探测实际模型。</p>}</div>;
 }

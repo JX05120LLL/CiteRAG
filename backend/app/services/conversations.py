@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy import delete, select
@@ -36,13 +37,20 @@ class ConversationService:
         await self.session.commit()
         return conversation
 
-    async def list_owned(self, owner_id: UUID, limit: int, offset: int) -> list[Conversation]:
+    async def list_owned(
+        self, owner_id: UUID, limit: int, offset: int, *, archived: bool = False
+    ) -> list[Conversation]:
         return list(
             await self.session.scalars(
                 select(Conversation)
                 .join(KnowledgeBase, Conversation.kb_id == KnowledgeBase.id)
-                .where(Conversation.owner_id == owner_id, KnowledgeBase.owner_id == owner_id,
-                       active_conversation())
+                .where(
+                    Conversation.owner_id == owner_id,
+                    KnowledgeBase.owner_id == owner_id,
+                    active_conversation(),
+                    Conversation.archived_at.is_not(None)
+                    if archived else Conversation.archived_at.is_(None),
+                )
                 .order_by(Conversation.created_at.desc(), Conversation.id.desc())
                 .offset(offset)
                 .limit(limit)
@@ -67,6 +75,27 @@ class ConversationService:
     async def rename(self, owner_id: UUID, conversation_id: UUID, title: str) -> Conversation:
         conversation = await self.get_owned(owner_id, conversation_id)
         conversation.title = title
+        await self.session.commit()
+        return conversation
+
+    async def set_archived(
+        self, owner_id: UUID, conversation_id: UUID, archived: bool
+    ) -> Conversation:
+        conversation = await self.session.scalar(select(Conversation).join(
+            KnowledgeBase, Conversation.kb_id == KnowledgeBase.id,
+        ).where(Conversation.id == conversation_id, Conversation.owner_id == owner_id,
+                KnowledgeBase.owner_id == owner_id, active_conversation()).with_for_update())
+        if conversation is None:
+            raise ServiceError(404, "conversation_not_found", "聊天不存在或不可访问")
+        if await self.session.scalar(select(AnswerAttempt.id).where(
+            AnswerAttempt.conversation_id == conversation_id,
+            AnswerAttempt.status == "running",
+        ).limit(1)):
+            raise ServiceError(409, "answer_in_progress", "回答仍在处理中，请稍后归档")
+        if archived:
+            conversation.archived_at = conversation.archived_at or datetime.now(UTC)
+        else:
+            conversation.archived_at = None
         await self.session.commit()
         return conversation
 

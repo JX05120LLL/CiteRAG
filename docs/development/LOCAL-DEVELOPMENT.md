@@ -1,5 +1,7 @@
 # CiteRAG 本地开发
 
+2026-09-29 UI 细化新增可选对话归档字段，当前源码要求业务库版本 `0009_conversation_archive`。本轮只在独立临时 PostgreSQL 执行迁移；实际业务库仍须先停写、备份业务库/引擎库与私有运行目录，确认恢复方式，再显式迁移。归档接口与界面说明见 [UI 细化记录](UI-POLISH-2026-09-29.md)。下方 `0008` 及更早版本描述是对应历史增量记录。
+
 M3 图片增量需在**停写、备份业务库/引擎库及私有运行目录后**将业务库显式升级到 `0008_image_attachments`，再重启唯一 API；本轮未触碰实际业务库或正在运行的验收服务。非实时图片观察复用受控后端百炼配置，真实 `qwen3.8-omni-flash` 请求需另获授权。添加 Pillow 锁定依赖；安装与验收边界见 [M3 图片记录](M3-MULTIMODAL-VALIDATION.md)。
 
 M2 当前启动及配置以 [语音集中验收](M2-VOICE-VALIDATION.md#启动与关闭) 为准：`uv sync --locked --extra rag --extra voice`，受控配置下启用正式语音；Silero固定校验，本地自托管 LiveKit，唯一 API worker。下面“ASR/TTS 未接入”及旧端口是历史快照。新增真实付费/音频数据验证须另获授权，不使用本轮合成服务冒充真实供应商。

@@ -94,6 +94,24 @@ async def test_empty_migration_seeds_one_local_profile_and_no_demo_data(schema_d
     assert "uq_local_profiles_singleton" in str(rejected.value.orig)
 
 
+async def test_archive_migration_keeps_existing_local_chat_active(schema_database):
+    database, _ = schema_database
+    await migrate(database, "0008_image_attachments")
+    kb_id, owner_id = await seed_knowledge_base(database, "Existing", "ready")
+    chat_id = uuid4()
+    async with database.engine.begin() as connection:
+        await connection.execute(text(
+            "INSERT INTO conversations (id, kb_id, local_owner_id, title) "
+            "VALUES (:id, :kb, :owner, :title)"
+        ), {"id": chat_id, "kb": kb_id, "owner": owner_id, "title": "Existing chat"})
+    await migrate(database)
+    async with database.engine.connect() as connection:
+        row = (await connection.execute(text(
+            "SELECT title, archived_at FROM conversations WHERE id = :id"
+        ), {"id": chat_id})).one()
+    assert row.title == "Existing chat" and row.archived_at is None
+
+
 async def test_empty_local_workbench_needs_no_account(environment):
     client, _ = environment
     for path in ("/api/knowledge-bases", "/api/conversations"):

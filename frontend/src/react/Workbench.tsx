@@ -9,6 +9,9 @@ import { locationText } from '../pages/sources';
 import { displayCitations } from '../preview/model';
 import { StateTag } from '../preview/shared';
 import { answerRouteLabel } from './answerRoute';
+import logo from '../../../assets/brand/mark.svg';
+
+const messageTime = (value: string) => new Date(value).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
 
 export function Workbench({ view, api }: { view: AppView; api: ApiClient }) {
   const { state: s, actions: a } = view;
@@ -34,9 +37,7 @@ export function Workbench({ view, api }: { view: AppView; api: ApiClient }) {
     return () => { observer.disconnect(); cancelAnimationFrame(frame); };
   }, [citation]);
   return <div ref={root} className="conversation-column formal-conversation">
-    <div className="chat-context"><BookOutlined /><span>一个聊天固定一个知识库</span><div className="context-actions">
-      <Button size="small" disabled={!s.selectedChatId || busy} onClick={() => void a.renameChat()}>聊天改名</Button>
-      <Button size="small" disabled={!s.selectedChatId || busy} onClick={() => void a.deleteChat()}>删除聊天</Button></div></div>
+    <div className="chat-context"><BookOutlined /><span>当前对话固定知识库 · {base?.name || '未选择'}</span></div>
     {s.chatError && <Alert showIcon type="error" title={s.chatError.message} />}
     <div className="message-scroll" aria-live="polite" aria-busy={busy}>
       {!s.chatMessages.length && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={s.selectedChatId ? '直接提问，自动区分交流与资料查询' : '选择知识库，新建或打开聊天'} />}
@@ -49,7 +50,7 @@ export function Workbench({ view, api }: { view: AppView; api: ApiClient }) {
             : m.status === 'insufficient_evidence' ? '当前知识库没有足够的可核查证据，暂不作答。'
               : m.status === 'needs_clarification' ? m.text || '请补充查询对象或范围。'
                 : m.status === 'conflicting_evidence' ? m.text || '当前资料存在冲突，请核查原文。' : m.text;
-        return <article key={m.message_id} className="message-pair"><Bubble placement="end" className="question-bubble" content={m.question} />
+        return <article key={m.message_id} className="message-pair"><div className="question-line"><Bubble placement="end" className="question-bubble" content={m.question} /><time dateTime={m.created_at}>{messageTime(m.created_at)}</time></div>
           {!!m.images?.length && <div className="message-images">{m.images.map((image) =>
             <div key={image.id} className="message-image"><span>{image.filename}</span>
               {Date.parse(image.expires_at) > Date.now() ?
@@ -61,19 +62,19 @@ export function Workbench({ view, api }: { view: AppView; api: ApiClient }) {
                 onClick={() => void a.confirmChatImage(m.message_id, image.id)}>确认图片编号</Button>}
               {image.confirmed_identifier && <p>已确认编号：{image.confirmed_identifier}</p>}
             </div>)}</div>}
-          <div><div className="answer-heading"><strong>CiteRAG</strong><StateTag value={m.status === 'answered' && !m.saved ? 'uncommitted' : m.status} />
-            <Tag>{m.saved ? '已保存' : '尚未保存'}</Tag></div>
+          <div className="answer-line"><span className="answer-avatar"><img src={logo} alt="" /></span><div className="answer-card"><div className="answer-heading"><strong>{answerRouteLabel(m.route).split(' · ')[0]}</strong><StateTag value={m.status === 'answered' && !m.saved ? 'uncommitted' : m.status} />
+            {!m.saved && <Tag>尚未保存</Tag>}</div>
             <div className="answer-text">{content}</div>
             {streaming && <p className="muted">{s.chatStreamSaved ? '结果已保存，等待最终提交' : '核验与保存处理中'}</p>}
-            {readable && <p className="muted">{answerRouteLabel(m.route)}</p>}
+            {readable && m.route !== 'needs_clarification' && <p className="muted">{answerRouteLabel(m.route)}</p>}
             {readable && m.error_code && <p className="failure-reason">{!['failed', 'interrupted'].includes(m.status) && <>{answerFailure(m.error_code)}<br /></>}{ /^[a-z][a-z0-9_]{0,63}$/.test(m.error_code) && <>错误代码：{m.error_code}</>}</p>}
             {cited && <div className="source-buttons">{m.citations.map((c) => <Button key={c.evidence_id} icon={<FileTextOutlined />} data-source-key={`${m.message_id}:${c.evidence_id}`}
-              onClick={() => { trigger.current = `${m.message_id}:${c.evidence_id}`; a.selectCitation(m.message_id, c.evidence_id); }}>{c.filename} · {locationText(c)}</Button>)}</div>}
+              onClick={() => { trigger.current = `${m.message_id}:${c.evidence_id}`; a.selectCitation(m.message_id, c.evidence_id); }}>查看来源 · {c.filename} · {locationText(c)} <span aria-hidden="true">›</span></Button>)}</div>}
             {readable && (['failed', 'interrupted', 'partial'].includes(m.status) || m.status === 'needs_clarification' &&
               !!m.images?.some((image) => image.needs_confirmation) &&
               !!m.images?.every((image) => !image.needs_confirmation || !!image.confirmed_identifier)) && <Button className="retry-answer" disabled={busy || base?.status !== 'ready'}
                 onClick={() => void a.retryChat(m.message_id)}>重试回答</Button>}
-          </div></article>;
+          </div><time className="answer-time" dateTime={m.created_at}>{messageTime(m.created_at)}</time></div></article>;
       })}
     </div>
     <div className="composer"><input ref={imageInput} type="file" accept="image/png,image/jpeg" multiple hidden
@@ -90,9 +91,10 @@ export function Workbench({ view, api }: { view: AppView; api: ApiClient }) {
         <Space wrap><Button icon={<AudioOutlined />} disabled={busy} onClick={() => a.navigate('voice')}>语音通话</Button>
           <Button type="primary" loading={busy} disabled={!enabled || !s.chatDraft.trim()} onClick={() => void a.sendChat()}>发送问题 ↑</Button></Space></div>} />
       <p className="composer-note">Enter 发送 · Shift+Enter 换行。资料回答只展示已提交且有原文依据的结果。</p></div>
-    <Drawer title="原文来源" aria-label="原文来源" rootClassName="formal-source-drawer" focusable={{ focusTriggerAfterClose: false }} open={!!citation} onClose={a.closeCitation} size={460} destroyOnHidden>
-      {citation && <div className="source-content"><h2>{citation.filename}</h2><Tag>{locationText(citation)}</Tag>
-        <blockquote>{citation.excerpt}</blockquote><Button aria-label="下载原文" href={api.originalUrl(citation.document_id)} icon={<FileTextOutlined />}>下载原文</Button>
+    <Drawer title="原文来源" aria-label="原文来源" rootClassName="formal-source-drawer" focusable={{ focusTriggerAfterClose: false }} open={!!citation} onClose={a.closeCitation} size={460} destroyOnHidden
+      footer={citation && <div className="source-drawer-actions"><Button aria-label="下载原文" href={api.originalUrl(citation.document_id)} icon={<FileTextOutlined />}>下载原文</Button><Button type="primary" onClick={a.closeCitation}>关闭来源</Button></div>}>
+      {citation && <div className="source-content"><div className="source-file-card"><h2><FileTextOutlined />{citation.filename}</h2><p><BookOutlined />{locationText(citation)}</p></div>
+        <h3>原文内容（节选）</h3><blockquote>{citation.excerpt}</blockquote>
         <p className="muted">摘录、文件和定位均来自已保存的核验结果。</p>
         <div className="source-buttons">{sourceMessage?.citations.map((c) => <Button key={c.evidence_id} onClick={() => a.selectCitation(sourceMessage.message_id, c.evidence_id)}>{c.filename} · {locationText(c)}</Button>)}</div></div>}
     </Drawer>

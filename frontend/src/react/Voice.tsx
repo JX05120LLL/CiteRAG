@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import { Alert, Button, Card, Descriptions, Drawer, Input, Modal, Space, Tag, Tooltip } from 'antd';
-import { AudioOutlined, AudioMutedOutlined, ArrowLeftOutlined, PhoneOutlined, ReloadOutlined, SoundOutlined } from '@ant-design/icons';
+import { AudioOutlined, AudioMutedOutlined, ArrowLeftOutlined, FileTextOutlined, PhoneOutlined, ReloadOutlined, SoundOutlined, UserOutlined } from '@ant-design/icons';
 import type { VoiceActions, VoiceContext } from '../pages/voice';
 import { StateTag } from '../preview/shared';
 import { displayCitations } from '../preview/model';
 import { answerRouteLabel } from './answerRoute';
 import { locationText } from '../pages/sources';
 import { answerFailure } from '../pages/workbench';
+import logo from '../../../assets/brand/mark.svg';
 
 // React adaptation of LiveKit's MIT welcome-view and agent-session-view-01.
 // Source pinned in vendor/livekit/README.md. Media remains owned by VoiceController.
@@ -60,16 +61,17 @@ export function Voice({ context, actions, levels = [], readOnly = false }: {
   const citation = selected && displayCitations(selected).find((item) => item.evidence_id === source?.evidence);
   const active = ['connecting', 'connected', 'reconnecting', 'ending'].includes(media.phase);
   const answers = media.answers ?? [];
-  const answerCard = (answer: typeof answers[number]) => <Card key={answer.message_id} title={answer.question.length > 160
-    ? <details className="voice-question"><summary>{answer.question.slice(0, 80)}…（展开全文）</summary><p>{answer.question}</p></details>
-    : answer.question}>
-    <Space wrap><StateTag value={answer.status} /><Tag>{answerRouteLabel(answer.route)}</Tag><Tag>{answer.saved ? '已保存文字' : '未保存'}</Tag></Space>
+  const answerCard = (answer: typeof answers[number]) => <article className="voice-exchange" key={answer.message_id}>
+    <div className="voice-user-row"><span className="voice-user-avatar"><UserOutlined /></span><div className="voice-user-card"><strong><AudioOutlined /> 用户（语音输入）</strong>
+      {answer.question.length > 160 ? <details className="voice-question"><summary>{answer.question.slice(0, 80)}…（展开全文）</summary><p>{answer.question}</p></details> : <p>{answer.question}</p>}</div></div>
+    <div className="voice-assistant-row"><span className="voice-assistant-avatar"><img src={logo} alt="" /></span><div className="voice-assistant-card"><Space wrap><strong>{answerRouteLabel(answer.route).split(' · ')[0]}</strong><StateTag value={answer.status} />{!answer.saved && <Tag>未保存</Tag>}</Space>
     <p className="voice-answer">{answer.hidden || answer.stale ? '资料已变化，旧回答与来源暂停展示。'
       : ['failed', 'interrupted'].includes(answer.status) ? answerFailure(answer.error_code)
         : answer.status === 'insufficient_evidence' ? '当前资料没有足够证据，请补充或缩小问题范围。'
           : !answer.saved ? '回答尚未确认保存，正文暂不展示。' : answer.text}</p>
-    {displayCitations(answer).map((item) => <Button key={item.evidence_id} className="voice-source-button" onClick={() => setSource({ message: answer.message_id, evidence: item.evidence_id })}>{item.filename} · {locationText(item)}</Button>)}
-  </Card>;
+    <p className="muted voice-route-detail">{answerRouteLabel(answer.route)}</p>
+    {displayCitations(answer).map((item) => <Button key={item.evidence_id} icon={<FileTextOutlined />} className="voice-source-button" onClick={() => setSource({ message: answer.message_id, evidence: item.evidence_id })}>查看来源 · {item.filename} · {locationText(item)} <span aria-hidden="true">›</span></Button>)}</div></div>
+  </article>;
   const disabled = readOnly || actions.checking || actions.capabilityError || !context.chatId || !context.kbReady ||
     context.chatPending || !!context.error || actions.capability?.transport !== 'configured' ||
     (assistant && actions.capability?.assistant !== 'configured');
@@ -83,16 +85,21 @@ export function Voice({ context, actions, levels = [], readOnly = false }: {
     <div className="voice-context-brief"><Space wrap><Tag>{context.chatTitle || '尚未选择聊天'}</Tag>
       <span>固定知识库：{context.kbName || '尚未读取'}</span></Space>
       <Button title={readOnly ? '只读设计状态，请使用正式语音入口刷新实际条件' : undefined} icon={<ReloadOutlined />} disabled={readOnly || active || actions.checking} loading={actions.checking} onClick={() => void actions.refresh()}>刷新连接条件</Button></div>
-    <Card className="official-voice-stage">
-      <div className="voice-stage-heading"><span>{assistant ? '本地语音对话' : '本地音频连接'}</span><StateTag value={media.phase === 'connected' ? 'connected' : media.phase === 'failed' ? 'failed' : 'unverified'} /></div>
-      {active ? <div className="official-voice-bars" aria-hidden="true">{[0, 1, 2, 3, 4].map((i) => <span key={i}
-        style={{ height: media.phase === 'connected' && !media.muted && !media.meterUnavailable ? `${16 + Math.min(1, Math.max(0, levels[i] ?? 0)) * 80}px` : '16px' }} />)}</div>
-        : <div className="official-welcome-bars" aria-hidden="true">{[22, 54, 38, 22, 30].map((height, i) => <span key={i} style={{ height }} />)}</div>}
+    <Card className="official-voice-stage"><div className="voice-stage-main">
+      <div className={`voice-call-symbol${active ? ' is-active' : ''}`} aria-hidden="true"><img src={logo} alt="" /></div>
+      <div className="voice-call-state"><Space wrap>{media.phase === 'connected' ? <StateTag value="connected" />
+        : media.phase === 'failed' ? <StateTag value="failed" /> : <Tag className="state-tag">媒体待连接</Tag>}
+        {assistant && <Tag className="state-tag" color={active && media.assistantPhase === 'listening' ? 'success' : 'warning'}>
+          {active && media.assistantPhase === 'listening' ? '助手就绪' : active ? '助手待就绪' : '助手待连接'}</Tag>}</Space>
       <h2>{labels[media.phase]}</h2>
-      {assistant && <p role="status">{media.phase === 'connecting' && media.assistantPhase === 'not_configured' && actions.capability?.assistant === 'configured'
-        ? '等待助手就绪' : !active && media.assistantPhase === 'not_configured' && actions.capability?.assistant === 'configured'
-        ? '尚未开始，助手连接待验证' : phaseLabels[media.assistantPhase ?? 'starting']}</p>}
-      <p className="voice-hint">{active ? `当前播放轨道：${media.remoteAudio} · ${media.muted ? '麦克风已静音' : media.phase === 'connected' ? '麦克风采集中' : '等待连接状态'}` : condition}</p>
+      {assistant && <p role="status">{media.phase === 'idle' && actions.capability?.assistant === 'configured'
+        ? '尚未开始，助手连接待验证' : media.phase === 'connecting' && media.assistantPhase === 'not_configured' && actions.capability?.assistant === 'configured'
+          ? '等待助手就绪' : phaseLabels[media.assistantPhase ?? 'starting']}</p>}
+      <p className="voice-hint">{active ? `当前播放轨道：${media.remoteAudio} · ${media.muted ? '麦克风已静音' : media.phase === 'connected' ? '麦克风采集中' : '等待连接状态'}` : condition}</p></div>
+      <div className="voice-meter"><div className="official-voice-bars" aria-hidden="true">{[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15].map((i) => <span key={i}
+        style={{ height: active && media.phase === 'connected' && !media.muted && !media.meterUnavailable ? `${6 + Math.min(1, Math.max(0, levels[i % 5] ?? 0)) * (14 + i % 4 * 4)}px` : '6px' }} />)}</div>
+        <span><SoundOutlined /> {!active ? '尚未播放' : media.outputMuted || media.playbackRequired ? '播放已关闭' : '播放已开启'}</span></div></div>
+      {assistant && active && <div className="voice-inline-caption"><AudioOutlined /> <strong>{media.subtitle ? '正在识别：' : '实时字幕：'}</strong><span aria-live="polite">{media.subtitle || '等待实际语音转写'}</span></div>}
       {media.meterUnavailable && <p className="muted">音量分析不可用，连接状态不受影响。</p>}
       <div className="official-voice-controls">
         {(!active || readOnly) && <Tooltip title={readOnly ? '只读设计预览，不发 Token 或申请麦克风' : condition}><Button aria-label={assistant ? '开始语音通话' : '测试本地音频连接'} type="primary" size="large" icon={<PhoneOutlined />} disabled={disabled} onClick={actions.connect}>{assistant ? '开始语音通话' : '测试本地音频连接'}</Button></Tooltip>}
@@ -106,20 +113,20 @@ export function Voice({ context, actions, levels = [], readOnly = false }: {
       {media.error && <Alert showIcon type="error" title={reasons[media.error] ?? '连接未完成，请检查本地服务与设备权限后重试。'} />}
       {media.error === 'voice_cleanup_failed' && <Button onClick={actions.hangup} disabled={readOnly || media.busy}>重试撤销通话</Button>}
       {context.error && <Alert showIcon type="error" title={context.error} />}
-      <Alert className="voice-capability-note" showIcon type="info" title={assistant ? '语音与当前聊天共用问答和来源。' : '目前仅接通媒体，语音助手尚未接入。'}
-        description={assistant ? '中间字幕不保存为问题；确认转写才创建聊天输入。资料回答核验并保存后才播报。插话或停止会取消旧播报，重连不续播；音频发送与播放估计不能证明你实际听见。通话中新文字或图片问题需先挂断，原始音频不保存。' : 'ASR、知识库语音回答、TTS 和字幕均未接入；这里不会生成模拟字幕或回答。欢迎图形是静态装饰，通话音量仅来自真实采集。'} />
     </Card>
-    {assistant && <section className="voice-dialogue" aria-label="语音字幕与回答">
-      <Card title="当前字幕"><p className="voice-transcript" aria-live="polite">{media.subtitle || '等待实际语音转写'}</p>
-        <span className="muted">{media.subtitle && media.subtitle === media.finalTranscript ? '最终转写' : '临时字幕，不创建聊天输入'}</span></Card>
+    {(assistant || answers.length > 0) && <section className="voice-dialogue" aria-label="当前对话的语音字幕与已保存回答">
+      {assistant && active && <p className="voice-caption-note muted">{media.subtitle && media.subtitle === media.finalTranscript ? '最终转写，保存后进入当前对话' : '临时字幕，尚未保存为问题'}</p>}
+      <h2 className="voice-record-heading">当前对话记录</h2>
       {answers.length > 3 && <details className="voice-history"><summary>早前记录（{answers.length - 3} 条）</summary>
         <div className="voice-dialogue">{answers.slice(0, -3).map(answerCard)}</div></details>}
       {answers.slice(-3).map(answerCard)}
+      {!answers.length && <p className="muted">最终转写提交后，问题与已保存回答会出现在这里和文字工作台。</p>}
     </section>}
+    <details className="voice-explainer"><summary>通话说明与连接条件</summary><p className="muted">{assistant ? '最终转写才创建聊天问题；资料回答核验并保存后才播报。插话与停止会清除旧播报，重连不续播。通话中要发送文字或图片，请先挂断。原始音频不保存。' : '当前只有本地媒体连接，没有识别、字幕与助手回答。'}</p>
     <Descriptions className="voice-capabilities" column={1} items={[
       { key: 'transport', label: '媒体配置', children: actions.capability?.transport === 'configured' ? <Tag>已配置</Tag> : <StateTag value={actions.capability?.transport ?? 'unverified'} /> },
       { key: 'assistant', label: '助手配置', children: actions.capability?.assistant === 'configured' ? <Tag>已配置</Tag> : <StateTag value={actions.capability?.assistant ?? 'unverified'} /> },
-    ]} />
+    ]} /></details>
     <div className="voice-return"><Button icon={<ArrowLeftOutlined />} onClick={() => void actions.back()}>{active ? '挂断并返回聊天' : '返回文字工作台'}</Button>
       <Button onClick={() => void actions.status()}>查看系统状态</Button></div>
     <Drawer title="语音回答来源" open={!!citation} onClose={() => setSource(null)} size={460} destroyOnHidden>

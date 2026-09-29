@@ -8,6 +8,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.api.capabilities import load_capability_status
 from app.api.dependencies import LocalOwner, Session
 from app.api.schemas import (
+    ConversationArchive,
     ConversationCreate,
     ConversationRename,
     ConversationView,
@@ -90,8 +91,9 @@ async def list_conversations(
     session: Session,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     offset: Annotated[int, Query(ge=0, le=100_000)] = 0,
+    archived: bool = False,
 ):
-    items = await ConversationService(session).list_owned(owner, limit, offset)
+    items = await ConversationService(session).list_owned(owner, limit, offset, archived=archived)
     return {"items": [ConversationView.model_validate(item) for item in items]}
 
 
@@ -104,6 +106,15 @@ async def get_conversation(conversation_id: UUID, owner: LocalOwner, session: Se
 async def rename_conversation(conversation_id: UUID, body: ConversationRename,
                               owner: LocalOwner, session: Session):
     return await ConversationService(session).rename(owner, conversation_id, body.title)
+
+
+@router.patch("/conversations/{conversation_id}/archive", response_model=ConversationView)
+async def archive_conversation(conversation_id: UUID, body: ConversationArchive,
+                               request: Request, owner: LocalOwner, session: Session):
+    runtime = getattr(request.app.state, "voice_runtime", None)
+    if runtime is not None:
+        runtime.registry.require_text(conversation_id)
+    return await ConversationService(session).set_archived(owner, conversation_id, body.archived)
 
 
 @router.delete("/conversations/{conversation_id}")

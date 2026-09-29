@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { Alert, Button, Empty, Skeleton, Tag, Tooltip } from 'antd';
 const labels: Record<string, string> = {
   available: '可用', unverified: '未验证', not_configured: '未配置', disabled: '未启用', unavailable: '不可用',
-  configured: '已配置 · 未验证连接', connected: '媒体已连接', empty: '暂无资料', ready: '资料就绪', maintaining: '维护中', blocked: '待修复',
+  configured: '已配置 · 未验证连接', connected: '媒体已连接', empty: '暂无可问答资料', ready: '资料就绪', maintaining: '维护中', blocked: '待修复',
   pending: '已受理，等待处理', parsing: '正在解析', parsed: '解析完成', indexing: '正在建立索引',
   failed: '处理失败', deleting: '正在删除', replacing: '正在替换', deleted: '已删除', queued: '等待处理',
   running: '进行中', succeeded: '核验与清理通过', interrupted: '已中断', partial: '回答未完成',
@@ -10,10 +10,10 @@ const labels: Record<string, string> = {
   conflicting_evidence: '资料存在冲突', accepted: '已受理', verifying: '核验中', cleanup: '清理中', complete: '已完成',
 };
 export function StateTag({ value }: { value: string }) {
-  const color = ['failed', 'unavailable', 'blocked'].includes(value) ? 'error'
+  const color = ['failed', 'unavailable', 'blocked', 'not_configured'].includes(value) ? 'error'
     : ['available', 'ready', 'succeeded', 'answered', 'connected'].includes(value) ? 'success'
-    : ['running', 'maintaining', 'indexing', 'parsing', 'partial', 'interrupted'].includes(value) ? 'warning' : 'default';
-  return <Tag color={color}>{labels[value] ?? '状态未确认'}</Tag>;
+    : ['running', 'maintaining', 'indexing', 'parsing', 'partial', 'interrupted', 'unverified', 'configured'].includes(value) ? 'warning' : 'default';
+  return <Tag className="state-tag" color={color}>{labels[value] ?? '状态未确认'}</Tag>;
 }
 export function stateLabel(value: string) { return labels[value] ?? '状态未确认'; }
 export function DisabledAction({ children, icon, reason = '只读设计预览的写操作已禁用；请在正式工作台操作。' }:

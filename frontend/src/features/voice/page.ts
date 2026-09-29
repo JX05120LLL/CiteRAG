@@ -71,6 +71,7 @@ export async function mountVoicePage(root: HTMLElement, api: ApiClient, conversa
       error: conversationId && !ownedChat ? '当前聊天不可访问，请返回工作台重新选择。'
         : ownedChat && !base ? '无法读取此聊天的知识库，请返回工作台核对。' : null };
     checking = false; update();
+    if (ownedChat) void voice.readHistory(ownedChat.id);
   }
   const dispose = async () => {
     if (disposed) return;

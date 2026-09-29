@@ -164,7 +164,7 @@ class VoiceRuntime:
                                    "语音 worker 未能启动，请检查本地模型与媒体配置") from None
         return self.details(call)
 
-    async def answer(self, call, request_id, text, generation):
+    async def answer(self, call, request_id, text, generation, on_general_segment=None):
         await self.check(call, generation)
         gate = self.app.state.backup_gate
         await gate.enter()
@@ -182,6 +182,7 @@ class VoiceRuntime:
                     expected_binding=(call.binding.revision, call.binding.workspace)).ask(
                     call.binding.owner, call.binding.conversation, request_id, text,
                     retriever, answerer, mode="auto",
+                    on_general_segment=on_general_segment,
                 )
             await self.check(call, generation)
             return result

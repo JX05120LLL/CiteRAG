@@ -91,19 +91,19 @@ powershell.exe -NoProfile -File D:\code\CiteRAG\.local\runtime\start.ps1
 | 申请顺序 | 平台与能力 | 模型及需准备的信息 |
 |---|---|---|
 | 先准备，供 M0/M1 | 阿里云百炼：文本与向量 | `qwen-plus`（LightRAG 引擎）、`text-embedding-v4`（目标 1024 维）、`qwen-flash`（最终回答）、`qwen-max`（会话摘要）；准备对应地域和空间的 API Key，核对模型访问权限 |
-| M2 前准备 | 火山引擎豆包语音：流式识别 | 沿用 LiveRAG 的流式 ASR 分工；旧插件使用 App ID + Access Token，用户新申请的是新版 API Key。后续适配新版鉴权并核对模型版本/资源 ID，不能把 API Key 当作旧 Token |
+| M2 前准备 | 火山引擎豆包语音：流式识别 | 当前使用新版 API Key；旧 App ID + Access Token 是另一种鉴权方式，不能混用。模型版本和资源 ID 以 M2 配置与验证记录为准 |
 | M2 前准备 | MiniMax：语音合成 | `speech-02-turbo`；准备语音合成服务 API Key，并在接入时核对音色、账号区域与接口 |
 | 无需云 Key | 本地 VAD | Silero VAD，语音阶段安装及验证 |
 
-百炼可以用同一地域/空间下具有对应权限的 API Key 调用多个模型，无须按模型分别申请 Key。若沿用 LiveRAG 的默认百炼接入域名，选择华北2（北京）；已有其他地域账号时先记录地域，接入时匹配端点，不混用跨地域 Key。参见 [百炼 API Key 官方说明](https://help.aliyun.com/zh/model-studio/get-api-key) 和 [地域说明](https://help.aliyun.com/zh/model-studio/regions/)。只需申请模型 API 能力，知识库与检索仍由本地 CiteRAG/LightRAG 管理。
+百炼可以用同一地域/空间下具有对应权限的 API Key 调用多个模型，无须按模型分别申请 Key。本项目当前配置为华北2（北京）；使用其他地域账号时先记录地域，接入时匹配端点，不混用跨地域 Key。参见 [百炼 API Key 官方说明](https://help.aliyun.com/zh/model-studio/get-api-key) 和 [地域说明](https://help.aliyun.com/zh/model-studio/regions/)。只需申请模型 API 能力，知识库与检索仍由本地 CiteRAG/LightRAG 管理。
 
 火山开通的是流式语音识别服务；模型分工沿用参考项目，鉴权按实际账号的新旧控制台核对。新版 API Key 与旧版 App ID/Access Token 是两种不同接法，参见 [流式语音识别 API](https://www.volcengine.com/docs/6561/1354869?lang=zh)。CiteRAG 当前只补充了新版凭证的本机录入，语音请求适配与真实识别仍留在 M2；不要把普通文本模型服务的凭证当作语音凭证。
 
-LiveRAG 本版未接入具体重排模型和 VLM。CiteRAG M0 已选 `qwen3-rerank`，独立真实调用和 LightRAG 双库检索链路调用均已验证。VLM 留到 M3。双库验收结果不代替 Embedding 超长输入边界，当前进度见 [交接文档](HANDOFF.md)。
+CiteRAG M0 曾选 `qwen3-rerank`，独立真实调用和 LightRAG 双库检索链路调用均已验证；后续代码改用 `qwen3-vl-rerank`，旧证据不自动覆盖新模型。M3 图片观察接入 `qwen3.8-omni-flash`，验证范围见 [M3 图片记录](M3-MULTIMODAL-VALIDATION.md)。双库验收结果不代替 Embedding 超长输入边界，当前进度见 [交接文档](HANDOFF.md)。
 
 2026-09-24 起代码目标重排模型改为 `qwen3-vl-rerank`，按[百炼原生重排 API](https://help.aliyun.com/zh/model-studio/text-rerank-api)发送文字查询和文字候选。旧 `qwen3-rerank` 真实证据只作历史记录；新模型未发真实请求，图片/视频输入未接线。不要把旧报告或脚本的离线测试视为新模型真实通过。
 
-申请完成后只告知平台、地域、可用模型、服务是否开通及本轮测试预算上限。Key、Access Token 等凭证留在本机，不发到聊天、源码、文档或截图。当前后台已有模型适配器与受控加载链路，但保存 Key 不会自动发起调用或标记模型可用；不要复制历史 LiveRAG 的 `.env`。
+申请完成后只告知平台、地域、可用模型、服务是否开通及本轮测试预算上限。Key、Access Token 等凭证留在本机，不发到聊天、源码、文档或截图。当前后台已有模型适配器与受控加载链路，但保存 Key 不会自动发起调用或标记模型可用；不要复制其他项目的 `.env`。
 
 ### 维护者工作站：在本机录入模型凭证
 

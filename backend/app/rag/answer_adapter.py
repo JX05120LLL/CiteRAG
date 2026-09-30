@@ -78,6 +78,17 @@ class LightRAGAnswerAdapter:
         except Exception:
             raise AnswerError("answer_unavailable") from None
 
+    async def stream_general(self, question: str, context: dict) -> AsyncIterator[str]:
+        try:
+            async for piece in self.runtime.stream_general(question, context):
+                yield piece
+        except ProviderError as error:
+            raise _provider_answer_error(error) from None
+        except TokenBudgetExceeded:
+            raise AnswerError("answer_budget_exceeded") from None
+        except Exception:
+            raise AnswerError("answer_unavailable") from None
+
     async def verify_answer(self, text: str, evidence: list[dict]) -> str:
         try:
             return await self.runtime.verify_answer(text, evidence)

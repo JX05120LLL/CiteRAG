@@ -30,6 +30,9 @@ export interface VoiceState {
   error: string | null;
   assistantPhase?: 'not_configured' | 'starting' | 'listening' | 'recognizing' | 'generating' | 'speaking' | 'ended';
   subtitle?: string;
+  speechText?: string;
+  firstTextMs?: number;
+  firstAudioSentMs?: number;
   finalTranscript?: string;
   utterance?: number;
   transcriptRevision?: number;
@@ -42,7 +45,7 @@ type VoiceApi = { voiceToken: (id: string) => Promise<VoiceConnection> } & Parti
 export class VoiceController {
   readonly state: VoiceState = { phase: 'idle', muted: false, outputMuted: false,
     busy: false, remoteAudio: 0, playbackRequired: false, meterUnavailable: false, error: null,
-    assistantPhase: 'not_configured', subtitle: '', answers: [] };
+    assistantPhase: 'not_configured', subtitle: '', speechText: '', answers: [] };
   private generation = 0;
   private room: MediaRoom | null = null;
   private closing: Promise<void> | null = null;
@@ -73,7 +76,9 @@ export class VoiceController {
       this.session = 'session_id' in details ? details : null;
       this.serverGeneration = this.minimumGeneration = this.session?.generation ?? 0;
       this.state.assistantPhase = this.session ? 'starting' : 'not_configured';
-      this.state.subtitle = ''; this.state.finalTranscript = ''; this.state.utterance = 0;
+      this.state.subtitle = ''; this.state.speechText = '';
+      this.state.firstTextMs = this.state.firstAudioSentMs = undefined;
+      this.state.finalTranscript = ''; this.state.utterance = 0;
       if (this.session) {
         this.events = new AbortController();
         const session = this.session;
@@ -87,7 +92,7 @@ export class VoiceController {
       room = await this.factory({
         assistantIdentity: this.session?.assistant_identity,
         disconnected: () => { if (current()) void this.fail('disconnected'); },
-        reconnecting: () => { if (current()) { this.room?.discardOutput?.(Number.MAX_SAFE_INTEGER); this.state.phase = 'reconnecting'; this.changed(); } },
+        reconnecting: () => { if (current()) { this.room?.discardOutput?.(Number.MAX_SAFE_INTEGER); this.state.phase = 'reconnecting'; this.state.speechText = ''; this.changed(); } },
         reconnected: () => { if (current()) { this.state.phase = 'connected'; void this.renew(true, generation); this.changed(); } },
         remoteAudio: (count) => { if (current()) { this.state.remoteAudio = count; this.changed(); } },
         playbackRequired: () => { if (current()) { this.state.playbackRequired = true; this.changed(); } },
@@ -114,17 +119,21 @@ export class VoiceController {
   }
 
   private receive(event: VoiceEvent): void {
-    if (!this.session || event.session_id !== this.session.session_id || event.generation < this.minimumGeneration) return;
+    if (!this.session || event.session_id !== this.session.session_id ||
+      event.generation < this.minimumGeneration || event.generation < this.serverGeneration) return;
     if (event.generation > this.serverGeneration) {
       this.serverGeneration = event.generation;
       this.room?.discardOutput?.(event.generation);
+      this.state.speechText = '';
+      this.state.firstTextMs = this.state.firstAudioSentMs = undefined;
     }
     if (event.type === 'ended') {
       if (event.reason === 'binding_or_lease_invalid') this.state.answers = (this.state.answers ?? []).map((answer) => ({ ...answer, stale: true }));
       void this.fail(event.reason === 'hangup' ? 'disconnected' : 'voice_session_ended'); return;
     }
     if (event.type === 'interrupted') {
-      this.state.assistantPhase = 'listening'; this.state.subtitle = '';
+      this.state.assistantPhase = 'listening'; this.state.subtitle = ''; this.state.speechText = '';
+      this.state.firstTextMs = this.state.firstAudioSentMs = undefined;
       this.room?.discardOutput?.(event.generation);
     } else if (event.type === 'ready' || event.type === 'phase') {
       if (['listening', 'recognizing', 'generating', 'speaking', 'starting'].includes(event.phase ?? ''))
@@ -133,10 +142,19 @@ export class VoiceController {
       this.state.subtitle = event.text ?? '';
       if (event.final) {
         this.state.error = null;
+        this.state.speechText = '';
+        this.state.firstTextMs = this.state.firstAudioSentMs = undefined;
         this.state.finalTranscript = event.text; this.state.utterance = event.utterance;
         this.state.transcriptRevision = event.revision;
       }
+    } else if (event.type === 'speech_text' && event.text) {
+      this.state.speechText = `${this.state.speechText ?? ''}${event.text}`;
+    } else if (event.type === 'timing' && Number.isFinite(event.elapsed_ms) &&
+      (event.elapsed_ms ?? -1) >= 0) {
+      if (event.metric === 'first_text') this.state.firstTextMs = event.elapsed_ms;
+      if (event.metric === 'first_audio_sent') this.state.firstAudioSentMs = event.elapsed_ms;
     } else if (event.type === 'answer' && event.answer) {
+      this.state.speechText = '';
       this.state.answers = [...(this.state.answers ?? []).filter((item) => item.message_id !== event.answer!.message_id), event.answer].slice(-50);
     } else if (event.type === 'error') {
       this.state.error = event.code ?? 'voice_turn_failed'; this.state.assistantPhase = 'listening';
@@ -154,6 +172,8 @@ export class VoiceController {
         this.minimumGeneration = result.generation + 1;
         this.room?.discardOutput?.(this.minimumGeneration);
         this.state.assistantPhase = 'listening';
+        this.state.speechText = '';
+        this.state.firstTextMs = this.state.firstAudioSentMs = undefined;
         await this.loadHistory(session.conversation_id, generation);
       }
     } catch (error) {
@@ -188,6 +208,8 @@ export class VoiceController {
     if (!session || !this.api.voiceStop || this.state.busy) return;
     this.room?.discardOutput?.(Number.MAX_SAFE_INTEGER);
     this.minimumGeneration = Number.MAX_SAFE_INTEGER;
+    this.state.speechText = '';
+    this.state.firstTextMs = this.state.firstAudioSentMs = undefined;
     this.state.busy = true; this.changed();
     const generation = this.generation;
     try {
@@ -260,7 +282,8 @@ export class VoiceController {
         this.state.phase = 'idle'; this.state.busy = false; this.state.remoteAudio = 0;
         this.state.muted = false; this.state.outputMuted = false; this.state.playbackRequired = false;
         this.state.meterUnavailable = false;
-        this.state.assistantPhase = 'ended'; this.state.subtitle = '';
+        this.state.assistantPhase = 'ended'; this.state.subtitle = ''; this.state.speechText = '';
+        this.state.firstTextMs = this.state.firstAudioSentMs = undefined;
         this.changed();
       }
     })();

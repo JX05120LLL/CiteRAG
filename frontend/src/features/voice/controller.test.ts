@@ -21,6 +21,29 @@ function fixture() {
 }
 
 describe('LiveKit media lifecycle', () => {
+  it('shows speech text by segment and rejects it after interruption', async () => {
+    const { controller, api } = fixture();
+    let push!: (event: import('../../api/client').VoiceEvent) => void;
+    Object.assign(api, {
+      voiceStart: async () => ({ ...details, session_id: 's', control_token: 'synthetic-control-1234567890',
+        assistant_identity: 'assistant', assistant: 'starting', purpose: 'voice_assistant', lease_seconds: 40, generation: 0 }),
+      voiceEvents: async (_id: string, _control: string, signal: AbortSignal, callback: typeof push) => {
+        push = callback; await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve()));
+      },
+      voiceEnd: async () => ({ status: 'ended' }),
+    });
+    await controller.connect('chat', true);
+    push({ type: 'speech_text', text: '第一句。', seq: 1, session_id: 's', generation: 1 });
+    push({ type: 'timing', metric: 'first_audio_sent', elapsed_ms: 420, seq: 2, session_id: 's', generation: 1 });
+    push({ type: 'speech_text', text: '第二句。', seq: 2, session_id: 's', generation: 1 });
+    expect(controller.state.speechText).toBe('第一句。第二句。');
+    expect(controller.state.firstAudioSentMs).toBe(420);
+    push({ type: 'interrupted', seq: 3, session_id: 's', generation: 2 });
+    push({ type: 'speech_text', text: '旧音频', seq: 4, session_id: 's', generation: 1 });
+    expect(controller.state.speechText).toBe('');
+    expect(controller.state.firstAudioSentMs).toBeUndefined();
+    await controller.hangup();
+  });
   it('reads the existing chat record without connecting media or requesting a token', async () => {
     const { controller, room, api } = fixture();
     const message = { message_id: 'saved', created_at: '2026-09-29T00:00:00Z' } as ChatMessage;

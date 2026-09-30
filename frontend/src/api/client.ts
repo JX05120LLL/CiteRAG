@@ -40,9 +40,11 @@ export interface VoiceEvent {
   session_id: string;
   seq: number;
   generation: number;
-  type: 'ready' | 'phase' | 'transcript' | 'answer' | 'error' | 'interrupted' | 'ended' | 'playout_drained';
+  type: 'ready' | 'phase' | 'transcript' | 'speech_text' | 'timing' | 'answer' | 'error' | 'interrupted' | 'ended' | 'playout_drained';
   phase?: string;
   text?: string;
+  metric?: 'first_text' | 'first_audio_sent';
+  elapsed_ms?: number;
   final?: boolean;
   utterance?: number;
   revision?: number;

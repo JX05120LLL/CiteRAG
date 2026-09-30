@@ -1,6 +1,8 @@
 """Actual LiveKit PCM input/output. Speech services are used only after explicit start."""
 
 import asyncio
+import time
+from collections.abc import AsyncIterator
 from contextlib import suppress
 
 from app.services.errors import ServiceError
@@ -37,7 +39,8 @@ class LiveKitWorker:
                            if self.settings.voice_asr_app_key else "")
         self.tts = MiniMaxTTS(self.settings.voice_tts_key.get_secret_value(),
                               self.settings.voice_tts_voice)
-        self.turns = VoiceTurns(self.registry, call, runtime.answer, self.play)
+        self.turns = VoiceTurns(self.registry, call, runtime.answer, self.play,
+                                play_stream=self.play_stream)
         call.flush_audio = self.flush_audio
 
     def flush_audio(self):
@@ -181,6 +184,15 @@ class LiveKitWorker:
                 self.registry.emit(self.call, "phase", phase="listening")
 
     async def play(self, text, generation):
+        async def single() -> AsyncIterator[str]:
+            yield text
+
+        await self._play_segments(single(), generation, caption=False)
+
+    async def play_stream(self, segments: AsyncIterator[str], generation: int):
+        await self._play_segments(segments, generation, caption=True)
+
+    async def _play_segments(self, segments: AsyncIterator[str], generation: int, *, caption: bool):
         import av
         from livekit import rtc
 
@@ -189,12 +201,14 @@ class LiveKitWorker:
         self.source = source
         track = rtc.LocalAudioTrack.create_audio_track(
             f"citerag-output-{generation}", source)
-        decoder = MP3Decoder()
         resampler = av.AudioResampler(format="s16", layout="mono", rate=24000)
         publication = None
         pcm = bytearray()
+        caption_pending = None
+        first_audio = True
 
         async def decoded(frames):
+            nonlocal caption_pending, first_audio
             for frame in frames:
                 for mono in resampler.resample(frame):
                     pcm.extend(mono.to_ndarray().astype("<i2").tobytes())
@@ -204,19 +218,44 @@ class LiveKitWorker:
                         frame_data = bytes(pcm[:960])
                         del pcm[:960]
                         await source.capture_frame(rtc.AudioFrame(frame_data, 24000, 1, 480))
+                        if first_audio and self.call.turn_started_at is not None:
+                            elapsed_ms = round(
+                                (time.monotonic() - self.call.turn_started_at) * 1000)
+                            self.registry.emit(self.call, "timing", metric="first_audio_sent",
+                                               elapsed_ms=elapsed_ms)
+                            first_audio = False
+                        if (caption_pending is not None
+                            and self.registry.current(self.call, generation)):
+                            self.registry.emit(self.call, "speech_text", text=caption_pending)
+                            caption_pending = None
 
         try:
             publication = await self.room.local_participant.publish_track(track,
                 rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE))
             self.publication = publication
-            async for encoded in self.tts.stream(text):
+            async for text in segments:
                 if not self.registry.current(self.call, generation):
                     return
                 await self.runtime.check(self.call, generation)
-                await decoded(decoder.feed(encoded))
-            await decoded(decoder.finish())
-            if pcm and self.registry.current(self.call, generation):
-                await source.capture_frame(rtc.AudioFrame(bytes(pcm), 24000, 1, len(pcm) // 2))
+                decoder = MP3Decoder()
+                caption_pending = text if caption else None
+                async for encoded in self.tts.stream(text):
+                    if not self.registry.current(self.call, generation):
+                        return
+                    await self.runtime.check(self.call, generation)
+                    await decoded(decoder.feed(encoded))
+                await decoded(decoder.finish())
+                if pcm and self.registry.current(self.call, generation):
+                    await source.capture_frame(rtc.AudioFrame(bytes(pcm), 24000, 1, len(pcm) // 2))
+                    pcm.clear()
+                    if first_audio and self.call.turn_started_at is not None:
+                        elapsed_ms = round((time.monotonic() - self.call.turn_started_at) * 1000)
+                        self.registry.emit(self.call, "timing", metric="first_audio_sent",
+                                           elapsed_ms=elapsed_ms)
+                        first_audio = False
+                    if caption_pending is not None:
+                        self.registry.emit(self.call, "speech_text", text=caption_pending)
+                        caption_pending = None
             await source.wait_for_playout()
             if self.registry.current(self.call, generation):
                 self.registry.emit(self.call, "playout_drained", estimated=True)

@@ -36,6 +36,7 @@ class VoiceSession:
     generation: int = 0
     seq: int = 0
     phase: str = "connecting"
+    turn_started_at: float | None = None
     closed: bool = False
     closing: asyncio.Task | None = None
     worker_task: asyncio.Task | None = None

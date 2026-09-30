@@ -49,6 +49,26 @@ class _ImageNeedsConfirmation(Exception):
     """Stop before retrieval until a human confirms an uncertain identifier."""
 
 
+def _take_speech_segments(pending: str, *, final: bool = False) -> tuple[list[str], str]:
+    """Cut at stable clauses, never at arbitrary model token boundaries."""
+    ready = []
+    while pending:
+        boundary = next((index + 1 for index, char in enumerate(pending[:80])
+                         if char in "。！？!?；;" or
+                         (char in "，," and index >= 11)), None)
+        if boundary is None and len(pending) >= 80:
+            boundary = 80
+        if boundary is None:
+            break
+        part, pending = pending[:boundary], pending[boundary:]
+        if part.strip():
+            ready.append(part.strip())
+    if final and pending.strip():
+        ready.append(pending.strip())
+        pending = ""
+    return ready, pending
+
+
 def matching_candidates(question: str, attributes: list[tuple[str, str]]) -> list[dict]:
     """Expose only confirmed values present literally in the question."""
     found = set()
@@ -201,6 +221,7 @@ class AnswerService:
         image_ids: list[UUID] | None = None,
         on_accepted: Callable[[dict], Awaitable[None]] | None = None,
         on_preview: Callable[[UUID, str], Awaitable[None]] | None = None,
+        on_general_segment: Callable[[str], Awaitable[None]] | None = None,
     ) -> dict:
         conversation, kb = await self._owned_conversation(owner, conversation_id, lock=True)
         if kb is None and (mode != "auto" or exact is not None):
@@ -258,7 +279,8 @@ class AnswerService:
         if on_accepted is not None:
             await on_accepted(await self._view(message, attempt))
         return await self._finish_attempt(owner, conversation_id, kb, message, attempt,
-                                          retriever, answerer, mode, exact, on_preview)
+                                          retriever, answerer, mode, exact, on_preview,
+                                          on_general_segment)
 
     async def retry(self, owner: UUID, conversation_id: UUID, message_id: UUID,
                     retry_id: UUID, retriever: Retriever, answerer: Answerer) -> dict:
@@ -325,6 +347,7 @@ class AnswerService:
         message: ConversationMessage, attempt: AnswerAttempt,
         retriever: Retriever, answerer: Answerer, mode: str, exact: dict | None,
         on_preview: Callable[[UUID, str], Awaitable[None]] | None = None,
+        on_general_segment: Callable[[str], Awaitable[None]] | None = None,
     ) -> dict:
         question = message.content
         previewed = ""
@@ -345,6 +368,32 @@ class AnswerService:
             previewed = candidate
             if delta and on_preview is not None:
                 await on_preview(attempt.id, delta)
+
+        async def general_segment(segment: str) -> None:
+            nonlocal previewed
+            if self.commit_allowed is not None and not self.commit_allowed():
+                raise ServiceError(409, "voice_interrupted", "语音轮次已中止")
+            if kb is None:
+                current_chat = await self.session.scalar(select(Conversation).where(
+                    Conversation.id == conversation_id, Conversation.owner_id == owner,
+                    active_conversation(),
+                ).execution_options(populate_existing=True))
+                binding_live = (current_chat is not None and current_chat.kb_id is None
+                                and attempt.kb_revision == 0
+                                and attempt.workspace == ORDINARY_WORKSPACE)
+            else:
+                current = await self.session.scalar(select(KnowledgeBase).where(
+                    KnowledgeBase.id == kb.id, KnowledgeBase.owner_id == owner,
+                ).execution_options(populate_existing=True))
+                binding_live = (current is not None and current.status == "ready"
+                                and current.revision == attempt.kb_revision
+                                and current.active_workspace == attempt.workspace)
+            if not binding_live:
+                raise QueryError("kb_changed")
+            await self.session.commit()
+            previewed += segment
+            if on_general_segment is not None:
+                await on_general_segment(segment)
 
         try:
             if self.images is not None and await self.images.for_message(message.id):
@@ -376,6 +425,7 @@ class AnswerService:
                 kb.id if kb else None, attempt.workspace, question, retriever, answerer,
                 mode, exact, context,
                 preview if on_preview is not None else None,
+                general_segment if on_general_segment is not None else None,
             )
             error_code = None
         except _ImageNeedsConfirmation:
@@ -491,11 +541,36 @@ class AnswerService:
         self, kb_id: UUID | None, workspace: str, question: str,
         retriever: Retriever, answerer: Answerer, mode: str, exact: dict | None,
         context: dict, on_preview: Callable[[str], Awaitable[None]] | None = None,
+        on_general_segment: Callable[[str], Awaitable[None]] | None = None,
     ) -> tuple[str, str, list[dict]]:
         if mode == "auto":
             route = exact or {}
             routed_mode = route.get("mode")
             if routed_mode in {"general", "chat"}:
+                stream = getattr(answerer, "stream_general", None)
+                if on_general_segment is not None and stream is not None:
+                    generated, pending = "", ""
+                    async for piece in stream(route.get("query", question),
+                                              ordinary_context(context,
+                                                               ordinary_chat=kb_id is None)):
+                        if not isinstance(piece, str):
+                            raise AnswerError("answer_format_invalid")
+                        generated += piece
+                        if (len(generated) > 1000
+                            or re.search(r"https?://", generated, re.IGNORECASE)
+                            or "```" in generated
+                            or any(category(char).startswith("C") and char not in "\n\t"
+                                   for char in generated)):
+                            raise AnswerError("answer_format_invalid")
+                        ready, pending = _take_speech_segments(pending + piece)
+                        for segment in ready:
+                            await on_general_segment(segment)
+                    if not generated.strip():
+                        raise AnswerError("answer_format_invalid")
+                    ready, _ = _take_speech_segments(pending, final=True)
+                    for segment in ready:
+                        await on_general_segment(segment)
+                    return "answered", generated.strip(), []
                 general = getattr(answerer, "general_answer", None)
                 if general is None:
                     raise AnswerError("answer_unavailable")

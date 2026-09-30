@@ -1,6 +1,6 @@
 # GitHub CI
 
-2026-09-30 会话切片：公开合成回归加入 `test_conversation_modes.py`，覆盖普通聊天绕过知识库路由、同库摘要作用域／失效、语音／图片入口、失败重试、保留期及 `0010` 迁移／安全回滚。工作流白名单、Ruff 和 pytest 均同步更新；本机隔离 PostgreSQL 验证通过，代码未提交或推送，**没有本切片对应的远端 CI 结果**。不使用真实模型、私人资料或实际业务库。详见[会话改造记录](CONVERSATION-MODES-AND-MEMORY.md)。
+2026-09-30 会话切片：公开合成回归加入 `test_conversation_modes.py`，覆盖普通聊天绕过知识库路由、同库摘要作用域／失效、语音／图片入口、失败重试、保留期及 `0010` 迁移／安全回滚。工作流白名单、Ruff 和 pytest 均同步更新；合并前在本机隔离 PostgreSQL 验证通过，合并后的远端 CI 须以提交 SHA 核对。不使用真实模型、私人资料或实际业务库。详见[会话改造记录](CONVERSATION-MODES-AND-MEMORY.md)。
 
 2026-09-29 UI 细化：既有 CI 白名单已覆盖 `test_postgres_local.py` 中的 `0008` 到 `0009` 旧聊天保留用例，以及 `test_m13_answer_api.py` 中的归档/恢复接口用例；`alembic upgrade head` 冒烟会核对新的 `EXPECTED_SCHEMA_REVISION`。本机临时 PostgreSQL 两个文件 25 项通过；推送后的远端结果须按新提交 SHA 核对。详见 [UI 细化记录](UI-POLISH-2026-09-29.md)。
 

@@ -100,6 +100,9 @@ export function Voice({ context, actions, levels = [], readOnly = false }: {
         style={{ height: active && media.phase === 'connected' && !media.muted && !media.meterUnavailable ? `${6 + Math.min(1, Math.max(0, levels[i % 5] ?? 0)) * (14 + i % 4 * 4)}px` : '6px' }} />)}</div>
         <span><SoundOutlined /> {!active ? '尚未播放' : media.outputMuted || media.playbackRequired ? '播放已关闭' : '播放已开启'}</span></div></div>
       {assistant && active && <div className="voice-inline-caption"><AudioOutlined /> <strong>{media.subtitle ? '正在识别：' : '实时字幕：'}</strong><span aria-live="polite">{media.subtitle || '等待实际语音转写'}</span></div>}
+      {assistant && active && media.speechText && <div className="voice-inline-caption"><SoundOutlined /> <strong>正在播报：</strong><span aria-live="polite">{media.speechText}</span></div>}
+      {assistant && active && (media.firstTextMs !== undefined || media.firstAudioSentMs !== undefined) &&
+        <p className="voice-caption-note muted">最终转写后：首段文字 {media.firstTextMs === undefined ? '等待中' : `${media.firstTextMs} ms`} · 首段音频送出 {media.firstAudioSentMs === undefined ? '等待中' : `${media.firstAudioSentMs} ms`}（服务端计时，不代表实际听见）</p>}
       {media.meterUnavailable && <p className="muted">音量分析不可用，连接状态不受影响。</p>}
       <div className="official-voice-controls">
         {(!active || readOnly) && <Tooltip title={readOnly ? '只读设计预览，不发 Token 或申请麦克风' : condition}><Button aria-label={assistant ? '开始语音通话' : '测试本地音频连接'} type="primary" size="large" icon={<PhoneOutlined />} disabled={disabled} onClick={actions.connect}>{assistant ? '开始语音通话' : '测试本地音频连接'}</Button></Tooltip>}

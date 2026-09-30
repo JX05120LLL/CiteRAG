@@ -103,6 +103,42 @@ export interface KnowledgeMemory {
   valid: boolean;
 }
 
+export interface ToolInfo {
+  id: string;
+  title: string;
+  scope: 'any' | 'knowledge';
+  approval_required: boolean;
+  impact: string;
+}
+
+export interface ToolCallRecord {
+  id: string;
+  conversation_id: string;
+  request_id: string;
+  kb_id: string | null;
+  tool_id: string;
+  arguments: Record<string, unknown>;
+  impact: string;
+  status: 'pending_approval' | 'running' | 'succeeded' | 'failed' | 'rejected' | 'interrupted';
+  result: Record<string, unknown> | null;
+  error_code: string | null;
+  created_at: string;
+  approved_at: string | null;
+  finished_at: string | null;
+  source_type: 'tool';
+}
+
+function toolCall(value: unknown, chatId: string): ToolCallRecord {
+  if (!isRecord(value) || value.conversation_id !== chatId ||
+    !['id', 'request_id', 'tool_id', 'impact', 'created_at'].every((key) => typeof value[key] === 'string') ||
+    !['pending_approval', 'running', 'succeeded', 'failed', 'rejected', 'interrupted'].includes(String(value.status)) ||
+    !isRecord(value.arguments) || (value.result !== null && !isRecord(value.result)) ||
+    (value.error_code !== null && typeof value.error_code !== 'string') ||
+    (value.kb_id !== null && typeof value.kb_id !== 'string') || value.source_type !== 'tool')
+    throw new ApiError('invalid-response');
+  return value as unknown as ToolCallRecord;
+}
+
 export interface ChatImage {
   id: string;
   filename: string;
@@ -593,6 +629,20 @@ export function createApi(fetcher: typeof fetch = globalThis.fetch) {
       const value = await request(`/api/conversations/${encodeURIComponent(id)}`, 'DELETE');
       if (!isRecord(value) || value.deleted !== true) throw new ApiError('invalid-response');
     },
+    conversationTools: async (chatId: string): Promise<ToolInfo[]> => collection<ToolInfo>(
+      await request(`/api/conversations/${encodeURIComponent(chatId)}/tools`),
+      (item) => typeof item.id === 'string' && typeof item.title === 'string' &&
+        ['any', 'knowledge'].includes(String(item.scope)) &&
+        typeof item.approval_required === 'boolean' && typeof item.impact === 'string'),
+    toolCalls: async (chatId: string): Promise<ToolCallRecord[]> => collection<Record<string, unknown>>(
+      await request(`/api/conversations/${encodeURIComponent(chatId)}/tools/calls`),
+      () => true).map((item) => toolCall(item, chatId)),
+    invokeTool: async (chatId: string, toolId: string, requestId: string): Promise<ToolCallRecord> => toolCall(
+      await request(`/api/conversations/${encodeURIComponent(chatId)}/tools/calls`, 'POST',
+        { request_id: requestId, tool_id: toolId, arguments: {} }), chatId),
+    decideTool: async (chatId: string, callId: string, approve: boolean): Promise<ToolCallRecord> => toolCall(
+      await request(`/api/conversations/${encodeURIComponent(chatId)}/tools/calls/${encodeURIComponent(callId)}/decision`,
+        'POST', { approve }), chatId),
     knowledgeMemories: async (kbId: string): Promise<KnowledgeMemory[]> => collection<KnowledgeMemory>(
       await request(`/api/knowledge-bases/${encodeURIComponent(kbId)}/memories`),
       (item) => typeof item.id === 'string' &&

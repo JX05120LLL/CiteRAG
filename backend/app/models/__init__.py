@@ -321,3 +321,34 @@ class KnowledgeMemory(Base):
     kb_revision: Mapped[int] = mapped_column(Integer)
     workspace: Mapped[str] = mapped_column(String(100))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ToolCall(Base):
+    """A scoped, durable tool decision; results are never knowledge citations."""
+
+    __tablename__ = "tool_calls"
+    __table_args__ = (
+        UniqueConstraint("conversation_id", "request_id", name="uq_tool_calls_request"),
+        Index("ix_tool_calls_conversation_created", "conversation_id", "created_at", "id"),
+        Index("uq_tool_calls_active_conversation", "conversation_id", unique=True,
+              postgresql_where=text("status IN ('pending_approval','running')")),
+        CheckConstraint("status IN ('pending_approval','running','succeeded','failed',"
+                        "'rejected','interrupted')", name="ck_tool_calls_status"),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    owner_id: Mapped[UUID] = mapped_column(ForeignKey("local_profiles.id", ondelete="RESTRICT"))
+    conversation_id: Mapped[UUID] = mapped_column(ForeignKey("conversations.id"))
+    request_id: Mapped[UUID] = mapped_column()
+    kb_id: Mapped[UUID | None] = mapped_column(ForeignKey("knowledge_bases.id"))
+    kb_revision: Mapped[int] = mapped_column(Integer)
+    workspace: Mapped[str] = mapped_column(String(100))
+    tool_id: Mapped[str] = mapped_column(String(80))
+    arguments: Mapped[dict] = mapped_column(JSON)
+    impact: Mapped[str] = mapped_column(String(300))
+    status: Mapped[str] = mapped_column(String(24))
+    result: Mapped[dict | None] = mapped_column(JSON)
+    error_code: Mapped[str | None] = mapped_column(String(60))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

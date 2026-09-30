@@ -16,6 +16,7 @@ from app.api.boundaries import require_local_request
 from app.api.documents import router as documents_router
 from app.api.images import router as images_router
 from app.api.routes import router
+from app.api.tools import router as tools_router
 from app.api.voice import router as voice_router
 from app.config import LOCAL_RUNTIME_ROOT, Settings
 from app.database import Database
@@ -24,13 +25,14 @@ from app.ingestion.jobs import IngestionRunner
 from app.ingestion.storage import PrivateSourceStore
 from app.maintenance.gate import BackupGate
 from app.maintenance.runner import DailyBackupRunner
-from app.models import AnswerAttempt, Conversation, KnowledgeBase, LocalProfile
+from app.models import AnswerAttempt, Conversation, KnowledgeBase, LocalProfile, ToolCall
 from app.rag.engine import assert_isolated_configuration
 from app.rag.ingestion_adapter import LightRAGIngestionAdapter
 from app.rag.owner import ApiOwner, OwnerLost
 from app.rag.runtime import RagRuntime
 from app.services.conversation_retention import RetentionRunner
 from app.services.errors import ServiceError
+from app.tools.gateway import built_in_tools
 from app.voice.runtime import VoiceRuntime
 
 
@@ -107,6 +109,10 @@ def create_app(
                         AnswerAttempt.status == "running",
                     ).values(status="interrupted", error_code="server_restarted",
                              finished_at=datetime.now(UTC)))
+                    await session.execute(update(ToolCall).where(
+                        ToolCall.status == "running",
+                    ).values(status="interrupted", error_code="server_restarted",
+                             finished_at=datetime.now(UTC)))
                     await session.commit()
                 retention = RetentionRunner(db, application.state.owner.assert_owned,
                                             application.state.backup_gate,
@@ -146,6 +152,7 @@ def create_app(
     application.state.answer_enabled = settings.answer_enabled
     application.state.query_adapter = None
     application.state.answer_adapter = None
+    application.state.tool_registry = built_in_tools()
     application.state.voice_runtime = VoiceRuntime(application)
 
     @application.middleware("http")
@@ -211,6 +218,7 @@ def create_app(
     application.include_router(documents_router)
     application.include_router(images_router)
     application.include_router(answers_router)
+    application.include_router(tools_router)
     application.include_router(voice_router)
     return application
 

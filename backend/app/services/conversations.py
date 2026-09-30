@@ -13,6 +13,7 @@ from app.models import (
     KnowledgeBase,
     KnowledgeMemory,
     MessageImage,
+    ToolCall,
 )
 from app.services.conversation_retention import active_conversation
 from app.services.errors import ServiceError
@@ -95,6 +96,11 @@ class ConversationService:
             AnswerAttempt.status == "running",
         ).limit(1)):
             raise ServiceError(409, "answer_in_progress", "回答仍在处理中，请稍后归档")
+        if await self.session.scalar(select(ToolCall.id).where(
+            ToolCall.conversation_id == conversation_id,
+            ToolCall.status.in_(("pending_approval", "running")),
+        ).limit(1)):
+            raise ServiceError(409, "tool_in_progress", "请先完成工具调用或审批")
         if archived:
             conversation.archived_at = conversation.archived_at or datetime.now(UTC)
         else:
@@ -120,6 +126,11 @@ class ConversationService:
             AnswerAttempt.status == "running",
         ).limit(1)):
             raise ServiceError(409, "answer_in_progress", "回答仍在处理中，请稍后删除聊天")
+        if await self.session.scalar(select(ToolCall.id).where(
+            ToolCall.conversation_id == conversation_id,
+            ToolCall.status.in_(("pending_approval", "running")),
+        ).limit(1)):
+            raise ServiceError(409, "tool_in_progress", "请先完成工具调用或审批")
         image_keys = []
         if self.image_store is not None:
             images = list(await self.session.scalars(select(ImageAttachment).where(
@@ -138,6 +149,9 @@ class ConversationService:
         ))
         await self.session.execute(delete(KnowledgeMemory).where(
             KnowledgeMemory.source_conversation_id == conversation_id,
+        ))
+        await self.session.execute(delete(ToolCall).where(
+            ToolCall.conversation_id == conversation_id,
         ))
         await self.session.execute(delete(AnswerAttempt).where(
             AnswerAttempt.conversation_id == conversation_id,

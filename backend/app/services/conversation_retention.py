@@ -13,6 +13,7 @@ from app.models import (
     ImageAttachment,
     KnowledgeMemory,
     MessageImage,
+    ToolCall,
 )
 
 RETENTION = timedelta(days=180)
@@ -42,6 +43,10 @@ async def sweep_expired_conversations(database, *, now: datetime | None = None,
                     AnswerAttempt.conversation_id == Conversation.id,
                     AnswerAttempt.status == "running",
                 )),
+                ~exists(select(ToolCall.id).where(
+                    ToolCall.conversation_id == Conversation.id,
+                    ToolCall.status == "running",
+                )),
             ).order_by(Conversation.created_at, Conversation.id).limit(100).with_for_update(
                 skip_locked=True,
             )))
@@ -63,6 +68,8 @@ async def sweep_expired_conversations(database, *, now: datetime | None = None,
                 ConversationSummary.conversation_id.in_(ids)))
             await session.execute(delete(KnowledgeMemory).where(
                 KnowledgeMemory.source_conversation_id.in_(ids)))
+            await session.execute(delete(ToolCall).where(
+                ToolCall.conversation_id.in_(ids)))
             await session.execute(delete(AnswerAttempt).where(
                 AnswerAttempt.conversation_id.in_(ids)))
             await session.execute(delete(ConversationMessage).where(

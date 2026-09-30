@@ -54,6 +54,7 @@ it('downloads a voice source without navigating the active call document', async
 function fixture(messages = sampleMessages[sampleChats[0].id], chats = sampleChats) {
   const calls: { path: string; method: string; body: unknown }[] = [];
   let archived = false;
+  let toolRecords: unknown[] = [];
   let memories = [{ id: 'synthetic-memory', kb_id: sampleBases[0].id, kind: 'preference',
     content: '合成偏好：简短回答', source_conversation_id: sampleChats[0].id,
     source_message_id: messages[0].message_id, created_at: '2026-09-29T00:00:00Z', valid: true }];
@@ -64,6 +65,23 @@ function fixture(messages = sampleMessages[sampleChats[0].id], chats = sampleCha
       title: '新聊天', created_at: '2026-09-29T00:00:00Z', archived_at: null,
     });
     if (path.endsWith('/memories') && method === 'GET') return json({ items: memories });
+    if (path.endsWith('/tools') && method === 'GET') return json({ items: [
+      { id: 'local.time', title: '本机当前时间', scope: 'any', approval_required: false,
+        impact: '读取本机当前 UTC 时间；不访问知识库或外部服务。' },
+      { id: 'kb.documents', title: '当前知识库资料目录', scope: 'knowledge', approval_required: false,
+        impact: '只读取当前聊天绑定知识库的资料名称与处理状态；不读取正文。' },
+    ] });
+    if (path.endsWith('/tools/calls') && method === 'GET') return json({ items: toolRecords });
+    if (path.endsWith('/tools/calls') && method === 'POST') {
+      const body = JSON.parse(String(init?.body));
+      const record = { id: 'synthetic-tool-call', conversation_id: sampleChats[0].id,
+        request_id: body.request_id, kb_id: sampleBases[0].id, tool_id: body.tool_id,
+        arguments: {}, impact: '读取本机当前 UTC 时间；不访问知识库或外部服务。',
+        status: 'succeeded', result: { time: '2026-09-30T00:00:00Z' }, error_code: null,
+        created_at: '2026-09-30T00:00:00Z', approved_at: null,
+        finished_at: '2026-09-30T00:00:00Z', source_type: 'tool' };
+      toolRecords = [record]; return json(record);
+    }
     if (path.includes('/memories/') && method === 'DELETE') { memories = []; return json({ deleted: true }); }
     if (path.endsWith(`/conversations/${sampleChats[0].id}/archive`) && method === 'PATCH') {
       archived = JSON.parse(String(init?.body)).archived as boolean;
@@ -112,6 +130,19 @@ it('creates an ordinary chat explicitly and lists source-linked shared memory fo
   fireEvent.click(await screen.findByRole('button', { name: '同库共享摘要' }));
   expect(await screen.findByText('合成偏好：简短回答')).toBeTruthy();
   expect(calls.some((call) => call.path.endsWith(`/knowledge-bases/${sampleBases[0].id}/memories`))).toBe(true);
+}, 20000);
+
+it('runs a registered tool through the API and displays the separate durable result', async () => {
+  const { api, calls } = fixture();
+  render(<CiteRagApp api={api} />);
+  fireEvent.click(await screen.findByRole('button', { name: '工具与调用记录' },
+    { timeout: 8000 }));
+  const drawer = await screen.findByRole('dialog');
+  expect(within(drawer).getByText('当前知识库资料目录')).toBeTruthy();
+  fireEvent.click(within(drawer).getByRole('button', { name: '调用工具：本机当前时间' }));
+  expect(await within(drawer).findByText(/本机时间：/)).toBeTruthy();
+  expect(calls.some((call) => call.path.endsWith('/tools/calls') && call.method === 'POST')).toBe(true);
+  expect(within(drawer).getByText(/不作为知识库引用/)).toBeTruthy();
 }, 20000);
 
 it('restores fixed chat, opens a verified source and restores focus without writes under StrictMode', async () => {
@@ -195,7 +226,8 @@ it('keeps a synthetic image observation separate from verified source citations'
 it('uses backend offset pagination for documents and preserves disabled maintenance gates', async () => {
   const { api, calls } = fixture(); render(<CiteRagApp api={api} />);
   fireEvent.click(await screen.findByRole('menuitem', { name: /知识库/ }));
-  fireEvent.click((await screen.findAllByRole('button', { name: '管理资料' }))[0]);
+  fireEvent.click((await screen.findAllByRole('button', { name: '管理资料' },
+    { timeout: 8000 }))[0]);
   await screen.findByText('合成产品手册.md');
   fireEvent.click(screen.getByTitle('2'));
   await screen.findByText('合成操作说明_17.md');

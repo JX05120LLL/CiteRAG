@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Drawer, Empty, Input, Popconfirm, Select, Space, Tag, Tooltip } from 'antd';
 import { Bubble, Sender } from '@ant-design/x';
 import { AudioOutlined, BookOutlined, FileTextOutlined, PictureOutlined } from '@ant-design/icons';
-import type { ApiClient, KnowledgeMemory } from '../api/client';
+import type { ApiClient, KnowledgeMemory, ToolCallRecord, ToolInfo } from '../api/client';
 import type { AppView } from '../app';
 import { answerFailure } from '../pages/workbench';
 import { locationText } from '../pages/sources';
@@ -12,6 +12,22 @@ import { answerRouteLabel } from './answerRoute';
 import logo from '../../../assets/brand/mark.svg';
 
 const messageTime = (value: string) => new Date(value).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
+
+function ToolResult({ call }: { call: ToolCallRecord }) {
+  const result = call.result;
+  if (!result) return null;
+  if (call.tool_id === 'local.time' && typeof result.time === 'string' &&
+    Number.isFinite(Date.parse(result.time))) return <p className="tool-result">
+      本机时间：<time dateTime={result.time}>{new Date(result.time).toLocaleString('zh-CN')}</time>
+    </p>;
+  if (call.tool_id === 'kb.documents' && Array.isArray(result.items) &&
+    result.items.every((item) => item && typeof item === 'object' &&
+      typeof item.filename === 'string' && typeof item.status === 'string'))
+    return <div className="tool-result">{result.items.length ? <ul>{result.items.map((item, index) =>
+      <li key={`${item.id || index}`}>{item.filename} · {item.status}</li>)}</ul> : '当前库没有可列出的资料。'}
+      {result.truncated === true && <p>仅显示最近 20 份资料。</p>}</div>;
+  return <pre className="tool-result">{JSON.stringify(result, null, 2)}</pre>;
+}
 
 export function Workbench({ view, api }: { view: AppView; api: ApiClient }) {
   const { state: s, actions: a } = view;
@@ -31,6 +47,14 @@ export function Workbench({ view, api }: { view: AppView; api: ApiClient }) {
   const [memorySource, setMemorySource] = useState('');
   const [memoryKind, setMemoryKind] = useState<KnowledgeMemory['kind']>('background');
   const [memoryText, setMemoryText] = useState('');
+  const [toolOpen, setToolOpen] = useState(false);
+  const [tools, setTools] = useState<ToolInfo[]>([]);
+  const [toolCalls, setToolCalls] = useState<ToolCallRecord[]>([]);
+  const [toolError, setToolError] = useState('');
+  const [toolBusy, setToolBusy] = useState(false);
+  const [loadedToolChatId, setLoadedToolChatId] = useState<string | null>(null);
+  const visibleTools = loadedToolChatId === s.selectedChatId ? tools : [];
+  const visibleToolCalls = loadedToolChatId === s.selectedChatId ? toolCalls : [];
   const memorySourceEligible = memorySources.some((item) => item.message_id === memorySource);
   useEffect(() => {
     if (!memoryOpen || !base?.id) return;
@@ -39,6 +63,35 @@ export function Workbench({ view, api }: { view: AppView; api: ApiClient }) {
       () => { if (active) setMemoryError('共享摘要读取失败，请重试。'); });
     return () => { active = false; };
   }, [memoryOpen, base?.id, api]);
+  useEffect(() => {
+    if (!toolOpen || !s.selectedChatId) return;
+    let active = true;
+    const chatId = s.selectedChatId;
+    void Promise.all([api.conversationTools(chatId), api.toolCalls(chatId)]).then(([catalog, calls]) => {
+      if (active) { setTools(catalog); setToolCalls(calls); setLoadedToolChatId(chatId); setToolError(''); }
+    }, () => { if (active) setToolError('工具目录或记录读取失败，请重试。'); });
+    return () => { active = false; };
+  }, [toolOpen, s.selectedChatId, api]);
+  async function runTool(toolId: string) {
+    if (!s.selectedChatId || toolBusy) return;
+    const chatId = s.selectedChatId;
+    setToolBusy(true); setToolError('');
+    try {
+      await api.invokeTool(chatId, toolId, crypto.randomUUID());
+      setToolCalls(await api.toolCalls(chatId)); setLoadedToolChatId(chatId);
+    } catch { setToolError('工具调用未确认成功，请检查聊天状态与服务后刷新记录。'); }
+    finally { setToolBusy(false); }
+  }
+  async function decideTool(callId: string, approve: boolean) {
+    if (!s.selectedChatId || toolBusy) return;
+    const chatId = s.selectedChatId;
+    setToolBusy(true); setToolError('');
+    try {
+      await api.decideTool(chatId, callId, approve);
+      setToolCalls(await api.toolCalls(chatId)); setLoadedToolChatId(chatId);
+    } catch { setToolError('审批未确认成功，请刷新记录并核对状态。'); }
+    finally { setToolBusy(false); }
+  }
   async function saveMemory() {
     if (!base || !memorySourceEligible || !memoryText.trim() || memoryBusy) return;
     setMemoryBusy(true); setMemoryError('');
@@ -69,9 +122,10 @@ export function Workbench({ view, api }: { view: AppView; api: ApiClient }) {
     return () => { observer.disconnect(); cancelAnimationFrame(frame); };
   }, [citation]);
   return <div ref={root} className="conversation-column formal-conversation">
-    {base && s.selectedChatId && <div className="shared-memory-toolbar">
-      <span>当前对话固定知识库 · {base.name}</span>
-      <Button size="small" onClick={() => setMemoryOpen(true)}>同库共享摘要</Button>
+    {s.selectedChatId && <div className="shared-memory-toolbar">
+      <span>{base ? `当前对话固定知识库 · ${base.name}` : '普通聊天 · 无知识库访问'}</span>
+      <Space wrap>{base && <Button size="small" onClick={() => setMemoryOpen(true)}>同库共享摘要</Button>}
+        <Button size="small" onClick={() => setToolOpen(true)}>工具与调用记录</Button></Space>
     </div>}
     {s.chatError && <Alert showIcon type="error" title={s.chatError.message} />}
     <div className="message-scroll" aria-live="polite" aria-busy={busy}>
@@ -154,6 +208,28 @@ export function Workbench({ view, api }: { view: AppView; api: ApiClient }) {
           onClick={() => void saveMemory()}>保存共享摘要</Button>
       </div>}
       {!!s.selectedChatId && !memorySources.length && <p className="muted">本聊天暂无可作为来源的已完成纯文字提问。</p>}
+    </Drawer>
+    <Drawer title="工具与调用记录" open={toolOpen && !!s.selectedChatId} onClose={() => setToolOpen(false)} size={460} destroyOnHidden>
+      <p className="muted">工具调用由服务端检查聊天范围，结果单独记录，不作为知识库引用。当前只提供本机只读工具；历史结果只反映调用当时的状态。</p>
+      {toolError && <Alert type="error" showIcon title={toolError} />}
+      <h3>可用工具</h3>
+      {visibleTools.map((tool) => <div key={tool.id} className="tool-entry"><strong>{tool.title}</strong>
+        <p className="muted">{tool.impact}</p><Button size="small" aria-label={`调用工具：${tool.title}`} disabled={toolBusy || busy}
+          onClick={() => void runTool(tool.id)}>调用工具</Button></div>)}
+      {!visibleTools.length && <p className="muted">当前聊天暂无可用工具。</p>}
+      <h3>最近调用</h3>
+      {visibleToolCalls.map((call) => <div key={call.id} className="tool-entry"><strong>{call.tool_id}</strong>
+        <Tag>{({ pending_approval: '待确认', running: '执行中', succeeded: '已完成', failed: '失败',
+          rejected: '已拒绝', interrupted: '已中断' } as const)[call.status]}</Tag>
+        <p className="muted">{call.impact} · <time dateTime={call.created_at}>{new Date(call.created_at).toLocaleString('zh-CN')}</time></p>
+        {call.status === 'succeeded' && <ToolResult call={call} />}
+        {call.error_code && <p className="failure-reason">错误代码：{call.error_code}</p>}
+        {call.status === 'pending_approval' && <div><p>待确认参数：{JSON.stringify(call.arguments)}</p>
+          <Space><Popconfirm title="确认按所示参数执行？" description={call.impact}
+            onConfirm={() => void decideTool(call.id, true)}><Button size="small" type="primary" disabled={toolBusy}>确认执行</Button></Popconfirm>
+            <Button size="small" disabled={toolBusy} onClick={() => void decideTool(call.id, false)}>拒绝</Button></Space></div>}
+      </div>)}
+      {!visibleToolCalls.length && <p className="muted">暂无调用记录。</p>}
     </Drawer>
   </div>;
 }

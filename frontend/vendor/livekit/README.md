@@ -4,4 +4,4 @@
 
 CiteRAG 的正式语音页位于 [Voice.tsx](../../src/react/Voice.tsx)，使用本项目的 React/Ant Design 主题。媒体连接由现有 VoiceController 和 livekit-client 管理；后端使用独立锁定的 LiveKit Python SDK。没有复制上游的 Next.js 服务、Cloud Token endpoint、视频共享或另一套 Agents 问答服务。当前语音工作流仍由 CiteRAG 的 AnswerService 处理。
 
-MIT 声明仅覆盖相应上游布局参考；LiveKit SDK、LightRAG 和 CiteRAG 项目自身的许可应分别核对。首版运行边界见[项目 README](../../../README.md)。
+MIT 声明仅覆盖相应上游布局参考；CiteRAG 自有内容采用 [Apache License 2.0](../../../LICENSE)，其他依赖仍按各自许可证使用。首版运行边界见[项目 README](../../../README.md)。

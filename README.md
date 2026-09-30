@@ -17,6 +17,7 @@
 <p align="center">
   <a href="https://github.com/HKUDS/LightRAG"><img alt="LightRAG 知识引擎" src="https://img.shields.io/badge/LightRAG-Knowledge_Engine-355C7D?style=flat-square"></a>
   <a href="frontend/vendor/livekit/README.md"><img alt="LiveKit 实时音频" src="https://img.shields.io/badge/LiveKit-Real--time_Audio-6C3EF4?style=flat-square&amp;logo=livekit&amp;logoColor=white"></a>
+  <a href="LICENSE"><img alt="Apache-2.0 许可证" src="https://img.shields.io/badge/License-Apache--2.0-D22128?style=flat-square"></a>
   <a href="https://github.com/JX05120LLL/CiteRAG/actions/workflows/ci.yml"><img alt="GitHub CI 状态" src="https://img.shields.io/github/actions/workflow/status/JX05120LLL/CiteRAG/ci.yml?branch=main&amp;style=flat-square&amp;logo=githubactions&amp;label=CI"></a>
 </p>
 
@@ -26,8 +27,6 @@
   <a href="#-数据保存在哪里">数据边界</a> ·
   <a href="CONTRIBUTING.md">参与项目</a>
 </p>
-
-> **开发中**：CiteRAG 是本地单用户项目。代码已接线、合成测试、真实供应商调用和完整业务验收是不同层级；当前不承诺生产可用。入库和问答默认关闭，需自行配置数据库与模型服务后显式启用。
 
 ## 🎨 CiteRAG 是什么
 
@@ -160,6 +159,6 @@ flowchart TD
 
 ## 🙏 致谢与许可
 
-CiteRAG 使用 [LightRAG](https://github.com/HKUDS/LightRAG) 作为知识引擎；语音界面参考并改写了 LiveKit 官方 starter 的布局，来源及 MIT 声明见[供应商说明](frontend/vendor/livekit/README.md)。
+CiteRAG 的自有内容采用 [Apache License 2.0](LICENSE)。该许可证允许商用与修改，但不授予项目名称或标志的商标使用权。
 
-项目**尚未选择自身的开源许可证**，仓库也没有项目 `LICENSE` 文件。公开可见不等于已授予复制、修改或再分发许可；正式开放使用与贡献前仍需确定许可证并核对素材声明。
+第三方材料保留各自许可：[LightRAG](https://github.com/HKUDS/LightRAG/blob/59af311307c7417b342f44850b097648d47e83bd/LICENSE) 为 MIT；改写的 LiveKit starter 布局及其 MIT 声明见[供应商说明](frontend/vendor/livekit/README.md)；Silero VAD 参考实现及 MIT 声明见[后端供应商说明](backend/vendor/silero/README.md)。云模型和语音服务仍按各供应商条款使用。

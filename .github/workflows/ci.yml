@@ -31,7 +31,6 @@ jobs:
           patterns = (
               ".local/*", "output/*", "scripts/*", "LiveRAG/*", "LightRAG/*",
               ".playwright-cli/*", "frontend/.playwright-cli/*",
-              "design/ui/common.py", "design/ui/concept_a.py",
               "backend/tests/*", "frontend/*.test.*", "frontend/*.spec.*",
           )
           public_tests = {

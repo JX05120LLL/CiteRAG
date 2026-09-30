@@ -1,6 +1,6 @@
 # 参与 CiteRAG
 
-项目仍在开发，当前实现与未完成条件以 [README](README.md)、[PRD](docs/多模态知识助手_PRD_v0.2_单企业首版.md)、[技术架构](docs/多模态知识助手_技术选型与架构设计_v0.1.md) 和 [开发路线](docs/development/ROADMAP.md) 为准。选一个范围明确的任务，区分代码实现、合成验证、真实供应商调用与业务验收。
+项目仍在开发，当前实现与未完成条件以 [README](README.md)、[后端说明](backend/README.md)和[前端说明](frontend/README.md)为准。选一个范围明确的任务，区分代码实现、合成验证、真实供应商调用与业务验收。维护者的 `docs/` 目录不随公开仓库发布。
 
 ## 开始修改
 
@@ -36,8 +36,8 @@ Set-Location ..
 git diff --check
 ```
 
-GitHub Actions 在推送、PR 或手动触发时执行自动检查，包含独立临时 PostgreSQL 的迁移与真实 API 冒烟验证，详见 [CI 说明](docs/development/CI.md)。CI 不调用模型，也不部署。
+GitHub Actions 在推送、PR 或手动触发时执行自动检查，包含独立临时 PostgreSQL 的迁移与真实 API 冒烟验证，详见 [工作流](.github/workflows/ci.yml)。CI 不调用模型，也不部署。
 
-选定的前端 Vitest 与后端 PostgreSQL/路由测试已随仓库提交，由 GitHub CI 自动运行；其余专用测试继续留在维护者本机。新克隆可在 `frontend/` 运行 `pnpm test`，后端公开 pytest 命令见 [CI 说明](docs/development/CI.md)；完整本机测试步骤见[本地开发](docs/development/LOCAL-DEVELOPMENT.md#运行检查)。
+选定的前端 Vitest 与后端 PostgreSQL/路由测试已随仓库提交，由 GitHub CI 自动运行；其余专用测试继续留在维护者本机。新克隆可在 `frontend/` 运行 `pnpm test`，后端公开 pytest 命令见 [工作流](.github/workflows/ci.yml)和[后端说明](backend/README.md)。
 
-文档与设计改动还需核对相对链接、SVG 与浏览器预览；提交前检查文件清单，排除凭证、本地资料和运行数据。实际验证结果见 [M0 验证记录](docs/development/M0-VALIDATION.md)。本机辅助脚本不随仓库发布；CI 通过或静态预览通过均不代表 M0 业务验收通过。
+文档与界面改动还需核对相对链接、SVG 与浏览器预览；提交前检查文件清单，排除凭证、本地资料和运行数据。当前未完成项见[README](README.md)。本机辅助脚本不随仓库发布；CI 通过或静态预览通过均不代表完整业务验收。

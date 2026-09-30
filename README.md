@@ -12,7 +12,7 @@
   <a href="backend/pyproject.toml"><img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-API-009688?style=flat-square&amp;logo=fastapi&amp;logoColor=white"></a>
   <a href="frontend/package.json"><img alt="React 19" src="https://img.shields.io/badge/React-19-149ECA?style=flat-square&amp;logo=react&amp;logoColor=white"></a>
   <a href="frontend/package.json"><img alt="TypeScript 5.9" src="https://img.shields.io/badge/TypeScript-5.9-3178C6?style=flat-square&amp;logo=typescript&amp;logoColor=white"></a>
-  <a href="docs/多模态知识助手_技术选型与架构设计_v0.1.md"><img alt="PostgreSQL" src="https://img.shields.io/badge/PostgreSQL-Storage-4169E1?style=flat-square&amp;logo=postgresql&amp;logoColor=white"></a>
+  <a href="backend/pyproject.toml"><img alt="PostgreSQL" src="https://img.shields.io/badge/PostgreSQL-Storage-4169E1?style=flat-square&amp;logo=postgresql&amp;logoColor=white"></a>
 </p>
 <p align="center">
   <a href="https://github.com/HKUDS/LightRAG"><img alt="LightRAG 知识引擎" src="https://img.shields.io/badge/LightRAG-Knowledge_Engine-355C7D?style=flat-square"></a>
@@ -22,9 +22,9 @@
 
 <p align="center">
   <a href="#-快速开始">快速开始</a> ·
-  <a href="#-工作台预览">界面预览</a> ·
-  <a href="docs/README.md">文档导航</a> ·
-  <a href="docs/development/ROADMAP.md">开发路线</a>
+  <a href="#-界面预览">界面预览</a> ·
+  <a href="#-数据保存在哪里">数据边界</a> ·
+  <a href="CONTRIBUTING.md">参与项目</a>
 </p>
 
 > **开发中**：CiteRAG 是本地单用户项目。代码已接线、合成测试、真实供应商调用和完整业务验收是不同层级；当前不承诺生产可用。入库和问答默认关闭，需自行配置数据库与模型服务后显式启用。
@@ -33,7 +33,7 @@
 
 CiteRAG 使用 [LightRAG](https://github.com/HKUDS/LightRAG) 为本地资料建立知识索引。你可以上传文档，在固定知识库中用文字或语音提问，也可以附图片让模型先观察，再依据当前问题决定是否需要检索资料。
 
-知识库回答会回查受管原文、核验事实和引用后保存；问候及通用问题走普通回答，并明确标明没有检索知识库。当前一个聊天必须绑定一个知识库，即使这轮问题最终走普通回答。
+知识库回答会回查受管原文、核验事实和引用后保存；问候及通用问题走普通回答，并明确标明没有检索知识库。创建聊天时可选“普通聊天”或固定一个知识库；普通聊天不会访问未选择的知识库。
 
 ## ✨ 为什么做 CiteRAG
 
@@ -60,19 +60,17 @@ CiteRAG 使用 [LightRAG](https://github.com/HKUDS/LightRAG) 为本地资料建�
 | 实时语音 | LiveKit 音轨、火山 ASR、本地 Silero VAD、共用问答、MiniMax TTS 和浏览器播放；提供字幕、插话取消与文字降级。 |
 | 状态与记录 | 原问题、回答尝试、摘要和持久任务保存在业务库；工作台显示来源、错误与系统状态。 |
 
-上表表示**代码已接线**，不是完整 M0—M3 验收结论。具体证据和剩余条件见[验证文档](docs/README.md)。
+上表表示**代码已接线**，不是完整 M0—M3 验收结论。
 
-## 🖥️ 工作台预览
+## 🖼️ 界面预览
 
-![CiteRAG 工作台与来源核查截图](design/ui/exports/ui-upgrade-sources-1440.png)
+![CiteRAG 对话工作台、知识库与资料、语音通话和系统状态四合一界面预览](assets/preview/citerag-ui-overview.png)
 
-这张图是早期 UI 切片在合成资料下的浏览器截图，不代表当前 React 页面或真实业务验收。现行 React B 界面的桌面和手机截图见[界面记录](design/ui/react-candidates/README.md)。
+四张图来自当前正式 React 工作台的浏览器截图，使用公开合成资料和只读 API 响应。语音页停在连接前；截图不代表真实模型、媒体连接或业务库验收通过。
 
 ## 🗂️ 数据保存在哪里
 
-![从文档上传到聊天回答的数据存储示意图](docs/development/citerag-storage-flow.png)
-
-原始 DOCX、PDF、TXT 和 Markdown 保存在本机私有目录；业务 PostgreSQL 保存资料、解析块、任务、原始聊天、回答尝试与摘要；独立的 PostgreSQL/pgvector 引擎库保存 LightRAG 索引。图中的数据库名与路径是**示意值**，以实际配置为准。聊天摘要不会替换原始消息，索引也不能单独恢复原文件或聊天。详见[技术架构](docs/多模态知识助手_技术选型与架构设计_v0.1.md)。
+原始 DOCX、PDF、TXT 和 Markdown 保存在本机私有目录；业务 PostgreSQL 保存资料、解析块、任务、原始聊天、回答尝试与摘要；独立的 PostgreSQL/pgvector 引擎库保存 LightRAG 索引。聊天摘要不会替换原始消息，索引也不能单独恢复原文件或聊天。
 
 ## 🚀 快速开始
 
@@ -112,7 +110,7 @@ pnpm dev
 | 受控后端模型配置 | 入库、Embedding、重排、文字回答和图片观察；凭证不写入前端或 Git。 |
 | 本地自托管 LiveKit 与语音服务 | 开启实时通话、火山 ASR、MiniMax TTS 和本地 VAD。 |
 
-完整接入需要安装相应后端可选依赖，按[本地开发指南](docs/development/LOCAL-DEVELOPMENT.md)配置、迁移并核对服务。默认 `CITERAG_INGESTION_ENABLED=false`、`CITERAG_ANSWER_ENABLED=false`；配置凭证或打开页面都不会自动授权付费调用。不要把实际业务库、私人资料或密钥用于公开测试。
+完整接入还需在 `backend/` 安装锁定的可选依赖（`uv sync --locked --extra rag --extra voice`），准备独立业务库与引擎库，将数据库和模型配置注入受控后端环境，并对**新建空业务库**显式运行 `uv run --no-env-file alembic upgrade head`。已有数据升级前须停写并成套备份业务库、引擎库和私有文件。默认 `CITERAG_INGESTION_ENABLED=false`、`CITERAG_ANSWER_ENABLED=false`；配置凭证或打开页面都不会自动授权付费调用。不要把实际业务库、私人资料或密钥用于公开测试。配置字段见 [backend/app/config.py](backend/app/config.py)。
 
 ## 🏗️ 技术与项目结构
 
@@ -125,25 +123,18 @@ pnpm dev
 CiteRAG/
 ├── backend/       API、模型适配、知识引擎接入与迁移
 ├── frontend/      正式工作台与独立语音入口
-├── docs/          产品、架构、开发和分层验证记录
-├── assets/brand/  正式标志
-└── design/ui/     界面设计与历史截图
+└── assets/brand/  正式标志
 ```
 
 ## 🧪 当前验证边界
 
 - GitHub CI 使用公开合成资料与临时 PostgreSQL，执行静态检查、测试和构建；它不调用真实模型，也不验收私人业务数据。
 - 已有局部真实供应商与合成语音验证记录，不能替代真人设备、真实资料及完整语音质量验收。
-- M0 的 Embedding 超长输入边界、完整 M1 验收、完整 M2 真人语音验收和实际业务库图片闭环仍有未完成项。以[开发路线](docs/development/ROADMAP.md)及各[验证记录](docs/README.md)为准。
+- M0 的 Embedding 超长输入边界、完整 M1 验收、完整 M2 真人语音验收和实际业务库图片闭环仍有未完成项。
 
-## 📑 文档
+## 📑 项目说明
 
-- [产品需求与下一阶段决定](docs/多模态知识助手_PRD_v0.2_单企业首版.md)
-- [技术选型与架构](docs/多模态知识助手_技术选型与架构设计_v0.1.md)
-- [本地开发与配置](docs/development/LOCAL-DEVELOPMENT.md)
-- [意图路由与有据回答](docs/development/INTENT-AND-GROUNDED-ANSWERS.md)
-- [语音链路与验收](docs/development/M2-VOICE-VALIDATION.md)
-- [完整文档导航](docs/README.md) · [贡献指南](CONTRIBUTING.md)
+- [后端](backend/README.md) · [前端](frontend/README.md) · [贡献指南](CONTRIBUTING.md)
 
 ## 🗺️ 会话类型与后续工具边界
 
@@ -165,10 +156,10 @@ flowchart TD
     K --> M["页面展示；语音回答再送 TTS 播放"]
 ```
 
-无库聊天不会自动读取知识库；共享摘要只用于理解背景，不能代替本轮原文证据。迁移、失效与未来工具授权边界见[会话改造记录](docs/development/CONVERSATION-MODES-AND-MEMORY.md)。
+无库聊天不会自动读取知识库；共享摘要只用于理解背景，不能代替本轮原文证据。共享内容随来源删除或库修订失效；未来工具网关尚未接入。
 
 ## 🙏 致谢与许可
 
-CiteRAG 使用 [LightRAG](https://github.com/HKUDS/LightRAG) 作为知识引擎；语音界面参考并改写了 LiveKit 官方 starter 的布局，来源及 MIT 声明见[供应商说明](frontend/vendor/livekit/README.md)。更多依赖来源见[上游参考](docs/REFERENCES.md)。
+CiteRAG 使用 [LightRAG](https://github.com/HKUDS/LightRAG) 作为知识引擎；语音界面参考并改写了 LiveKit 官方 starter 的布局，来源及 MIT 声明见[供应商说明](frontend/vendor/livekit/README.md)。
 
 项目**尚未选择自身的开源许可证**，仓库也没有项目 `LICENSE` 文件。公开可见不等于已授予复制、修改或再分发许可；正式开放使用与贡献前仍需确定许可证并核对素材声明。

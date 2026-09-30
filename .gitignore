@@ -1,16 +1,14 @@
 # Local reference repositories and material that is not part of CiteRAG
 /.local/
+/docs/
 /LiveRAG/
 /LightRAG/
 /output/
 /.playwright-cli/
 /frontend/.playwright-cli/
 
-# Workstation helper and design-generation scripts; keep local only
+# Workstation helper scripts; keep local only
 /scripts/
-/docs/superpowers/
-/design/ui/common.py
-/design/ui/concept_a.py
 
 # Most maintainer test sources stay local; the selected CI regressions are published
 /backend/tests/*

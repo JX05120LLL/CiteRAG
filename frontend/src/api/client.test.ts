@@ -43,6 +43,21 @@ describe('local same-origin API boundary', () => {
     expect(calls[0][1]?.credentials).toBe('omit');
     expect(localStorage.length).toBe(0);
   });
+  it('accepts speech timing and caption events from the voice SSE stream', async () => {
+    const events = [
+      { type: 'phase', phase: 'generating', seq: 0, session_id: 'session', generation: 1 },
+      { type: 'timing', metric: 'first_text', elapsed_ms: 329, seq: 1, session_id: 'session', generation: 1 },
+      { type: 'speech_text', text: '合成回答。', seq: 2, session_id: 'session', generation: 1 },
+    ];
+    const payload = events.map((event) => `event: voice\ndata: ${JSON.stringify(event)}\n\n`).join('');
+    const api = createApi(async () => new Response(new ReadableStream({
+      start(controller) { controller.enqueue(new TextEncoder().encode(payload)); controller.close(); },
+    }), { headers: { 'Content-Type': 'text/event-stream' } }));
+    const received: string[] = [];
+    await api.voiceEvents('session', 'synthetic-control', new AbortController().signal,
+      (event) => received.push(event.type));
+    expect(received).toEqual(['phase', 'timing', 'speech_text']);
+  });
   it('reads media configuration and requests a chat-bound token without storing credentials', async () => {
     const calls: Array<[string, RequestInit | undefined]> = [];
     const capability = { transport: 'configured', assistant: 'not_configured', purpose: 'media_test' };

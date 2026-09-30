@@ -52,6 +52,10 @@ export interface VoiceEvent {
   code?: string;
   reason?: string;
 }
+const voiceEventTypes: Record<VoiceEvent['type'], true> = {
+  ready: true, phase: true, transcript: true, speech_text: true, timing: true,
+  answer: true, error: true, interrupted: true, ended: true, playout_drained: true,
+};
 
 function localVoiceUrl(value: unknown): value is string {
   if (typeof value !== 'string') return false;
@@ -766,7 +770,7 @@ export function createApi(fetcher: typeof fetch = globalThis.fetch) {
             const event: unknown = JSON.parse(lines[1].slice(6));
             if (!isRecord(event) || event.session_id !== id || !Number.isInteger(event.seq) ||
                 !Number.isInteger(event.generation) || Number(event.generation) < 0 ||
-                !['ready', 'phase', 'transcript', 'answer', 'error', 'interrupted', 'ended', 'playout_drained'].includes(String(event.type)))
+                !Object.hasOwn(voiceEventTypes, String(event.type)))
               throw new ApiError('invalid-response');
             if (Number(event.seq) <= seq) continue;
             if (seq >= 0 && Number(event.seq) !== seq + 1) throw new ApiError('network', 'voice_event_gap');

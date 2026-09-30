@@ -1,82 +1,174 @@
-<p align="center"><img src="assets/brand/app-icon.svg" width="80" height="80" alt="CiteRAG logo"></p>
+<p align="center"><img src="assets/brand/app-icon.svg" width="88" height="88" alt="CiteRAG 标志"></p>
 
-# CiteRAG
+<h1 align="center">CiteRAG</h1>
 
-**2026-09-29 UI 细化：** 正式 React 页面采用用户确认的桌面方向：知识库分组聊天、按需来源、简洁语音通话以及资料、任务、状态页的统一视觉。对话归档新增迁移与接口；实际业务库未迁移，合成浏览器截图不能代替业务验收。见 [UI 细化与归档边界](docs/development/UI-POLISH-2026-09-29.md)。
+<p align="center">
+  让本地资料变成有原文可查的回答<br>
+  文字、语音与图片提问，共用同一条问答链路
+</p>
 
-**M3 图片提问增量（2026-09-28）：** 图片观察接入百炼 `qwen3.8-omni-flash`，私人 PNG/JPEG 附件、聊天归属、模糊编号确认与现有问答/引用链路已接线；现有实时 ASR 与 TTS 保留。已用合成图片验证模型观察，并用隔离数据库验证链路；用户图片的完整问答与实际业务库迁移尚未验收。见 [M3 验证与迁移边界](docs/development/M3-MULTIMODAL-VALIDATION.md)。
+<p align="center">
+  <a href="backend/pyproject.toml"><img alt="Python 3.12" src="https://img.shields.io/badge/Python-3.12-3776AB?style=flat-square&amp;logo=python&amp;logoColor=white"></a>
+  <a href="backend/pyproject.toml"><img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-API-009688?style=flat-square&amp;logo=fastapi&amp;logoColor=white"></a>
+  <a href="frontend/package.json"><img alt="React 19" src="https://img.shields.io/badge/React-19-149ECA?style=flat-square&amp;logo=react&amp;logoColor=white"></a>
+  <a href="frontend/package.json"><img alt="TypeScript 5.9" src="https://img.shields.io/badge/TypeScript-5.9-3178C6?style=flat-square&amp;logo=typescript&amp;logoColor=white"></a>
+  <a href="docs/多模态知识助手_技术选型与架构设计_v0.1.md"><img alt="PostgreSQL" src="https://img.shields.io/badge/PostgreSQL-Storage-4169E1?style=flat-square&amp;logo=postgresql&amp;logoColor=white"></a>
+</p>
+<p align="center">
+  <a href="https://github.com/HKUDS/LightRAG"><img alt="LightRAG 知识引擎" src="https://img.shields.io/badge/LightRAG-Knowledge_Engine-355C7D?style=flat-square"></a>
+  <a href="frontend/vendor/livekit/README.md"><img alt="LiveKit 实时音频" src="https://img.shields.io/badge/LiveKit-Real--time_Audio-6C3EF4?style=flat-square&amp;logo=livekit&amp;logoColor=white"></a>
+  <a href="https://github.com/JX05120LLL/CiteRAG/actions/workflows/ci.yml"><img alt="GitHub CI 状态" src="https://img.shields.io/github/actions/workflow/status/JX05120LLL/CiteRAG/ci.yml?branch=main&amp;style=flat-square&amp;logo=githubactions&amp;label=CI"></a>
+</p>
 
-**2026-09-28 路由增量：** 文字与语音最终转写共用两级意图路由：先判断知识库回答或普通回答，再对知识库选择精确或语义检索。问候、闲聊和通用知识由模型结合近期聊天生成，不再返回固定寒暄；资料回答继续受真实来源与事实核验约束。代码已用隔离合成数据验证，真实模型分类与真人通话仍待验收；详见[路由设计与验证](docs/development/INTENT-AND-GROUNDED-ANSWERS.md)。
+<p align="center">
+  <a href="#-快速开始">快速开始</a> ·
+  <a href="#-工作台预览">界面预览</a> ·
+  <a href="docs/README.md">文档导航</a> ·
+  <a href="docs/development/ROADMAP.md">开发路线</a>
+</p>
 
-**提交说明（2026-09-27）：** 用户随后授权将本次 M2 语音改动提交并推送 GitHub main。下方“未提交/未推送”是开发验收时快照；提交及对应 CI 结果以 Git 历史和 GitHub Actions 为准，不改变真人设备与完整 M2 尚未验收的结论。
+> **开发中**：CiteRAG 是本地单用户项目。代码已接线、合成测试、真实供应商调用和完整业务验收是不同层级；当前不承诺生产可用。入库和问答默认关闭，需自行配置数据库与模型服务后显式启用。
 
-**M2 语音实现增量（2026-09-27）：** 已接入正式会话/租约、同进程 LiveKit worker、火山 ASR、本地 Silero VAD、原 AnswerService、MiniMax TTS 与浏览器播放，保留字幕、真实来源、纠错、插话取消和文字降级。一次公开合成语音的真实供应商路径通过，消耗 ASR 1 流 / 模型 3 次 / TTS 1 次；走隔离库原文字面检索，未验证真人设备或真实 LightRAG 语义检索。后端171项、前端221项本机通过；完整 M2 尚未验收。配置默认关闭，无 schema/实际业务迁移，未提交或推送。[完整交付、控件对应与启动步骤](docs/development/M2-VOICE-VALIDATION.md)、[真实调用证据及桌面/手机截图](docs/development/M2-VOICE-REAL-SUPPLIERS.md)。下方“语音尚未接入”为早期快照。
+## 🎨 CiteRAG 是什么
 
-A local, single-user multimodal knowledge assistant, designed around answers with verifiable sources.
+CiteRAG 使用 [LightRAG](https://github.com/HKUDS/LightRAG) 为本地资料建立知识索引。你可以上传文档，在固定知识库中用文字或语音提问，也可以附图片让模型先观察，再依据当前问题决定是否需要检索资料。
 
-**B 版 React UI（2026-09-27）：** 用户已确认本次 UI 升级交付完成，并授权提交。正式 `index.html` 与独立 `voice.html` 已迁移至 React + TypeScript + Vite + Ant Design + Ant Design X，采用 B「对话优先知识助手」，融合 LiveKit 官方 starter 的欢迎与通话布局，沿用既有 SSE、资料任务和媒体生命周期。本轮 A/C 候选已清理。未新增付费调用或修改业务数据；UI 确认不改变真实业务、模型与完整语音尚未验收的范围。[访问步骤与截图](design/ui/react-candidates/README.md)、[B 版设计](design/ui/react-candidates/DESIGN.md)、[迁移、接口对应与验证](docs/development/REACT-UI-MIGRATION.md)。下方原生 UI 描述为历史记录。
+知识库回答会回查受管原文、核验事实和引用后保存；问候及通用问题走普通回答，并明确标明没有检索知识库。当前一个聊天必须绑定一个知识库，即使这轮问题最终走普通回答。
 
-**文字问答改进（2026-09-26）：** 单输入框自动区分普通交流、通用解释和知识库查询；支持结合上下文追问、基于真实证据的总结与独立事实支持检查。通用回答明确标记未检索知识库；详细机制、费用影响和集中验收步骤见[交流分流与有依据的总结](docs/development/INTENT-AND-GROUNDED-ANSWERS.md)。完整 M1 仍待验收。
+## ✨ 为什么做 CiteRAG
 
-本地单用户知识助手，面向带可核查来源的文字问答，并计划扩展图片提问和实时语音。使用者直接管理自己的知识库、核查原文，并保存聊天继续交流。首版无需注册、登录或创建管理员。
+- **答案可追溯**：来源指向本轮可核对的原文位置；证据不足时明确说明，不把常识包装成资料结论。
+- **三种输入共用问答服务**：文字、语音最终转写和图片观察进入同一套意图路由、检索、核验与聊天记录。图片观察本身不是知识库引用。
+- **资料和任务有真实状态**：上传受理、解析、索引、核验及失败分别展示；处理失败可查看原因，资料维护会暂停相关问答。
+- **本地数据边界清楚**：原始文件留在本机私有目录；业务记录与 LightRAG 索引分别存于 PostgreSQL 业务库和引擎库。
 
-**当前阶段：M0 未完成；M1-1 至 M1-4 的本机主链路已实现，完整 M1 尚未验收。** 当前接通四类文字资料、受管入库、自动路由普通/精确问答、固定知识库聊天、来源核查、删除/替换与旧空间清理。回答支持 SSE 增量、`partial` 持久状态和重试；来源只在完整回答核验并提交后展示。另有断流恢复、近期窗口/摘要、180 天聊天保留和可选每日成套备份。分层证据和剩余条件见 [M1 计划](docs/development/M1-IMPLEMENTATION.md)与 [M1 验证](docs/development/M1-VALIDATION.md)。
+## 🧭 从上传到回答
 
-**2026-09-26 UI 升级：** 按已确认的三张概念稿调整工作台、知识库和独立语音页；统一侧栏、输入区、来源与任务详情栏，并适配手机导航。资料与历史任务支持分页、折叠，失败资料可查看安全错误说明与关联任务。原生 TypeScript + HTML/CSS + Vite 和「回响」Logo 保留，未引入 React/Vue。截图、控件—API 对应和验收步骤见 [UI 升级交付](design/ui/UI-UPGRADE-20260926.md)。
+1. **上传资料**：接收 TXT、Markdown、文字 PDF 或普通 DOCX，保存原文件与资料任务。
+2. **解析入库**：检查文档结构和内容，写入受管原文；LightRAG 建立索引后还要核验资料状态，上传成功并不等于可问答。
+3. **提出问题**：文字直接进入工作台；语音仅在 ASR 最终转写后提交；图片先生成有不确定性标记的文字观察。
+4. **选择路径**：普通问题由模型结合本聊天上下文回答；需要当前库事实的问题选择精确定位或语义检索。
+5. **核验并保存**：资料回答核对证据、事实和引用，保存后才交给 TTS 播放；普通语音回答可分段提前播报，最终状态仍写入聊天。
 
-**语音接入首片：** 经用户允许提前启动 M2，已接 LiveKit 官方 SDK、本地媒体凭证、麦克风、静音、音频播放与挂断。语音 UI 已按用户选择原生移植官方页面，独立入口 `voice.html` 与工作台共用实现，保持 TypeScript/Vite。配置默认关闭，页面明确标记“语音助手尚未接入”；ASR、知识库语音回答、TTS 和正式通话租约仍待完成，图片入口仍禁用。已验证真实本地 WebRTC 与合成音频，不等于真人设备或完整语音验收。[原生语音页截图与验证](design/ui/VOICE-NATIVE-20260926.md)、[M2 启动步骤](docs/development/M2-LIVEKIT-TRANSPORT.md)。
+## 🧰 已接入的能力
 
-入库、问答和备份在仓库配置中默认关闭，真实模型调用需单独授权。上传受理、解析完成、建立索引和最终核验分别记录，不能以“已上传”判断入库成功。Unicode 切分、失败状态与删除恢复修复见 [入库诊断记录](docs/development/INGESTION-UNICODE-FIX.md)。UI 的自动测试和浏览器合成响应验证不代表真实模型、实际业务资料或完整 M1 验收通过；五模型与真实百炼双库验证沿用 M0 历史证据，超长 Embedding 输入边界仍未通过。服务与数据库状态以本机实时核对为准，历史快照见 [M1 验证](docs/development/M1-VALIDATION.md)和[交接](docs/development/HANDOFF.md)。
+| 场景 | 当前代码能力 |
+| --- | --- |
+| 知识库与资料 | 创建和维护知识库，批量上传、查看任务、失败原因、删除、替换和受管重建。 |
+| 文字问答 | 自动区分普通回答与知识库回答；知识库回答选择精确或语义检索，保留来源、历史和重试。 |
+| 图片提问 | PNG/JPEG 私有附件先经视觉模型观察；不确定编号可要求确认，图片不会自动入库。 |
+| 实时语音 | LiveKit 音轨、火山 ASR、本地 Silero VAD、共用问答、MiniMax TTS 和浏览器播放；提供字幕、插话取消与文字降级。 |
+| 状态与记录 | 原问题、回答尝试、摘要和持久任务保存在业务库；工作台显示来源、错误与系统状态。 |
 
-## 从这里开始
+上表表示**代码已接线**，不是完整 M0—M3 验收结论。具体证据和剩余条件见[验证文档](docs/README.md)。
 
-- [文档目录](docs/README.md)：PRD、技术架构与阅读顺序。
-- [开发路线与 M0 清单](docs/development/ROADMAP.md)：接入验证 → 文字 → 语音 → 图片 → 试用。
-- [M1 分步计划](docs/development/M1-IMPLEMENTATION.md)与[验证记录](docs/development/M1-VALIDATION.md)：知识库管理、受管资料与任务、后续切片及分层证据。
-- [当前进度与下次交接](docs/development/HANDOFF.md)：已验证基线、模型准备、剩余工作与续接提示词。
-- [本地开发](docs/development/LOCAL-DEVELOPMENT.md)：安装、启动、配置边界与独立数据库测试。
-- [本地单用户调整](docs/development/M0-LOCAL-SINGLE-USER.md)：2026-09-22 确认的范围、数据兼容与验收计划。
-- [M0 验证记录](docs/development/M0-VALIDATION.md)：实际检查、模拟验证及尚未完成的真实接入条件。
-- [GitHub CI](docs/development/CI.md)：自动构建、静态检查、公开合成回归测试与临时 PostgreSQL/API 冒烟验证；其余专用测试文件仅在本机保留。
-- [UI 升级交付](design/ui/UI-UPGRADE-20260926.md)：当前桌面／手机截图、控件对应接口、验证边界与集中验收步骤。
-- [LiveKit 本地媒体接入](docs/development/M2-LIVEKIT-TRANSPORT.md)：官方 SDK/页面选型、音频连接验证、默认关闭配置及未完成的语音闭环。
-- [UI 设计资产](design/ui/README.md)：已确认的三张概念稿，以及历史 A 版静态稿。
-- [正式 Logo](assets/brand/README.md)：无字图形、反白、应用图标及下载。
-- [贡献约定](CONTRIBUTING.md)：范围、验证、数据与提交要求。
+## 🖥️ 工作台预览
 
-![CiteRAG 工作台与来源核查，真实浏览器中的合成 UI 验证](design/ui/exports/ui-upgrade-sources-1440.png)
+![CiteRAG 工作台与来源核查截图](design/ui/exports/ui-upgrade-sources-1440.png)
 
-下表为 UI 升级时的合成资料截图；语音页当时尚未接入。随后完成的本地媒体截图见 [M2 接入记录](docs/development/M2-LIVEKIT-TRANSPORT.md)，语音助手仍未接入。
+这张图是早期 UI 切片在合成资料下的浏览器截图，不代表当前 React 页面或真实业务验收。现行 React B 界面的桌面和手机截图见[界面记录](design/ui/react-candidates/README.md)。
 
-| 页面 | 桌面截图 | 手机截图 |
-|---|---|---|
-| 工作台与来源核查 | [桌面](design/ui/exports/ui-upgrade-sources-1440.png) | [手机](design/ui/exports/ui-upgrade-sources-390.png) |
-| 知识库资料列表 | [桌面](design/ui/exports/ui-upgrade-documents-1440.png) | [手机](design/ui/exports/ui-upgrade-documents-390.png) |
-| 独立语音页 | [桌面](design/ui/exports/ui-upgrade-voice-1440.png) | [手机](design/ui/exports/ui-upgrade-voice-390.png) |
+## 🗂️ 数据保存在哪里
 
-## 本地查看设计
+![从文档上传到聊天回答的数据存储示意图](docs/development/citerag-storage-flow.png)
 
-最新三张概念稿保存在 [design/ui/concepts/2026-09-26](design/ui/concepts/2026-09-26/README.md)，当前实现截图见上表。运行前端请按[本地开发](docs/development/LOCAL-DEVELOPMENT.md)安装和启动。
+原始 DOCX、PDF、TXT 和 Markdown 保存在本机私有目录；业务 PostgreSQL 保存资料、解析块、任务、原始聊天、回答尝试与摘要；独立的 PostgreSQL/pgvector 引擎库保存 LightRAG 索引。图中的数据库名与路径是**示意值**，以实际配置为准。聊天摘要不会替换原始消息，索引也不能单独恢复原文件或聊天。详见[技术架构](docs/多模态知识助手_技术选型与架构设计_v0.1.md)。
 
-历史 A 版可用浏览器打开 `design/ui/index.html`，无需安装依赖或联网。页面切换、缩放和下载可操作；画面内部的问答、语音和管理按钮是静态设计。Logo 展示页为 `design/brand/index.html`。
+## 🚀 快速开始
 
-仓库保留已选 UI 的 SVG、PNG 与设计参数，可从预览页查看、下载或直接编辑 SVG。设计生成工具仅在维护者本机保留，不随仓库发布。PNG 是浏览器导出的设计快照；不同系统的中文字体可能产生排版差异。
+需要 Python 3.12、[uv](https://docs.astral.sh/uv/)、Node.js 22.12+ 和 pnpm 10.33.0。先确认本机 `8000` 与 `5173` 端口空闲，不要停止来源不明的服务。
 
-## 产品与技术边界
+```powershell
+git clone https://github.com/JX05120LLL/CiteRAG.git
+cd CiteRAG
+```
 
-前端采用 React + TypeScript + Vite + Ant Design + Ant Design X；主入口和独立语音入口共享 B 版主题。FastAPI、LightRAG、PostgreSQL 与 LiveKit 业务边界不变。依赖使用兼容稳定精确版本和锁文件，UI 升级不代表服务或完整 M0/M1/M2 已验收。
+在仓库根目录打开两个终端。
 
-- 一个聊天固定一个知识库；换库需新建聊天。
-- 知识库、聊天和附件属于同一本地安装；不同浏览器访问的是同一份本地资料。
-- 通话中发送新文字或图片问题前需挂断。
-- 图片观察与知识库依据分开；提问图片不会自动加入知识库。
-- 资料维护期间暂停该库问答；上传完成不等于入库成功。
-- API 仅在本机回环地址使用；首版不包含多用户、账号管理、局域网共享、多租户、实时订单连接器或图谱编辑。
+**终端一：后端**
 
-完整范围和验收条件以 [PRD](docs/多模态知识助手_PRD_v0.2_单企业首版.md) 为准。当前没有发布版本、性能实测或生产部署。
+```powershell
+cd backend
+uv sync --locked
+uv run --no-env-file uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1 --no-proxy-headers
+```
 
-## 参考与许可
+**终端二：前端**
 
-LightRAG 是已用于 M0 受控双库验收的知识引擎，LiveRAG 为架构及交互参考。固定提交与来源见[参考清单](docs/REFERENCES.md)。两个上游项目的完整源码、虚拟环境和本地资料不纳入本仓库。
+```powershell
+cd frontend
+pnpm install --frozen-lockfile
+pnpm dev
+```
 
-本项目许可证尚待维护者选择，暂不将公开可见等同于已授予开源使用许可。引入依赖或复制上游代码前，按其实际许可证保留必要声明。
+打开 [工作台](http://127.0.0.1:5173/) 或[独立语音页](http://127.0.0.1:5173/voice.html)。这些命令可启动**无数据库、无模型配置**的界面和 API；系统状态会如实显示缺失的服务，不会生成演示资料或自动请求供应商。
+
+### ⚙️ 启用完整功能
+
+| 需要准备 | 作用 |
+| --- | --- |
+| PostgreSQL 业务库及显式迁移 | 保存知识库、受管原文、任务与聊天。 |
+| PostgreSQL/pgvector 引擎库 | 存放 LightRAG 索引；与业务库隔离。 |
+| 受控后端模型配置 | 入库、Embedding、重排、文字回答和图片观察；凭证不写入前端或 Git。 |
+| 本地自托管 LiveKit 与语音服务 | 开启实时通话、火山 ASR、MiniMax TTS 和本地 VAD。 |
+
+完整接入需要安装相应后端可选依赖，按[本地开发指南](docs/development/LOCAL-DEVELOPMENT.md)配置、迁移并核对服务。默认 `CITERAG_INGESTION_ENABLED=false`、`CITERAG_ANSWER_ENABLED=false`；配置凭证或打开页面都不会自动授权付费调用。不要把实际业务库、私人资料或密钥用于公开测试。
+
+## 🏗️ 技术与项目结构
+
+- **界面**：React、TypeScript、Vite、Ant Design / Ant Design X。
+- **应用**：FastAPI、SQLAlchemy、Alembic，负责资料、会话、任务、来源和状态。
+- **知识引擎**：固定版本 LightRAG SDK 与 PostgreSQL/pgvector。
+- **媒体**：本地 LiveKit；语音最终转写交给现有 AnswerService。
+
+```text
+CiteRAG/
+├── backend/       API、模型适配、知识引擎接入与迁移
+├── frontend/      正式工作台与独立语音入口
+├── docs/          产品、架构、开发和分层验证记录
+├── assets/brand/  正式标志
+└── design/ui/     界面设计与历史截图
+```
+
+## 🧪 当前验证边界
+
+- GitHub CI 使用公开合成资料与临时 PostgreSQL，执行静态检查、测试和构建；它不调用真实模型，也不验收私人业务数据。
+- 已有局部真实供应商与合成语音验证记录，不能替代真人设备、真实资料及完整语音质量验收。
+- M0 的 Embedding 超长输入边界、完整 M1 验收、完整 M2 真人语音验收和实际业务库图片闭环仍有未完成项。以[开发路线](docs/development/ROADMAP.md)及各[验证记录](docs/README.md)为准。
+
+## 📑 文档
+
+- [产品需求与下一阶段决定](docs/多模态知识助手_PRD_v0.2_单企业首版.md)
+- [技术选型与架构](docs/多模态知识助手_技术选型与架构设计_v0.1.md)
+- [本地开发与配置](docs/development/LOCAL-DEVELOPMENT.md)
+- [意图路由与有据回答](docs/development/INTENT-AND-GROUNDED-ANSWERS.md)
+- [语音链路与验收](docs/development/M2-VOICE-VALIDATION.md)
+- [完整文档导航](docs/README.md) · [贡献指南](CONTRIBUTING.md)
+
+## 🗺️ 会话类型与后续工具边界
+
+当前源码支持创建普通聊天或固定知识库聊天。普通聊天不检索知识库，保留至主动删除；知识库聊天保留 180 天规则，并可手动保存来源明确的同库共享摘要。新 schema `0010` 只在隔离库验证，**实际业务库尚未迁移**。未来的受控工具网关尚未接入。
+
+```mermaid
+flowchart TD
+    A["文字输入 / 语音最终转写 / 图片观察"] --> B["读取聊天绑定与本聊天上下文"]
+    B --> C{"聊天绑定知识库？"}
+    C -- "否：普通聊天" --> D["本聊天近期记录与摘要"]
+    D --> E["普通回答路径"]
+    C -- "是：知识库聊天" --> F["本聊天上下文 + 有效的同库共享摘要"]
+    F --> G{"意图路由"}
+    G -- "普通问题" --> E
+    G -- "需要当前库证据" --> H{"精确检索 / 语义检索"}
+    H --> I["当前库检索与原文核验"]
+    E --> K["生成并保存回答；资料回答先核验"]
+    I --> K
+    K --> M["页面展示；语音回答再送 TTS 播放"]
+```
+
+无库聊天不会自动读取知识库；共享摘要只用于理解背景，不能代替本轮原文证据。迁移、失效与未来工具授权边界见[会话改造记录](docs/development/CONVERSATION-MODES-AND-MEMORY.md)。
+
+## 🙏 致谢与许可
+
+CiteRAG 使用 [LightRAG](https://github.com/HKUDS/LightRAG) 作为知识引擎；语音界面参考并改写了 LiveKit 官方 starter 的布局，来源及 MIT 声明见[供应商说明](frontend/vendor/livekit/README.md)。更多依赖来源见[上游参考](docs/REFERENCES.md)。
+
+项目**尚未选择自身的开源许可证**，仓库也没有项目 `LICENSE` 文件。公开可见不等于已授予复制、修改或再分发许可；正式开放使用与贡献前仍需确定许可证并核对素材声明。

@@ -151,7 +151,8 @@ class DashScopeClient:
             raise ValueError("vision input must contain one or two bounded PNG/JPEG images")
         content = [{"type": "text", "text": (
             "只观察图片中可直接看见的内容和文字，不推断外部资料。"
-            "返回 JSON 对象：observation 为最多 1000 字的中文描述；"
+            "返回 JSON 对象：observation 为最多 250 字的中文描述，优先保留"
+            "可见的编号、单位、对象和限定条件；"
             "uncertain_identifiers 为看不清或有多个候选的编号数组，最多 5 个。"
             "若看不清，明确写出不确定，不猜测编号。"
         )}]

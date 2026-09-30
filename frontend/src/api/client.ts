@@ -7,7 +7,7 @@ export interface KnowledgeBase {
 export interface Conversation {
   id: string;
   owner_id: string;
-  kb_id: string;
+  kb_id: string | null;
   title: string;
   created_at: string;
   archived_at?: string | null;
@@ -88,6 +88,17 @@ export interface ChatMessage {
   stale?: boolean;
   hidden?: boolean;
   images?: ChatImage[];
+}
+
+export interface KnowledgeMemory {
+  id: string;
+  kb_id: string;
+  kind: 'preference' | 'background';
+  content: string;
+  source_conversation_id: string;
+  source_message_id: string;
+  created_at: string;
+  valid: boolean;
 }
 
 export interface ChatImage {
@@ -548,34 +559,55 @@ export function createApi(fetcher: typeof fetch = globalThis.fetch) {
       collection(await request(`/api/documents/${encodeURIComponent(id)}/blocks`), parsedBlock),
     conversations: async (limit = 20, offset = 0, archived = false): Promise<Conversation[]> => collection(await request(
       `/api/conversations?limit=${limit}&offset=${offset}${archived ? '&archived=true' : ''}`), (item) =>
-      ['id', 'owner_id', 'kb_id', 'title', 'created_at'].every((key) => typeof item[key] === 'string')),
+      ['id', 'owner_id', 'title', 'created_at'].every((key) => typeof item[key] === 'string') &&
+      (item.kb_id === null || typeof item.kb_id === 'string')),
     conversation: async (id: string): Promise<Conversation> => {
       const value = await request(`/api/conversations/${encodeURIComponent(id)}`);
-      if (!isRecord(value) || !['id', 'owner_id', 'kb_id', 'title', 'created_at'].every((key) =>
-        typeof value[key] === 'string')) throw new ApiError('invalid-response');
+      if (!isRecord(value) || !['id', 'owner_id', 'title', 'created_at'].every((key) =>
+        typeof value[key] === 'string') || (value.kb_id !== null && typeof value.kb_id !== 'string')) throw new ApiError('invalid-response');
       return value as unknown as Conversation;
     },
-    createConversation: async (kbId: string): Promise<Conversation> => {
+    createConversation: async (kbId: string | null): Promise<Conversation> => {
       const value = await request('/api/conversations', 'POST', { kb_id: kbId });
-      if (!isRecord(value) || !['id', 'owner_id', 'kb_id', 'title', 'created_at'].every((key) =>
-        typeof value[key] === 'string')) throw new ApiError('invalid-response');
+      if (!isRecord(value) || !['id', 'owner_id', 'title', 'created_at'].every((key) =>
+        typeof value[key] === 'string') || (value.kb_id !== null && typeof value.kb_id !== 'string')) throw new ApiError('invalid-response');
       return value as unknown as Conversation;
     },
     renameConversation: async (id: string, title: string): Promise<Conversation> => {
       const value = await request(`/api/conversations/${encodeURIComponent(id)}`, 'PATCH', { title });
-      if (!isRecord(value) || !['id', 'owner_id', 'kb_id', 'title', 'created_at'].every((key) =>
-        typeof value[key] === 'string')) throw new ApiError('invalid-response');
+      if (!isRecord(value) || !['id', 'owner_id', 'title', 'created_at'].every((key) =>
+        typeof value[key] === 'string') || (value.kb_id !== null && typeof value.kb_id !== 'string')) throw new ApiError('invalid-response');
       return value as unknown as Conversation;
     },
     archiveConversation: async (id: string, archived: boolean): Promise<Conversation> => {
       const value = await request(`/api/conversations/${encodeURIComponent(id)}/archive`, 'PATCH', { archived });
-      if (!isRecord(value) || !['id', 'owner_id', 'kb_id', 'title', 'created_at'].every((key) =>
-        typeof value[key] === 'string') || (value.archived_at !== null && typeof value.archived_at !== 'string'))
+      if (!isRecord(value) || !['id', 'owner_id', 'title', 'created_at'].every((key) =>
+        typeof value[key] === 'string') || (value.kb_id !== null && typeof value.kb_id !== 'string') ||
+        (value.archived_at !== null && typeof value.archived_at !== 'string'))
         throw new ApiError('invalid-response');
       return value as unknown as Conversation;
     },
     deleteConversation: async (id: string): Promise<void> => {
       const value = await request(`/api/conversations/${encodeURIComponent(id)}`, 'DELETE');
+      if (!isRecord(value) || value.deleted !== true) throw new ApiError('invalid-response');
+    },
+    knowledgeMemories: async (kbId: string): Promise<KnowledgeMemory[]> => collection<KnowledgeMemory>(
+      await request(`/api/knowledge-bases/${encodeURIComponent(kbId)}/memories`),
+      (item) => typeof item.id === 'string' &&
+        item.kb_id === kbId && ['preference', 'background'].includes(String(item.kind)) &&
+        typeof item.content === 'string' && typeof item.source_conversation_id === 'string' &&
+        typeof item.source_message_id === 'string' && typeof item.created_at === 'string' &&
+        typeof item.valid === 'boolean'),
+    createKnowledgeMemory: async (kbId: string, sourceMessageId: string,
+      kind: KnowledgeMemory['kind'], content: string): Promise<KnowledgeMemory> => {
+      const value = await request(`/api/knowledge-bases/${encodeURIComponent(kbId)}/memories`, 'POST',
+        { source_message_id: sourceMessageId, kind, content });
+      if (!isRecord(value) || typeof value.id !== 'string' || value.kb_id !== kbId ||
+        typeof value.content !== 'string') throw new ApiError('invalid-response');
+      return value as unknown as KnowledgeMemory;
+    },
+    deleteKnowledgeMemory: async (kbId: string, id: string): Promise<void> => {
+      const value = await request(`/api/knowledge-bases/${encodeURIComponent(kbId)}/memories/${encodeURIComponent(id)}`, 'DELETE');
       if (!isRecord(value) || value.deleted !== true) throw new ApiError('invalid-response');
     },
     conversationMessages: async (id: string): Promise<ChatMessage[]> =>

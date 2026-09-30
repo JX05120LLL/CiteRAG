@@ -54,8 +54,17 @@ it('downloads a voice source without navigating the active call document', async
 function fixture(messages = sampleMessages[sampleChats[0].id], chats = sampleChats) {
   const calls: { path: string; method: string; body: unknown }[] = [];
   let archived = false;
+  let memories = [{ id: 'synthetic-memory', kb_id: sampleBases[0].id, kind: 'preference',
+    content: '合成偏好：简短回答', source_conversation_id: sampleChats[0].id,
+    source_message_id: messages[0].message_id, created_at: '2026-09-29T00:00:00Z', valid: true }];
   const fetcher: typeof fetch = async (input, init) => {
     const path = String(input); const method = init?.method ?? 'GET'; calls.push({ path, method, body: init?.body });
+    if (path === '/api/conversations' && method === 'POST') return json({
+      id: 'synthetic-general', owner_id: 'synthetic-owner', kb_id: null,
+      title: '新聊天', created_at: '2026-09-29T00:00:00Z', archived_at: null,
+    });
+    if (path.endsWith('/memories') && method === 'GET') return json({ items: memories });
+    if (path.includes('/memories/') && method === 'DELETE') { memories = []; return json({ deleted: true }); }
     if (path.endsWith(`/conversations/${sampleChats[0].id}/archive`) && method === 'PATCH') {
       archived = JSON.parse(String(init?.body)).archived as boolean;
       return json({ ...sampleChats[0], archived_at: archived ? '2026-09-29T00:00:00Z' : null });
@@ -87,6 +96,22 @@ it('groups chats by knowledge base and archives and restores through the API', a
   fireEvent.click(screen.getByRole('button', { name: /已归档/ }));
   fireEvent.click(await screen.findByRole('button', { name: '恢复' }));
   await waitFor(() => expect(calls.filter((call) => call.path.endsWith('/archive') && call.method === 'PATCH').length).toBe(2));
+}, 20000);
+
+it('creates an ordinary chat explicitly and lists source-linked shared memory for a KB chat', async () => {
+  const { api, calls } = fixture();
+  render(<CiteRagApp api={api} />);
+  fireEvent.click(await screen.findByRole('button', { name: '新建聊天' }));
+  fireEvent.click(await screen.findByRole('menuitem', { name: /普通聊天 · 不检索知识库/ }));
+  await waitFor(() => expect(calls.some((call) => call.path === '/api/conversations' &&
+    call.method === 'POST' && JSON.parse(String(call.body)).kb_id === null)).toBe(true));
+  expect((await screen.findAllByText('普通聊天 · 不检索知识库')).length).toBeGreaterThan(0);
+  expect(screen.queryByRole('combobox', { name: '查看知识库' })).toBeNull();
+  expect(screen.getByText('普通聊天直接回答，不检索知识库')).toBeTruthy();
+  fireEvent.click(await screen.findByRole('button', { name: sampleChats[0].title }));
+  fireEvent.click(await screen.findByRole('button', { name: '同库共享摘要' }));
+  expect(await screen.findByText('合成偏好：简短回答')).toBeTruthy();
+  expect(calls.some((call) => call.path.endsWith(`/knowledge-bases/${sampleBases[0].id}/memories`))).toBe(true);
 }, 20000);
 
 it('restores fixed chat, opens a verified source and restores focus without writes under StrictMode', async () => {

@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
@@ -11,6 +11,7 @@ from app.models import (
     ConversationSummary,
     ImageAttachment,
     KnowledgeBase,
+    KnowledgeMemory,
     MessageImage,
 )
 from app.services.conversation_retention import active_conversation
@@ -22,16 +23,17 @@ class ConversationService:
         self.session = session
         self.image_store = image_store
 
-    async def create(self, owner_id: UUID, kb_id: UUID, title: str) -> Conversation:
-        kb = await self.session.scalar(
-            select(KnowledgeBase)
-            .where(KnowledgeBase.id == kb_id, KnowledgeBase.owner_id == owner_id)
-            .with_for_update()
-        )
-        if kb is None:
-            raise ServiceError(404, "kb_not_found", "知识库不存在")
-        if kb.status != "ready":
-            raise ServiceError(409, "kb_not_ready", "知识库尚未就绪，暂不能创建聊天")
+    async def create(self, owner_id: UUID, kb_id: UUID | None, title: str) -> Conversation:
+        if kb_id is not None:
+            kb = await self.session.scalar(
+                select(KnowledgeBase)
+                .where(KnowledgeBase.id == kb_id, KnowledgeBase.owner_id == owner_id)
+                .with_for_update()
+            )
+            if kb is None:
+                raise ServiceError(404, "kb_not_found", "知识库不存在")
+            if kb.status != "ready":
+                raise ServiceError(409, "kb_not_ready", "知识库尚未就绪，暂不能创建聊天")
         conversation = Conversation(owner_id=owner_id, kb_id=kb_id, title=title)
         self.session.add(conversation)
         await self.session.commit()
@@ -43,10 +45,10 @@ class ConversationService:
         return list(
             await self.session.scalars(
                 select(Conversation)
-                .join(KnowledgeBase, Conversation.kb_id == KnowledgeBase.id)
+                .outerjoin(KnowledgeBase, Conversation.kb_id == KnowledgeBase.id)
                 .where(
                     Conversation.owner_id == owner_id,
-                    KnowledgeBase.owner_id == owner_id,
+                    or_(Conversation.kb_id.is_(None), KnowledgeBase.owner_id == owner_id),
                     active_conversation(),
                     Conversation.archived_at.is_not(None)
                     if archived else Conversation.archived_at.is_(None),
@@ -60,11 +62,11 @@ class ConversationService:
     async def get_owned(self, owner_id: UUID, conversation_id: UUID) -> Conversation:
         conversation = await self.session.scalar(
             select(Conversation)
-            .join(KnowledgeBase, Conversation.kb_id == KnowledgeBase.id)
+            .outerjoin(KnowledgeBase, Conversation.kb_id == KnowledgeBase.id)
             .where(
                 Conversation.id == conversation_id,
                 Conversation.owner_id == owner_id,
-                KnowledgeBase.owner_id == owner_id,
+                or_(Conversation.kb_id.is_(None), KnowledgeBase.owner_id == owner_id),
                 active_conversation(),
             )
         )
@@ -81,10 +83,11 @@ class ConversationService:
     async def set_archived(
         self, owner_id: UUID, conversation_id: UUID, archived: bool
     ) -> Conversation:
-        conversation = await self.session.scalar(select(Conversation).join(
+        conversation = await self.session.scalar(select(Conversation).outerjoin(
             KnowledgeBase, Conversation.kb_id == KnowledgeBase.id,
         ).where(Conversation.id == conversation_id, Conversation.owner_id == owner_id,
-                KnowledgeBase.owner_id == owner_id, active_conversation()).with_for_update())
+                or_(Conversation.kb_id.is_(None), KnowledgeBase.owner_id == owner_id),
+                active_conversation()).with_for_update(of=Conversation))
         if conversation is None:
             raise ServiceError(404, "conversation_not_found", "聊天不存在或不可访问")
         if await self.session.scalar(select(AnswerAttempt.id).where(
@@ -107,10 +110,11 @@ class ConversationService:
         ).with_for_update())
         if conversation is None:
             raise ServiceError(404, "conversation_not_found", "聊天不存在或不可访问")
-        await self.session.scalar(select(KnowledgeBase).where(
-            KnowledgeBase.id == conversation.kb_id,
-            KnowledgeBase.owner_id == owner_id,
-        ).with_for_update())
+        if conversation.kb_id is not None:
+            await self.session.scalar(select(KnowledgeBase).where(
+                KnowledgeBase.id == conversation.kb_id,
+                KnowledgeBase.owner_id == owner_id,
+            ).with_for_update())
         if await self.session.scalar(select(AnswerAttempt.id).where(
             AnswerAttempt.conversation_id == conversation_id,
             AnswerAttempt.status == "running",
@@ -131,6 +135,9 @@ class ConversationService:
             ))
         await self.session.execute(delete(ConversationSummary).where(
             ConversationSummary.conversation_id == conversation_id,
+        ))
+        await self.session.execute(delete(KnowledgeMemory).where(
+            KnowledgeMemory.source_conversation_id == conversation_id,
         ))
         await self.session.execute(delete(AnswerAttempt).where(
             AnswerAttempt.conversation_id == conversation_id,

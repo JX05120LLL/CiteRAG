@@ -15,10 +15,12 @@ from app.api.schemas import (
     KnowledgeBaseCreate,
     KnowledgeBaseRename,
     KnowledgeBaseView,
+    KnowledgeMemoryCreate,
 )
 from app.models import KnowledgeBase, LocalProfile
 from app.services.conversations import ConversationService
 from app.services.knowledge import KnowledgeService
+from app.services.knowledge_memory import KnowledgeMemoryService
 
 router = APIRouter(prefix="/api")
 
@@ -122,4 +124,23 @@ async def delete_conversation(conversation_id: UUID, request: Request,
                               owner: LocalOwner, session: Session):
     await ConversationService(session, image_store=request.app.state.image_store).delete(
         owner, conversation_id)
+    return {"deleted": True}
+
+
+@router.get("/knowledge-bases/{kb_id}/memories")
+async def list_knowledge_memories(kb_id: UUID, owner: LocalOwner, session: Session):
+    return {"items": await KnowledgeMemoryService(session).list(owner, kb_id)}
+
+
+@router.post("/knowledge-bases/{kb_id}/memories", status_code=201)
+async def create_knowledge_memory(kb_id: UUID, body: KnowledgeMemoryCreate,
+                                  owner: LocalOwner, session: Session):
+    return await KnowledgeMemoryService(session).create(
+        owner, kb_id, body.source_message_id, body.kind, body.content)
+
+
+@router.delete("/knowledge-bases/{kb_id}/memories/{memory_id}")
+async def delete_knowledge_memory(kb_id: UUID, memory_id: UUID,
+                                  owner: LocalOwner, session: Session):
+    await KnowledgeMemoryService(session).delete(owner, kb_id, memory_id)
     return {"deleted": True}

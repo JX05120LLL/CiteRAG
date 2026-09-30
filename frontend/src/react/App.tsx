@@ -57,6 +57,7 @@ export function CiteRagApp({ api: suppliedApi, factory }: { api?: ApiClient; fac
   const s = view?.state;
   const base = s?.bases?.find((item) => item.id === s.selectedKbId);
   const headerBase = (s?.page === 'knowledge' && view?.documents.isOpen || s?.page === 'tasks') ? view?.documents.snapshot.base : base;
+  const chatHeader = !!s?.selectedChatId && (s.page === 'workbench' || s.page === 'voice');
   const busy = !!s?.chatPending || !!s?.chatMessages.some((item) => item.status === 'running');
   const mediaActive = !!view && !['idle', 'failed'].includes(view.voice.actions.media.phase);
   const managementBusy = !!view?.documents.snapshot.busy;
@@ -70,11 +71,26 @@ export function CiteRagApp({ api: suppliedApi, factory }: { api?: ApiClient; fac
   const menu = <Menu selectedKeys={[s?.page ?? 'workbench']} items={(Object.keys(pageTitles) as Page[]).map((key) => ({ key, icon: icons[key], label: key === 'knowledge' ? '我的知识库' : pageTitles[key] }))}
     onClick={({ key }) => navigate(key as Page)} />;
   const brand = <div className="brand"><img src={logo} alt="回响 Logo" /><strong>CiteRAG</strong></div>;
-  const chatList = <><div className="sidebar-chat-heading"><span>对话记录</span><Button className="sidebar-new-chat" type="text" icon={<PlusOutlined />} aria-label="新建聊天" title="新建聊天"
-    disabled={!base || base.status !== 'ready' || busy || mediaActive || s?.loading}
-    onClick={() => { setHistory(false); view?.actions.navigate('workbench'); void view?.actions.createChat(); }} /></div>
+  const chatList = <><div className="sidebar-chat-heading"><span>对话记录</span><Dropdown trigger={['click']} menu={{ items: [
+    { key: 'general', label: '普通聊天 · 不检索知识库' },
+    ...(s?.bases ?? []).map((kb) => ({ key: kb.id, label: `知识库 · ${kb.name}`, disabled: kb.status !== 'ready' })),
+  ], onClick: ({ key }) => { setHistory(false); view?.actions.navigate('workbench');
+    void view?.actions.createChat(key === 'general' ? null : key); } }}><Button className="sidebar-new-chat" type="text" icon={<PlusOutlined />} aria-label="新建聊天" title="新建聊天"
+    disabled={busy || mediaActive || s?.loading} /></Dropdown></div>
     {s?.chatsError && <Alert type="error" title={s.chatsError.message} />}
     <div className="sidebar-chat-groups" aria-label="按知识库分组的聊天">
+      {(s?.chats ?? []).some((item) => item.kb_id === null) && <section className="sidebar-chat-group"><h2><MessageOutlined /><span className="sidebar-kb-name">普通聊天</span></h2>
+        {(s?.chats ?? []).filter((item) => item.kb_id === null).map((item) => <div className={`sidebar-chat-row${s?.selectedChatId === item.id ? ' selected' : ''}`} key={item.id}>
+          <MessageOutlined className="sidebar-chat-icon" /><Button className="sidebar-chat-title" type="text" disabled={busy || mediaActive} title={item.title}
+            onClick={() => { setHistory(false); view?.actions.navigate('workbench'); void view?.actions.selectChat(item.id); }}>{item.title}</Button>
+          <Dropdown trigger={['click']} menu={{ items: [
+            { key: 'rename', label: '重命名对话' }, { key: 'archive', label: '归档对话' },
+            { key: 'delete', label: '删除对话', danger: true },
+          ], onClick: ({ key }) => { if (key === 'rename') void view?.actions.renameChat(item.id);
+            if (key === 'archive') void view?.actions.setChatArchived(item.id, true);
+            if (key === 'delete') void view?.actions.deleteChat(item.id); } }}>
+            <Button type="text" size="small" icon={<MoreOutlined />} aria-label={`${item.title}的更多操作`} disabled={busy || mediaActive} />
+          </Dropdown></div>)}</section>}
       {(s?.bases ?? []).map((kb) => { const chats = (s?.chats ?? []).filter((item) => item.kb_id === kb.id);
         if (!chats.length) return null;
         return <section className="sidebar-chat-group" key={kb.id}><h2><BookOutlined /><span className="sidebar-kb-name" title={kb.name}>{kb.name}</span><span className="sidebar-chat-count">{chats.length}</span></h2>
@@ -90,7 +106,7 @@ export function CiteRagApp({ api: suppliedApi, factory }: { api?: ApiClient; fac
               if (key === 'delete') void view?.actions.deleteChat(item.id); } }}>
               <Button type="text" size="small" icon={<MoreOutlined />} aria-label={`${item.title}的更多操作`} disabled={busy || mediaActive} />
             </Dropdown></div>)}</section>; })}
-      {(s?.chats ?? []).filter((item) => !s?.bases?.some((kb) => kb.id === item.kb_id)).length > 0 &&
+      {(s?.chats ?? []).filter((item) => item.kb_id !== null && !s?.bases?.some((kb) => kb.id === item.kb_id)).length > 0 &&
         <p className="muted">部分聊天所属知识库尚未读取，请刷新后查看。</p>}
     </div>
     {view?.archivedChatError && <Alert type="error" title={view.archivedChatError.message} />}
@@ -112,17 +128,17 @@ export function CiteRagApp({ api: suppliedApi, factory }: { api?: ApiClient; fac
     <aside className="primary-sidebar">{brand}{menu}<div className="sidebar-divider" />{chatList}
       <div className="sidebar-foot">本地工作台<span>单用户</span></div></aside>
     <div className="product-main"><header className="context-bar"><Button className="mobile-nav-button" icon={<MenuOutlined />} aria-label="打开导航" onClick={() => setNavigation(true)} />
-      <div className="context-title"><BookOutlined /><span>当前知识库</span></div>
-      <Select className="kb-select" aria-label="查看知识库" placeholder="选择知识库" value={headerBase?.id ?? undefined} disabled={busy || managementBusy || mediaActive || s?.loading}
+      <div className="context-title">{chatHeader && s?.selectedKbId === null ? <MessageOutlined /> : <BookOutlined />}<span>{chatHeader ? '当前聊天' : '查看知识库'}</span></div>
+      {chatHeader ? <span className="kb-select">{s?.selectedKbId === null ? '普通聊天 · 不检索知识库' : headerBase?.name ?? '知识库不可用'}</span> : <Select className="kb-select" aria-label="查看知识库" placeholder="选择知识库" value={headerBase?.id ?? undefined} disabled={busy || managementBusy || mediaActive || s?.loading}
         options={(s?.bases ?? []).map((item) => ({ value: item.id, label: item.name }))}
         onChange={(id) => { view?.actions.selectKb(id); if (s?.page === 'tasks' || s?.page === 'knowledge' && view?.documents.isOpen) {
-          const next = s.bases?.find((item) => item.id === id); if (next) view?.actions.openDocuments(next); } }} />
-      <StateTag value={headerBase?.status ?? 'unverified'} /><span className="context-spacer" /><span className="context-local">本地工作台 · 单用户</span>
+          const next = s.bases?.find((item) => item.id === id); if (next) view?.actions.openDocuments(next); } }} />}
+      {(!chatHeader || s?.selectedKbId !== null) && <StateTag value={headerBase?.status ?? 'unverified'} />}<span className="context-spacer" /><span className="context-local">本地工作台 · 单用户</span>
       <Button className="mobile-history-button" icon={<MessageOutlined />} aria-label="打开聊天记录" onClick={() => setHistory(true)} />
       <Button icon={<ReloadOutlined />} aria-label="刷新工作台" disabled={busy || managementBusy || mediaActive || s?.loading} onClick={() => void view?.actions.refresh()} /></header>
       <main id="main-content" className={`page-content page-${s?.page ?? 'workbench'}`} tabIndex={-1}>
         <div className="page-heading"><div><div className="eyebrow">CiteRAG / {s?.page === 'workbench' ? '对话工作台' : s?.page === 'knowledge' && view?.documents.isOpen ? '知识库与资料' : s ? pageTitles[s.page] : '本地工作台'}</div><h1 tabIndex={-1}>{s?.page === 'knowledge' ? view?.documents.isOpen ? view.documents.snapshot.base?.name ?? '知识库资料' : '我的知识库' : s?.page === 'workbench' ? '对话工作台' : s ? pageTitles[s.page] : '对话工作台'}{s?.page === 'knowledge' && view?.documents.isOpen && <StateTag value={view.documents.snapshot.base?.status ?? 'unverified'} />}</h1>
-          <p>{s?.page === 'workbench' ? '基于知识库资料，获得可验证的专业回答' : s?.page === 'knowledge' ? view?.documents.isOpen ? '资料上传、解析与入库分别记录' : '管理资料和固定的问答范围' : s?.page === 'tasks' ? '查看资料处理进度与失败原因' : s?.page === 'status' ? '查看本地服务与配置' : s?.page === 'voice' ? '当前聊天 · 语音和文字记录保存在一起' : '资料、任务与状态一目了然'}</p></div>
+          <p>{s?.page === 'workbench' ? chatHeader && s.selectedKbId === null ? '普通聊天直接回答，不检索知识库' : '基于知识库资料，获得可验证的专业回答' : s?.page === 'knowledge' ? view?.documents.isOpen ? '资料上传、解析与入库分别记录' : '管理资料和固定的问答范围' : s?.page === 'tasks' ? '查看资料处理进度与失败原因' : s?.page === 'status' ? '查看本地服务与配置' : s?.page === 'voice' ? '当前聊天 · 语音和文字记录保存在一起' : '资料、任务与状态一目了然'}</p></div>
           </div>
         {!view || !api ? <Skeleton active /> : <PageBoundary key={s?.page}><Suspense fallback={<Skeleton active />}>{s?.basesError && <Alert showIcon type="error" title={s.basesError.message} />}
           {s?.page === 'workbench' && <Workbench view={view} api={api} />}{s?.page === 'knowledge' && <Knowledge view={view} api={api} />}

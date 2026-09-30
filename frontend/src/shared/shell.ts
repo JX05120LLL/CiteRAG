@@ -19,10 +19,10 @@ export function renderHeader(state: AppState, navigate: (page: Page) => void, to
   if (page === 'workbench') context.append(icon('book'));
   const currentBase = state.bases?.find((base) => base.id === state.selectedKbId);
   context.append(el('span', '', page === 'knowledge' ? '我的知识库' : page === 'status' ? '系统状态' : page === 'voice' ? '语音通话'
-    : currentBase?.name ?? '尚未选择知识库'));
+    : currentBase?.name ?? '普通聊天'));
   if (page === 'workbench') {
     const rule = el('span', 'context-rule');
-    rule.append(icon('lock'), el('span', '', '一个聊天固定一个知识库'));
+    rule.append(icon('lock'), el('span', '', state.selectedKbId ? '一个聊天固定一个知识库' : '不检索知识库'));
     context.append(rule);
   }
   const menu = action('', 'icon-button navigation-toggle', toggleNavigation);
@@ -45,10 +45,11 @@ export function renderSidebar(state: AppState, navigate: (page: Page) => void,
   aside.id = 'app-navigation';
   const newChat = action('新建聊天', 'button new-chat', () => { void createChat(); });
   newChat.prepend(icon('plus'));
-  newChat.disabled = state.chatPending || !state.bases?.some(
-    (base) => base.id === state.selectedKbId && base.status === 'ready');
+  newChat.disabled = state.chatPending || state.bases === null ||
+    (state.selectedKbId !== null && !state.bases.some(
+      (base) => base.id === state.selectedKbId && base.status === 'ready'));
   const explanation = el('p', 'sidebar-hint', newChat.disabled
-    ? '先选择已就绪知识库，再创建聊天。' : '选择已有聊天，或在当前知识库新建聊天。');
+    ? '选择普通聊天或已就绪知识库，再创建聊天。' : '选择已有聊天，或新建普通聊天／知识库聊天。');
   const history = el('div', 'history');
   history.append(el('p', 'section-label', '我的聊天'));
   if (chats?.length) {

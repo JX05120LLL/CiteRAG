@@ -37,9 +37,9 @@ async def token(conversation_id: UUID, request: Request, owner: LocalOwner, sess
     conversation = await ConversationService(session).get_owned(owner, conversation_id)
     if conversation.archived_at is not None:
         raise ServiceError(409, "conversation_archived", "聊天已归档，请恢复后再通话")
-    state = await session.scalar(select(KnowledgeBase.status).where(
+    state = (await session.scalar(select(KnowledgeBase.status).where(
         KnowledgeBase.id == conversation.kb_id, KnowledgeBase.owner_id == owner,
-    ))
+    )) if conversation.kb_id is not None else "ready")
     if state != "ready":
         raise ServiceError(409, "kb_not_ready", "知识库未就绪，暂不能进行音频连接测试")
     running = await session.scalar(select(AnswerAttempt.id).where(

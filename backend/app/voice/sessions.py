@@ -17,7 +17,7 @@ from app.services.errors import ServiceError
 class Binding:
     owner: UUID
     conversation: UUID
-    kb: UUID
+    kb: UUID | None
     revision: int
     workspace: str
 

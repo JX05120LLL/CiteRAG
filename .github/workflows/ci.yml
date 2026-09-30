@@ -48,6 +48,7 @@ jobs:
               "backend/tests/test_m3_image_storage.py",
               "backend/tests/test_m3_images_api.py",
               "backend/tests/test_m3_image_provider.py",
+              "backend/tests/test_conversation_modes.py",
               "frontend/src/api/client.test.ts",
               "frontend/src/api/stream.test.ts",
               "frontend/src/app.test.ts",
@@ -171,10 +172,10 @@ jobs:
         run: uv sync --locked --extra rag --extra voice
       - name: Lint and compile
         run: |
-          uv run --locked --extra rag --extra voice --no-env-file ruff check app migrations tests/test_postgres_local.py tests/test_ingestion_jobs.py tests/test_ingestion_lifecycle.py tests/test_query_routing.py tests/test_m13_exact_api.py tests/test_m13_answer_api.py tests/test_m1_stream.py tests/test_m14_lifecycle.py tests/test_voice_transport.py tests/test_m2_voice.py tests/test_m3_image_storage.py tests/test_m3_images_api.py tests/test_m3_image_provider.py
+          uv run --locked --extra rag --extra voice --no-env-file ruff check app migrations tests/test_postgres_local.py tests/test_ingestion_jobs.py tests/test_ingestion_lifecycle.py tests/test_query_routing.py tests/test_m13_exact_api.py tests/test_m13_answer_api.py tests/test_m1_stream.py tests/test_m14_lifecycle.py tests/test_voice_transport.py tests/test_m2_voice.py tests/test_m3_image_storage.py tests/test_m3_images_api.py tests/test_m3_image_provider.py tests/test_conversation_modes.py
           uv run --locked --extra rag --extra voice --no-env-file python -m compileall -q app migrations
       - name: Public PostgreSQL and routing regressions
-        run: uv run --locked --extra rag --extra voice --no-env-file pytest -q tests/test_postgres_local.py tests/test_ingestion_jobs.py tests/test_ingestion_lifecycle.py tests/test_query_routing.py tests/test_m13_exact_api.py tests/test_m13_answer_api.py tests/test_m1_stream.py tests/test_m14_lifecycle.py tests/test_voice_transport.py tests/test_m2_voice.py tests/test_m3_image_storage.py tests/test_m3_images_api.py tests/test_m3_image_provider.py
+        run: uv run --locked --extra rag --extra voice --no-env-file pytest -q tests/test_postgres_local.py tests/test_ingestion_jobs.py tests/test_ingestion_lifecycle.py tests/test_query_routing.py tests/test_m13_exact_api.py tests/test_m13_answer_api.py tests/test_m1_stream.py tests/test_m14_lifecycle.py tests/test_voice_transport.py tests/test_m2_voice.py tests/test_m3_image_storage.py tests/test_m3_images_api.py tests/test_m3_image_provider.py tests/test_conversation_modes.py
       - name: Generate migration SQL
         run: uv run --locked --extra rag --extra voice --no-env-file alembic upgrade head --sql > "$RUNNER_TEMP/citerag-migration.sql"
       - name: Migrate and verify local API behavior

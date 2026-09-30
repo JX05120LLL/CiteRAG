@@ -26,6 +26,7 @@
 !/backend/tests/test_m2_voice.py
 !/backend/tests/test_m3_image_storage.py
 !/backend/tests/test_m3_images_api.py
+!/backend/tests/test_conversation_modes.py
 !/backend/tests/test_m3_image_provider.py
 /frontend/**/*.test.*
 /frontend/**/*.spec.*

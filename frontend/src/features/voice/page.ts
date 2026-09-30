@@ -57,19 +57,20 @@ export async function mountVoicePage(root: HTMLElement, api: ApiClient, conversa
     if (disposed || hidden || leaving || !['idle', 'failed'].includes(voice.state.phase)) return;
     const current = ++generation;
     checking = true; capabilityError = false; update();
-    const [config, chat, bases] = await Promise.allSettled([
+    const [config, chat] = await Promise.allSettled([
       api.voiceStatus(), conversationId ? api.conversation(conversationId) : Promise.resolve(null),
-      conversationId ? api.knowledgeBases() : Promise.resolve([]),
     ]);
     if (disposed || hidden || current !== generation) return;
     capability = config.status === 'fulfilled' ? config.value : null;
     capabilityError = config.status === 'rejected';
     ownedChat = chat.status === 'fulfilled' && chat.value?.id === conversationId ? chat.value : undefined;
-    const base = bases.status === 'fulfilled' ? bases.value.find((item) => item.id === ownedChat?.kb_id) : undefined;
+    const bases = ownedChat?.kb_id ? await Promise.allSettled([api.knowledgeBases()]) : [];
+    if (disposed || hidden || current !== generation) return;
+    const base = bases[0]?.status === 'fulfilled' ? bases[0].value.find((item) => item.id === ownedChat?.kb_id) : undefined;
     context = { chatId: ownedChat?.id ?? null, chatTitle: ownedChat?.title ?? '', kbName: base?.name ?? '',
-      kbReady: base?.status === 'ready', chatPending: false,
+      kbReady: ownedChat?.kb_id === null || base?.status === 'ready', chatPending: false,
       error: conversationId && !ownedChat ? '当前聊天不可访问，请返回工作台重新选择。'
-        : ownedChat && !base ? '无法读取此聊天的知识库，请返回工作台核对。' : null };
+        : ownedChat && ownedChat.kb_id !== null && !base ? '无法读取此聊天的知识库，请返回工作台核对。' : null };
     checking = false; update();
     if (ownedChat) void voice.readHistory(ownedChat.id);
   }

@@ -2,7 +2,7 @@
 
 已选定 **回响**：两段相互呼应的弧面组成独立标志，表达聆听与连续对话。标志不含项目名称或字母；CiteRAG 是项目名，可在界面中与标志分开排布。
 
-[查看标志与尺寸预览](../../design/brand/index.html) · [查看已选 UI](../../design/ui/index.html)
+[查看标志与尺寸预览](../../design/brand/index.html) · [查看正式 B 版 UI](../../design/ui/react-candidates/README.md)
 
 | 用途 | SVG | PNG |
 | --- | --- | --- |

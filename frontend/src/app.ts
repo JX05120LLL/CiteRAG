@@ -22,7 +22,7 @@ export interface AppView {
   voice: { context: VoiceContext; actions: VoiceActions; levels: readonly number[] };
   actions: {
     navigate: (page: Page) => void; refresh: () => Promise<void>; loadHealth: () => Promise<void>;
-    selectChat: (id: string) => Promise<void>; createChat: () => Promise<void>;
+    selectChat: (id: string) => Promise<void>; createChat: (kbId?: string | null) => Promise<void>;
     renameChat: (id?: string) => Promise<void>; deleteChat: (id?: string) => Promise<void>; loadMoreChats: () => Promise<void>;
     loadArchivedChats: (reset?: boolean) => Promise<void>; setChatArchived: (id: string, archived: boolean) => Promise<void>;
     sendChat: () => Promise<void>; retryChat: (id: string) => Promise<void>; setDraft: (text: string) => void;
@@ -185,7 +185,7 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
     }
     render();
     const selectedChatId = state.selectedChatId;
-    if (selectedChatId && state.selectedKbId) {
+    if (selectedChatId) {
       try {
         const messages = await api.conversationMessages(selectedChatId);
         if (currentGeneration === generation && currentChatGeneration === chatGeneration &&
@@ -274,18 +274,20 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
     } finally { state.chatPending = false; if (!disposed) render(); }
   }
 
-  async function createChat() {
-    if (!state.selectedKbId || state.chatPending) return;
+  async function createChat(kbId: string | null = state.selectedKbId) {
+    if (state.chatPending || (kbId !== null &&
+        !state.bases?.some((base) => base.id === kbId && base.status === 'ready'))) return;
     state.chatPending = true;
     state.chatError = null;
     render();
     try {
-      const chat = await api.createConversation(state.selectedKbId);
+      const chat = await api.createConversation(kbId);
       state.chats = [chat, ...(state.chats ?? [])];
       listedChatIds.add(chat.id);
       chatOffset += 1;
       discardDraftImages();
       state.selectedChatId = chat.id;
+      state.selectedKbId = chat.kb_id;
       rememberSelection();
       state.chatMessages = [];
       state.chatDraft = '';
@@ -633,10 +635,10 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
         documents: documentsPanel,
         voice: { context: { chatId: state.selectedChatId,
           chatTitle: state.chats?.find((item) => item.id === state.selectedChatId)?.title ?? '',
-          kbName: base?.name ?? '', kbReady: base?.status === 'ready', chatPending: state.chatPending || state.chatMessages.some((item) => item.status === 'running') },
+          kbName: base?.name ?? '', kbReady: state.selectedKbId === null || base?.status === 'ready', chatPending: state.chatPending || state.chatMessages.some((item) => item.status === 'running') },
           levels, actions: { capability: voiceCapability, checking: voiceChecking, capabilityError: voiceCapabilityError,
             media: { ...voice.state }, refresh: loadVoiceCapability,
-            connect: () => { if (!disposed && state.page === 'voice' && !voiceChecking && state.selectedChatId && base?.status === 'ready' && !state.chatPending &&
+            connect: () => { if (!disposed && state.page === 'voice' && !voiceChecking && state.selectedChatId && (state.selectedKbId === null || base?.status === 'ready') && !state.chatPending &&
               !state.chatMessages.some((item) => item.status === 'running') && voiceCapability?.transport === 'configured') void voice.connect(state.selectedChatId, voiceCapability.purpose === 'voice_assistant'); },
             hangup: () => { void voice.hangup(); }, microphone: () => { void voice.toggleMicrophone(); }, output: () => { void voice.toggleOutput(); },
             stop: () => { void voice.stopAnswer(); }, correct: (text: string) => voice.correctTranscript(text),
@@ -645,8 +647,9 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
         actions: { navigate, refresh, loadHealth, selectChat, createChat, renameChat, deleteChat, loadMoreChats,
           loadArchivedChats, setChatArchived, sendChat, retryChat,
           selectChatImages, confirmChatImage,
-          selectKb: (id) => { if (disposed || state.chatPending || documentsPanel.snapshot.busy || !state.bases?.some((item) => item.id === id)) return;
-            discardDraftImages(); ++chatGeneration; state.selectedKbId = id; state.selectedChatId = null; rememberSelection();
+          selectKb: (id) => { if (disposed || state.chatPending || documentsPanel.snapshot.busy ||
+            (id && !state.bases?.some((item) => item.id === id))) return;
+            discardDraftImages(); ++chatGeneration; state.selectedKbId = id || null; state.selectedChatId = null; rememberSelection();
             state.chatMessages = []; state.chatError = null; state.chatDraft = ''; state.selectedCitation = null; state.chatRequestKey = state.chatRequestText = null; render(); },
           setDraft: (text) => { state.chatDraft = text; if (text.trim() !== state.chatRequestText) state.chatRequestKey = state.chatRequestText = null; render(); },
           selectCitation: (messageId, evidenceId) => { state.selectedCitation = { messageId, evidenceId }; render(); },
@@ -663,7 +666,7 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
         kbName: base?.name ?? '', kbReady: base?.status === 'ready', chatPending: state.chatPending };
       const actions = { capability: voiceCapability, checking: voiceChecking, capabilityError: voiceCapabilityError,
         media: voice.state, refresh: loadVoiceCapability,
-        connect: () => { if (context.chatId && !context.chatPending && context.kbReady &&
+        connect: () => { if (context.chatId && !context.chatPending && (context.kbReady || state.selectedKbId === null) &&
           voiceCapability?.transport === 'configured') void voice.connect(context.chatId, voiceCapability.purpose === 'voice_assistant'); },
         hangup: () => { void voice.hangup(); }, microphone: () => { void voice.toggleMicrophone(); },
         output: () => { void voice.toggleOutput(); },
@@ -688,7 +691,7 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
     else if (state.page === 'status') renderStatus(main, state, loadHealth);
     else renderWorkbench(main, state, navigate, {
       refresh, selectChat, createChat, renameChat, deleteChat, retryChat, sendChat,
-      selectKb: (id: string) => { discardDraftImages(); state.selectedKbId = id; state.selectedChatId = null;
+      selectKb: (id: string) => { discardDraftImages(); state.selectedKbId = id || null; state.selectedChatId = null;
         rememberSelection();
         state.chatMessages = []; state.chatError = null; state.chatDraft = '';
         state.chatRequestKey = state.chatRequestText = null; render(); },

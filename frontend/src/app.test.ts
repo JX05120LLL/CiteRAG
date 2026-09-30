@@ -193,6 +193,7 @@ describe('M0 local workbench', () => {
     ['answer_unsupported_claims', '未得到资料支持的事实'],
     ['answer_verification_unavailable', '事实核验未完成'],
     ['answer_unavailable', '模型服务暂不可用'],
+    ['answer_budget_exceeded', '超出安全输入预算'],
     ['answer_output_limit', '生成达到输出长度上限'],
     ['constructor', '回答未完成，请检查任务与服务状态'],
     ['future_answer_error', '回答未完成，请检查任务与服务状态'],
@@ -284,10 +285,11 @@ describe('M0 local workbench', () => {
     expect(calls.sort()).toEqual(['/api/conversations?limit=20&offset=0', '/api/knowledge-bases']);
     expect(root.textContent).toContain('本地工作台');
     expect(root.textContent).toContain('暂无聊天');
-    expect(root.textContent).toContain('还没有知识库');
+    expect(root.textContent).toContain('普通聊天 · 不检索知识库');
     expect(root.querySelector('form')).toBeNull();
     expect(root.textContent).not.toMatch(/管理员|登录|退出|账号/);
-    for (const label of ['新建聊天', '发送']) expect(button(root, label)?.disabled).toBe(true);
+    expect(button(root, '新建聊天')?.disabled).toBe(false);
+    expect(button(root, '发送问题')?.disabled).toBe(true);
     expect(button(root, '添加图片')?.disabled).toBe(true);
     expect(button(root, '开始语音')).toBeUndefined();
     expect(root.querySelector('textarea')?.disabled).toBe(true);
@@ -330,7 +332,7 @@ describe('M0 local workbench', () => {
     expect(root.textContent).not.toContain('还没有知识库');
     connected = true;
     button(root, '重新连接')?.click();
-    await vi.waitFor(() => expect(root.textContent).toContain('还没有知识库'));
+    await vi.waitFor(() => expect(root.textContent).toContain('普通聊天 · 不检索知识库'));
     expect(root.querySelector('[role=alert]')).toBeNull();
   });
 

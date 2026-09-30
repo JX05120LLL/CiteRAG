@@ -7,6 +7,7 @@ from typing import Any, Protocol
 from unicodedata import category
 
 from app.providers.errors import ProviderError
+from app.services.token_budget import TokenBudgetExceeded
 
 
 class AnswerRuntime(Protocol):
@@ -41,6 +42,8 @@ class LightRAGAnswerAdapter:
             return await self.runtime.complete_answer(question, evidence)
         except ProviderError as error:
             raise _provider_answer_error(error) from None
+        except TokenBudgetExceeded:
+            raise AnswerError("answer_budget_exceeded") from None
         except Exception:
             raise AnswerError("answer_unavailable") from None
 
@@ -49,6 +52,8 @@ class LightRAGAnswerAdapter:
             return await self.runtime.route_question(question, candidates)
         except ProviderError as error:
             raise _provider_answer_error(error) from None
+        except TokenBudgetExceeded:
+            raise AnswerError("answer_budget_exceeded") from None
         except Exception:
             raise AnswerError("answer_unavailable") from None
 
@@ -58,6 +63,8 @@ class LightRAGAnswerAdapter:
             return await self.runtime.route_question(question, candidates, context, documents)
         except ProviderError as error:
             raise _provider_answer_error(error) from None
+        except TokenBudgetExceeded:
+            raise AnswerError("answer_budget_exceeded") from None
         except Exception:
             raise AnswerError("answer_unavailable") from None
 
@@ -66,6 +73,8 @@ class LightRAGAnswerAdapter:
             return await self.runtime.complete_general(question, context)
         except ProviderError as error:
             raise _provider_answer_error(error) from None
+        except TokenBudgetExceeded:
+            raise AnswerError("answer_budget_exceeded") from None
         except Exception:
             raise AnswerError("answer_unavailable") from None
 
@@ -75,6 +84,8 @@ class LightRAGAnswerAdapter:
         except ProviderError as error:
             raise AnswerError("answer_output_limit" if error.category == "output_limit"
                               else "answer_verification_unavailable") from None
+        except TokenBudgetExceeded:
+            raise AnswerError("answer_budget_exceeded") from None
         except Exception:
             raise AnswerError("answer_verification_unavailable") from None
 
@@ -84,6 +95,8 @@ class LightRAGAnswerAdapter:
             return await self.runtime.complete_answer(question, evidence, context)
         except ProviderError as error:
             raise _provider_answer_error(error) from None
+        except TokenBudgetExceeded:
+            raise AnswerError("answer_budget_exceeded") from None
         except Exception:
             raise AnswerError("answer_unavailable") from None
 
@@ -98,6 +111,8 @@ class LightRAGAnswerAdapter:
                     yield piece
         except ProviderError as error:
             raise _provider_answer_error(error) from None
+        except TokenBudgetExceeded:
+            raise AnswerError("answer_budget_exceeded") from None
         except Exception:
             raise AnswerError("answer_unavailable") from None
 

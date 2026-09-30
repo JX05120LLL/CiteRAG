@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Protocol
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.images.storage import PrivateImageStore, StoredImage
@@ -69,27 +69,30 @@ class ImageService:
     async def _owned_chat(self, owner: UUID, conversation_id: UUID, *, lock=False):
         query = (
             select(Conversation, KnowledgeBase)
-            .join(
+            .outerjoin(
                 KnowledgeBase,
                 Conversation.kb_id == KnowledgeBase.id,
             )
             .where(
                 Conversation.id == conversation_id,
                 Conversation.owner_id == owner,
-                KnowledgeBase.owner_id == owner,
+                or_(Conversation.kb_id.is_(None), KnowledgeBase.owner_id == owner),
                 active_conversation(),
             )
         )
-        row = (await self.session.execute(query.with_for_update() if lock else query)).first()
+        row = (await self.session.execute(query.with_for_update(of=Conversation)
+                                          if lock else query)).first()
         if row is None:
             raise ServiceError(404, "conversation_not_found", "聊天不存在或不可访问")
+        if lock and row[1] is not None:
+            await self.session.get(KnowledgeBase, row[1].id, with_for_update=True)
         return row
 
     async def accept(self, owner: UUID, conversation_id: UUID, stored: StoredImage) -> dict:
         conversation, kb = await self._owned_chat(owner, conversation_id, lock=True)
         if conversation.archived_at is not None:
             raise ServiceError(409, "conversation_archived", "聊天已归档，请恢复后再上传图片")
-        if kb.status != "ready":
+        if kb is not None and kb.status != "ready":
             raise ServiceError(409, "kb_not_ready", "知识库未就绪，暂不能上传图片")
         image = ImageAttachment(
             owner_id=owner,

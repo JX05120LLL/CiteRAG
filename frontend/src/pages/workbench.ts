@@ -14,6 +14,7 @@ export function answerFailure(code: string | null): string {
     answer_unsupported_claims: '回答包含未得到资料支持的事实，已停止展示。请补充资料，或把问题缩小到具体内容后重试。',
     answer_verification_unavailable: '回答的事实核验未完成，暂不展示正文和引用。请稍后重试。',
     answer_unavailable: '回答模型服务暂不可用。请检查系统状态、模型配置或供应商配额后重试。',
+    answer_budget_exceeded: '本轮问题、图片观察或原文超出安全输入预算。请缩小问题或指定更短的原文范围后重试。',
     image_observation_unavailable: '图片识别未完成，请重试；若持续失败，请检查图片模型状态。',
     image_observation_invalid: '图片模型已返回结果，但格式未通过校验。请重试；若持续失败，请反馈此错误代码。',
     image_storage_unavailable: '图片原文件读取失败，请重新上传。',
@@ -65,13 +66,13 @@ function composer(state: AppState, actions: WorkbenchActions, navigate: (page: P
   const box = el('div', 'composer');
   const input = el('textarea');
   const current = state.bases?.find((item) => item.id === state.selectedKbId);
-  const enabled = current?.status === 'ready' && Boolean(state.selectedChatId);
+  const enabled = (state.selectedKbId === null || current?.status === 'ready') && Boolean(state.selectedChatId);
   const busy = state.chatPending || state.chatMessages.some((item) => item.status === 'running');
   input.disabled = !enabled || busy;
   input.rows = 2;
   input.maxLength = 1000;
   input.value = state.chatDraft;
-  input.placeholder = enabled ? '输入问题，自动识别普通交流或知识库查询' : '请先选择已就绪知识库并创建或打开聊天';
+  input.placeholder = enabled ? state.selectedKbId === null ? '输入问题，直接使用普通回答' : '输入问题，自动识别普通交流或知识库查询' : '请先创建或打开聊天';
   input.setAttribute('aria-label', '问题输入');
   input.addEventListener('input', () => {
     actions.setDraft(input.value);
@@ -92,15 +93,17 @@ function composer(state: AppState, actions: WorkbenchActions, navigate: (page: P
   if (send.disabled) send.title = current?.status === 'maintaining' ? '知识库维护中，问答暂停'
     : current?.status === 'blocked' ? '知识库待修复，问答暂停'
     : current?.status === 'empty' ? '知识库尚无已核验资料'
-    : !enabled ? '先选择就绪知识库并创建或打开聊天' : '先输入问题';
+    : !enabled ? '先创建或打开聊天' : '先输入问题';
   const image = action('添加图片', 'button secondary'); image.prepend(icon('image')); image.disabled = true;
   image.title = '图片提问尚未接入'; image.setAttribute('aria-describedby', 'image-unavailable');
-  const context = el('span', 'composer-context', current?.name ?? '未选择知识库'); context.prepend(icon('book'));
+  const context = el('span', 'composer-context', current?.name ?? '普通聊天'); context.prepend(icon('book'));
   const voice = action('语音通话', 'button secondary voice-entry', () => navigate('voice')); voice.prepend(icon('mic'));
   voice.disabled = busy; voice.title = '打开通话页面；语音服务尚未接入';
   toolbar.append(image, context, voice, send);
   box.append(toolbar);
-  const hint = el('p', 'composer-note', current?.status === 'ready'
+  const hint = el('p', 'composer-note', state.selectedKbId === null
+    ? '普通聊天直接使用回答模型，不查询知识库。'
+    : current?.status === 'ready'
     ? '自然提问，自动区分普通交流与资料查询；知识库回答附可核查的原文来源。'
     : '资料未就绪或正在维护时暂停问答；解析完成不等于已入库。');
   const capability = el('p', 'composer-capability', '图片提问尚未接入；语音页面可查看接入状态。'); capability.id = 'image-unavailable';
@@ -119,7 +122,7 @@ export function renderWorkbench(main: HTMLElement, state: AppState,
   } else if (error) {
     content.append(heading('本地资料暂不可用'), alert(error.message),
       action('重新连接', 'button secondary', () => { void actions.refresh(); }));
-  } else if (!bases?.length) {
+  } else if (!bases) {
     content.append(heading('还没有知识库'), el('p', 'intro',
       '前往「我的知识库」创建知识库，上传资料并等待入库核验。'),
     action('前往我的知识库', 'button secondary', () => navigate('knowledge')));
@@ -133,8 +136,9 @@ export function renderWorkbench(main: HTMLElement, state: AppState,
     titles.append(heading(state.selectedChatId ? state.chats?.find((chat) => chat.id === state.selectedChatId)?.title ?? '当前聊天' : '从你的知识库开始提问'));
     const selectedBase = bases.find((base) => base.id === state.selectedKbId);
     titles.append(el('p', 'metadata', state.selectedChatId
-      ? `固定知识库：${selectedBase?.name ?? '原知识库暂不可用'} · ${selectedBase ? kbStatuses[selectedBase.status] : '状态待确认'}`
-      : '先选择已就绪知识库，再创建聊天。每个聊天固定一个知识库。'));
+      ? state.selectedKbId ? `固定知识库：${selectedBase?.name ?? '原知识库暂不可用'} · ${selectedBase ? kbStatuses[selectedBase.status] : '状态待确认'}`
+        : '普通聊天 · 不检索知识库'
+      : '选择普通聊天或已就绪知识库，再创建聊天。'));
     titlebar.append(titles);
     if (state.selectedChatId) {
       const controls = el('details', 'chat-controls');
@@ -151,7 +155,7 @@ export function renderWorkbench(main: HTMLElement, state: AppState,
     label.textContent = state.selectedChatId ? '新聊天使用的知识库' : '选择知识库';
     const select = el('select', 'name-input');
     select.id = 'chat-kb';
-    const empty = el('option', '', '选择知识库'); empty.value = '';
+    const empty = el('option', '', '普通聊天 · 不检索知识库'); empty.value = '';
     select.append(empty);
     for (const base of bases) {
       const option = el('option', '', `${base.name} · ${kbStatuses[base.status]}`);
@@ -162,7 +166,8 @@ export function renderWorkbench(main: HTMLElement, state: AppState,
     select.disabled = state.chatPending;
     select.addEventListener('change', () => actions.selectKb(select.value));
     const create = action('新建聊天', 'button secondary', () => { void actions.createChat(); });
-    create.disabled = state.chatPending || bases.find((base) => base.id === state.selectedKbId)?.status !== 'ready';
+    create.disabled = state.chatPending || (state.selectedKbId !== null &&
+      bases.find((base) => base.id === state.selectedKbId)?.status !== 'ready');
     picker.append(label, select, create);
     if (state.selectedChatId) {
       const switcher = el('details', 'chat-switcher');
@@ -176,7 +181,7 @@ export function renderWorkbench(main: HTMLElement, state: AppState,
         el('span', 'metadata', kbStatuses[base.status]));
       libraries.append(row);
     }
-    if (!state.selectedKbId) content.append(libraries);
+    if (!state.selectedChatId && !state.selectedKbId) content.append(libraries);
     const current = bases.find((base) => base.id === state.selectedKbId);
     if (state.chatError) content.append(alert(state.chatError.message));
     if (state.selectedChatId) {

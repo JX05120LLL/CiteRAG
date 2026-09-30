@@ -111,7 +111,8 @@ export function createVoiceView(initialContext: VoiceContext, initialActions: Vo
     element.dataset.phase = media.phase;
     backLabel.textContent = active ? '挂断并返回聊天' : '返回聊天'; back.disabled = media.phase === 'ending';
     chat.textContent = current.chatTitle || '尚未选择聊天';
-    baseLabel.textContent = current.chatId ? `固定知识库：${current.kbName || '暂不可用'}` : '尚未选择知识库';
+    baseLabel.textContent = current.chatId ? current.kbName ? `固定知识库：${current.kbName}`
+      : '普通聊天 · 不检索知识库' : '尚未选择聊天';
     const phases = { idle: '未连接', connecting: '正在连接并请求麦克风权限…', connected: '媒体已连接',
       reconnecting: '媒体重连中…', ending: '正在挂断…', failed: '媒体连接未完成' };
     status.textContent = `${phases[media.phase]} · 语音助手尚未接入`;

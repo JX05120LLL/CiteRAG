@@ -10,7 +10,7 @@ const find = (root: HTMLElement, text: string) => [...root.querySelectorAll('but
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(); document.body.replaceChildren(); });
 
-async function fixture(options: { id?: string | null; ready?: boolean; unowned?: boolean } = {}) {
+async function fixture(options: { id?: string | null; ready?: boolean; unowned?: boolean; ordinary?: boolean } = {}) {
   const root = document.createElement('div'); document.body.append(root);
   const calls: string[] = [];
   let events!: RoomEvents;
@@ -20,7 +20,8 @@ async function fixture(options: { id?: string | null; ready?: boolean; unowned?:
   const api = createApi(async (url) => {
     const path = String(url); calls.push(path);
     if (path === '/api/voice/status') return json(capability);
-    if (path === '/api/conversations/chat') return options.unowned ? json({ detail: { code: 'conversation_not_found' } }, 404) : json(chat);
+    if (path === '/api/conversations/chat') return options.unowned ? json({ detail: { code: 'conversation_not_found' } }, 404)
+      : json(options.ordinary ? { ...chat, kb_id: null } : chat);
     if (path === '/api/knowledge-bases') return json({ items: [{ id: 'kb', name: '合成库', status: options.ready === false ? 'blocked' : 'ready' }] });
     if (path.endsWith('/voice/token')) return json({ server_url: 'ws://127.0.0.1:7880', token: 'synthetic', room: 'synthetic',
       conversation_id: 'chat', assistant: 'not_configured', purpose: 'media_test' });
@@ -42,6 +43,17 @@ describe('standalone native LiveKit voice page', () => {
     expect(calls).toEqual(expect.arrayContaining(['/api/voice/status', '/api/conversations/chat', '/api/knowledge-bases']));
     expect(calls.some((path) => path.endsWith('/token'))).toBe(false);
     expect(room.microphone).not.toHaveBeenCalled();
+  });
+
+  it('allows an ordinary chat to start voice without a knowledge base', async () => {
+    const { root, calls, room } = await fixture({ ordinary: true });
+    expect(root.textContent).toContain('普通聊天 · 不检索知识库');
+    expect(find(root, '测试本地音频连接').disabled).toBe(false);
+    expect(calls).not.toContain('/api/knowledge-bases');
+    expect(calls.some((path) => path.endsWith('/token'))).toBe(false);
+    expect(room.microphone).not.toHaveBeenCalled();
+    find(root, '测试本地音频连接').click();
+    await vi.waitFor(() => expect(room.connect).toHaveBeenCalledOnce());
   });
 
   it.each([{ id: null }, { ready: false }, { unowned: true }])('keeps unusable chat context disabled: %j', async (options) => {

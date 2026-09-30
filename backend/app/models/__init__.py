@@ -109,7 +109,9 @@ class Conversation(Base):
     owner_id: Mapped[UUID | None] = mapped_column(
         "local_owner_id", ForeignKey("local_profiles.id", ondelete="RESTRICT")
     )
-    kb_id: Mapped[UUID] = mapped_column(ForeignKey("knowledge_bases.id", ondelete="RESTRICT"))
+    kb_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("knowledge_bases.id", ondelete="RESTRICT")
+    )
     title: Mapped[str] = mapped_column(String(120), default="新聊天")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -298,3 +300,24 @@ class ConversationSummary(Base):
     content: Mapped[str] = mapped_column(Text)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True),
                                                   server_default=func.now())
+
+
+class KnowledgeMemory(Base):
+    """User-curated, source-linked context for one knowledge base; never evidence."""
+
+    __tablename__ = "knowledge_memories"
+    __table_args__ = (
+        Index("ix_knowledge_memories_scope", "kb_id", "created_at", "id"),
+        CheckConstraint("kind IN ('preference','background')", name="ck_knowledge_memory_kind"),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    owner_id: Mapped[UUID] = mapped_column(ForeignKey("local_profiles.id", ondelete="RESTRICT"))
+    kb_id: Mapped[UUID] = mapped_column(ForeignKey("knowledge_bases.id", ondelete="RESTRICT"))
+    source_conversation_id: Mapped[UUID] = mapped_column(ForeignKey("conversations.id"))
+    source_message_id: Mapped[UUID] = mapped_column(ForeignKey("conversation_messages.id"))
+    kind: Mapped[str] = mapped_column(String(16))
+    content: Mapped[str] = mapped_column(String(300))
+    kb_revision: Mapped[int] = mapped_column(Integer)
+    workspace: Mapped[str] = mapped_column(String(100))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

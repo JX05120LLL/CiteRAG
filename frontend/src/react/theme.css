@@ -317,6 +317,12 @@
 .citerag-app .status-backup p { margin-top: 14px; }
 .citerag-app .page-heading h1 .ant-tag { display: inline-flex; vertical-align: middle; margin-left: 16px; font-size: 13px; letter-spacing: 0; }
 .citerag-app .formal-conversation .chat-context { display: none; }
+.citerag-app .shared-memory-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; color: #526581; font-size: 13px; }
+.citerag-app .shared-memory-toolbar span { overflow-wrap: anywhere; }
+.memory-entry { padding: 14px 0; border-bottom: 1px solid #e6ebef; overflow-wrap: anywhere; }
+.memory-entry p { margin: 8px 0; line-height: 1.5; }
+.memory-create { display: grid; gap: 12px; margin-top: 24px; }
+.memory-create h3 { margin: 0; font-size: 15px; }
 .citerag-app .message-pair > .answer-line:last-child { width: 100%; padding: 0; border: 0; box-shadow: none; background: transparent; }
 .citerag-app .answer-avatar { padding: 0; overflow: hidden; }
 .citerag-app .answer-avatar img { width: 100%; height: 100%; padding: 6px; filter: invert(1); }

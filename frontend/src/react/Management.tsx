@@ -27,7 +27,7 @@ export function Knowledge({ view, api }: { view: AppView; api: ApiClient }) {
       <div className="knowledge-card-actions"><Button icon={<FileTextOutlined />} aria-label="管理资料" disabled={pending} onClick={() => a.openDocuments(base)}>管理资料</Button>
         <Button type="primary" disabled={pending || s.chatPending || base.status !== 'ready'} onClick={() => { a.selectKb(base.id); a.navigate('workbench'); }}>开始问答</Button>
         <Button disabled={pending} onClick={() => a.beginRename(base.id)}>知识库改名</Button></div></Card>)}</div>
-    <Alert className="knowledge-tip" type="info" showIcon title="一个聊天固定一个知识库；切换知识库会新建聊天。" />
+    <Alert className="knowledge-tip" type="info" showIcon title="知识库聊天固定单库；也可新建不检索资料的普通聊天。" />
     <Modal title="创建知识库" open={createOpen || s.createDraft.uncertain} onCancel={() => { if (!pending) setCreateOpen(false); }}
       confirmLoading={s.createDraft.pending} okText={s.createDraft.uncertain ? '同键重试创建' : '创建'}
       okButtonProps={{ disabled: !s.createDraft.name.trim() || s.loading || !!s.basesError || pending || s.createDraft.error?.code === 'recovery_read_failed' }}

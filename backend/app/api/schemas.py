@@ -12,7 +12,8 @@ __all__ = ["CapabilityState", "ConversationArchive", "ConversationCreate", "Conv
 
 
 class ConversationCreate(BaseModel):
-    kb_id: UUID
+    model_config = ConfigDict(extra="ignore")
+    kb_id: UUID | None
     title: Annotated[
         str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)
     ] = "新聊天"
@@ -36,10 +37,18 @@ class ConversationView(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: UUID
     owner_id: UUID
-    kb_id: UUID
+    kb_id: UUID | None
     title: str
     created_at: datetime
     archived_at: datetime | None = None
+
+
+class KnowledgeMemoryCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source_message_id: UUID
+    kind: Literal["preference", "background"]
+    content: Annotated[str, StringConstraints(strict=True, strip_whitespace=True,
+                                               min_length=1, max_length=300)]
 
 
 class KnowledgeBaseView(BaseModel):

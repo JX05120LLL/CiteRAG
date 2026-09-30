@@ -83,7 +83,7 @@ export function Voice({ context, actions, levels = [], readOnly = false }: {
             : '点击按钮后才会创建通话、连接房间并申请麦克风权限');
   return <div className="official-voice">
     <div className="voice-context-brief"><Space wrap><Tag>{context.chatTitle || '尚未选择聊天'}</Tag>
-      <span>固定知识库：{context.kbName || '尚未读取'}</span></Space>
+      <span>{context.chatId && !context.kbName ? '普通聊天 · 不检索知识库' : `固定知识库：${context.kbName || '尚未读取'}`}</span></Space>
       <Button title={readOnly ? '只读设计状态，请使用正式语音入口刷新实际条件' : undefined} icon={<ReloadOutlined />} disabled={readOnly || active || actions.checking} loading={actions.checking} onClick={() => void actions.refresh()}>刷新连接条件</Button></div>
     <Card className="official-voice-stage"><div className="voice-stage-main">
       <div className={`voice-call-symbol${active ? ' is-active' : ''}`} aria-hidden="true"><img src={logo} alt="" /></div>

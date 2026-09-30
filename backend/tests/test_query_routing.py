@@ -135,7 +135,7 @@ async def test_general_answer_keeps_dialogue_but_not_old_knowledge_answer_text()
     class Model:
         async def general_answer(self, question, received):
             assert question == "聊聊温度的常见单位"
-            assert received["summary"] == "用户关心温度"
+            assert received["summary"] == ""
             assert received["turns"][0] == {
                 "user": "手册规定多少度？", "assistant": "", "answer_kind": "knowledge",
             }
@@ -349,7 +349,7 @@ async def test_answer_output_budget_supports_summary_without_expanding_engine_bu
 
 def test_answer_prompt_separates_summary_from_exact_support_quotes():
     messages = RagRuntime._answer_messages(
-        "synthetic overview", [{"id": "E1", "text": "x" * 5000}], {},
+        "synthetic overview", [{"id": "E1", "text": "x" * 1000}], {},
     )
     assert "最多1500字符" in messages[0].content
     assert "可忠实解释、概括" in messages[0].content

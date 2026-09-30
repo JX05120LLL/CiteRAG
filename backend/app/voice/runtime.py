@@ -84,6 +84,8 @@ class VoiceRuntime:
             raise ServiceError(404, "conversation_not_found", "聊天不存在或不可访问")
         if chat.archived_at is not None:
             raise ServiceError(409, "conversation_archived", "聊天已归档，请恢复后再通话")
+        if chat.kb_id is None:
+            return Binding(owner, conversation, None, 0, "ordinary")
         query = select(KnowledgeBase).where(KnowledgeBase.id == chat.kb_id,
                                            KnowledgeBase.owner_id == owner)
         kb = await session.scalar(query.with_for_update() if lock else query)

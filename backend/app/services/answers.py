@@ -28,9 +28,11 @@ from app.rag.answer_adapter import AnswerError, checked_answer, checked_route
 from app.rag.query_adapter import QueryError, RetrievedChunk
 from app.rag.source_mapping import locate_chunk
 from app.rag.streamed_answer import ExtractiveDraft
-from app.services.conversation_context import prepare_context
+from app.services.conversation_context import ORDINARY_WORKSPACE, prepare_context
 from app.services.conversation_retention import active_conversation
 from app.services.errors import ServiceError
+from app.services.knowledge_memory import shared_context
+from app.services.token_budget import EVIDENCE_TOKENS, estimate_json_tokens
 
 
 class Retriever(Protocol):
@@ -89,13 +91,30 @@ def answer_view(message: ConversationMessage, attempt: AnswerAttempt) -> dict:
     return view
 
 
-def ordinary_context(context: dict) -> dict:
+def ordinary_context(context: dict, *, ordinary_chat: bool = False) -> dict:
     """Keep conversational cues without treating a prior knowledge answer as evidence."""
-    return {**context, "turns": [
+    # Legacy summaries may contain old assistant claims; they are useful for
+    # routing a follow-up, but never enter ordinary generation as facts.
+    safe = {**context, "turns": [
         turn if turn.get("answer_kind") in {"general", "chat"}
         else {**turn, "assistant": ""}
         for turn in context.get("turns", [])
     ]}
+    if "summary" in safe and not ordinary_chat:
+        safe["summary"] = ""
+    return safe
+
+
+def select_evidence(evidence: list[dict], citations: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Take complete, ordered source blocks; never shorten a number or condition."""
+    selected: list[dict] = []
+    linked: list[dict] = []
+    for item, citation in zip(evidence, citations, strict=True):
+        if estimate_json_tokens(selected + [item]) > EVIDENCE_TOKENS:
+            break
+        selected.append(item)
+        linked.append(citation)
+    return selected, linked
 
 
 class AnswerService:
@@ -127,14 +146,16 @@ class AnswerService:
         conversation = await self.session.scalar(query.with_for_update() if lock else query)
         if conversation is None:
             raise ServiceError(404, "conversation_not_found", "聊天不存在或不可访问")
-        kb_query = select(KnowledgeBase).where(
-            KnowledgeBase.id == conversation.kb_id, KnowledgeBase.owner_id == owner,
-        )
-        kb = await self.session.scalar(kb_query.with_for_update() if lock else kb_query)
-        if kb is None:
-            raise ServiceError(404, "conversation_not_found", "聊天不存在或不可访问")
-        if (self.expected_binding is not None
-            and (kb.revision, kb.active_workspace) != self.expected_binding):
+        kb = None
+        if conversation.kb_id is not None:
+            kb_query = select(KnowledgeBase).where(
+                KnowledgeBase.id == conversation.kb_id, KnowledgeBase.owner_id == owner,
+            )
+            kb = await self.session.scalar(kb_query.with_for_update() if lock else kb_query)
+            if kb is None:
+                raise ServiceError(404, "conversation_not_found", "聊天不存在或不可访问")
+        binding = (kb.revision, kb.active_workspace) if kb is not None else (0, ORDINARY_WORKSPACE)
+        if self.expected_binding is not None and binding != self.expected_binding:
             raise ServiceError(409, "kb_changed", "通话的知识库修订或活动空间已失效")
         return conversation, kb
 
@@ -160,11 +181,12 @@ class AnswerService:
         messages: dict[UUID, dict] = {}
         for message, attempt in rows:
             view = await self._view(message, attempt)
-            hidden = (kb.status != "ready"
-                      or attempt.kb_revision < kb.hide_history_before_revision
+            hidden = ((kb is not None and (kb.status != "ready"
+                      or attempt.kb_revision < kb.hide_history_before_revision))
                       or (expired_image_at is not None
                           and message.created_at >= expired_image_at))
-            view["stale"] = attempt.kb_revision != kb.revision or kb.status != "ready"
+            view["stale"] = (kb is not None and
+                             (attempt.kb_revision != kb.revision or kb.status != "ready"))
             view["hidden"] = hidden
             if hidden:
                 view["text"], view["citations"] = "", []
@@ -181,6 +203,8 @@ class AnswerService:
         on_preview: Callable[[UUID, str], Awaitable[None]] | None = None,
     ) -> dict:
         conversation, kb = await self._owned_conversation(owner, conversation_id, lock=True)
+        if kb is None and (mode != "auto" or exact is not None):
+            raise ServiceError(422, "ordinary_mode", "普通聊天只支持自动普通回答")
         if conversation.archived_at is not None:
             raise ServiceError(409, "conversation_archived", "聊天已归档，请恢复后再提问")
         image_ids = image_ids or []
@@ -201,14 +225,14 @@ class AnswerService:
             attempt = await self.session.scalar(select(AnswerAttempt).where(
                 AnswerAttempt.message_id == existing.id,
             ).order_by(AnswerAttempt.created_at.desc(), AnswerAttempt.id.desc()))
-            if kb.status != "ready":
+            if kb is not None and kb.status != "ready":
                 raise ServiceError(409, "kb_not_ready", "知识库未就绪，暂不能问答")
-            if (attempt is None or attempt.kb_revision != kb.revision
-                or attempt.workspace != kb.active_workspace):
+            if (attempt is None or attempt.kb_revision != (kb.revision if kb else 0)
+                or attempt.workspace != (kb.active_workspace if kb else ORDINARY_WORKSPACE)):
                 raise ServiceError(409, "kb_changed", "知识库已变化，请重新提问")
             await self.session.commit()
             return await self._view(existing, attempt)
-        if kb.status != "ready":
+        if kb is not None and kb.status != "ready":
             raise ServiceError(409, "kb_not_ready", "知识库未就绪，暂不能问答")
         active = await self.session.scalar(select(AnswerAttempt.id).where(
             AnswerAttempt.conversation_id == conversation_id,
@@ -222,8 +246,8 @@ class AnswerService:
         )
         attempt = AnswerAttempt(
             id=uuid4(), conversation_id=conversation_id, message_id=message.id,
-            status="running", citations=[], kb_revision=kb.revision,
-            workspace=kb.active_workspace,
+            status="running", citations=[], kb_revision=kb.revision if kb else 0,
+            workspace=kb.active_workspace if kb else ORDINARY_WORKSPACE,
         )
         self.session.add(message)
         await self.session.flush()
@@ -253,14 +277,15 @@ class AnswerService:
         if existing is not None:
             if existing.message_id != message_id or existing.conversation_id != conversation_id:
                 raise ServiceError(409, "idempotency_conflict", "重试请求键已用于其他消息")
-            if (kb.status != "ready" or existing.kb_revision != kb.revision
-                or existing.workspace != kb.active_workspace):
+            if ((kb is not None and kb.status != "ready")
+                or existing.kb_revision != (kb.revision if kb else 0)
+                or existing.workspace != (kb.active_workspace if kb else ORDINARY_WORKSPACE)):
                 raise ServiceError(409, "kb_changed", "知识库已变化，请重新提问")
             if existing.status == "running":
                 raise ServiceError(409, "answer_in_progress", "回答仍在处理中，请稍后读取结果")
             await self.session.commit()
             return await self._view(message, existing)
-        if kb.status != "ready":
+        if kb is not None and kb.status != "ready":
             raise ServiceError(409, "kb_not_ready", "知识库未就绪，暂不能重试")
         active = await self.session.scalar(select(AnswerAttempt.id).where(
             AnswerAttempt.conversation_id == conversation_id,
@@ -281,12 +306,13 @@ class AnswerService:
         if last is None or (last.status not in {"failed", "interrupted", "partial"}
                             and not image_retry):
             raise ServiceError(409, "answer_not_retryable", "仅失败、中断或部分回答可以重试")
-        if last.kb_revision != kb.revision or last.workspace != kb.active_workspace:
+        if (last.kb_revision != (kb.revision if kb else 0)
+            or last.workspace != (kb.active_workspace if kb else ORDINARY_WORKSPACE)):
             raise ServiceError(409, "kb_changed", "知识库已变化，请重新提问")
         attempt = AnswerAttempt(
             id=retry_id, conversation_id=conversation_id, message_id=message_id,
-            status="running", citations=[], kb_revision=kb.revision,
-            workspace=kb.active_workspace,
+            status="running", citations=[], kb_revision=kb.revision if kb else 0,
+            workspace=kb.active_workspace if kb else ORDINARY_WORKSPACE,
         )
         self.session.add(attempt)
         await self.session.commit()
@@ -295,7 +321,7 @@ class AnswerService:
                                           message.query_filter)
 
     async def _finish_attempt(
-        self, owner: UUID, conversation_id: UUID, kb: KnowledgeBase,
+        self, owner: UUID, conversation_id: UUID, kb: KnowledgeBase | None,
         message: ConversationMessage, attempt: AnswerAttempt,
         retriever: Retriever, answerer: Answerer, mode: str, exact: dict | None,
         on_preview: Callable[[UUID, str], Awaitable[None]] | None = None,
@@ -307,8 +333,8 @@ class AnswerService:
             nonlocal previewed
             current = await self.session.scalar(select(KnowledgeBase).where(
                 KnowledgeBase.id == kb.id, KnowledgeBase.owner_id == owner,
-            ).execution_options(populate_existing=True))
-            if (current is None or current.status != "ready"
+            ).execution_options(populate_existing=True)) if kb is not None else None
+            if (kb is None or current is None or current.status != "ready"
                 or current.revision != attempt.kb_revision
                 or current.active_workspace != attempt.workspace):
                 raise QueryError("kb_changed")
@@ -333,14 +359,22 @@ class AnswerService:
                     error_code = None
                     raise _ImageNeedsConfirmation
                 question = (f"{question}\n【当前提问的图片观察，非知识库原文或引用】\n"
-                            f"{observation[:2200]}")
+                            f"{observation}")
             context = await prepare_context(self.session, conversation_id, kb, answerer)
-            if mode == "auto" and exact is None:
+            if kb is not None:
+                shared = await shared_context(self.session, owner, kb)
+                if shared:
+                    context["shared_memory"] = shared
+            if kb is None:
+                exact = {"mode": "general"}
+            elif mode == "auto" and exact is None:
                 exact = await self._route_auto(kb, question, answerer, context)
+            if mode == "auto":
                 message.query_filter = exact
                 await self.session.commit()
             status, text, citations = await self._resolve(
-                kb.id, attempt.workspace, question, retriever, answerer, mode, exact, context,
+                kb.id if kb else None, attempt.workspace, question, retriever, answerer,
+                mode, exact, context,
                 preview if on_preview is not None else None,
             )
             error_code = None
@@ -378,8 +412,11 @@ class AnswerService:
             status, text, citations, error_code = (
                 "partial" if previewed else "failed", previewed, [], "answer_unavailable"
             )
-        current_kb = await self.session.scalar(select(KnowledgeBase).where(
+        current_kb = (await self.session.scalar(select(KnowledgeBase).where(
             KnowledgeBase.id == kb.id, KnowledgeBase.owner_id == owner,
+        ).with_for_update().execution_options(populate_existing=True)) if kb else None)
+        current_chat = await self.session.scalar(select(Conversation).where(
+            Conversation.id == conversation_id, Conversation.owner_id == owner,
         ).with_for_update().execution_options(populate_existing=True))
         current_attempt = await self.session.get(
             AnswerAttempt, attempt.id, with_for_update=True, populate_existing=True,
@@ -389,17 +426,21 @@ class AnswerService:
             for image in await self.images.for_message(message.id)
         )
         voice_cancelled = self.commit_allowed is not None and not self.commit_allowed()
-        if (current_kb is None or current_kb.status != "ready"
-            or current_kb.revision != attempt.kb_revision
-            or current_kb.active_workspace != attempt.workspace
+        binding_valid = ((kb is None and current_chat is not None and
+                          current_chat.kb_id is None and attempt.kb_revision == 0 and
+                          attempt.workspace == ORDINARY_WORKSPACE) or
+                         (kb is not None and current_chat is not None and
+                          current_chat.kb_id == kb.id and current_kb is not None and
+                          current_kb.status == "ready" and
+                          current_kb.revision == attempt.kb_revision and
+                          current_kb.active_workspace == attempt.workspace))
+        if (not binding_valid
             or current_attempt is None or current_attempt.status != "running"
             or voice_cancelled or image_expired):
             if current_attempt is None:
                 raise ServiceError(409, "answer_interrupted", "聊天已变化，本次回答未保存")
             current_attempt.status, current_attempt.text = "interrupted", None
-            cancelled_in_same_kb = (voice_cancelled and current_kb is not None
-                and current_kb.status == "ready" and current_kb.revision == attempt.kb_revision
-                and current_kb.active_workspace == attempt.workspace)
+            cancelled_in_same_kb = voice_cancelled and binding_valid
             code = ("image_expired" if image_expired else
                     "request_interrupted" if cancelled_in_same_kb else "kb_changed")
             current_attempt.citations, current_attempt.error_code = [], code
@@ -447,7 +488,7 @@ class AnswerService:
         return checked_route(await route_query(question, candidates), candidates, question)
 
     async def _resolve(
-        self, kb_id: UUID, workspace: str, question: str,
+        self, kb_id: UUID | None, workspace: str, question: str,
         retriever: Retriever, answerer: Answerer, mode: str, exact: dict | None,
         context: dict, on_preview: Callable[[str], Awaitable[None]] | None = None,
     ) -> tuple[str, str, list[dict]]:
@@ -458,7 +499,8 @@ class AnswerService:
                 general = getattr(answerer, "general_answer", None)
                 if general is None:
                     raise AnswerError("answer_unavailable")
-                raw = await general(route.get("query", question), ordinary_context(context))
+                raw = await general(route.get("query", question), ordinary_context(
+                    context, ordinary_chat=kb_id is None))
                 try:
                     data = json.loads(raw)
                     if (not isinstance(data, dict) or set(data) != {"text"}
@@ -485,6 +527,8 @@ class AnswerService:
                         "当前知识库不支持以检索片段计算全集统计；请缩小到具体资料或编号。", [])
             if routed_mode != "semantic":
                 raise AnswerError("answer_unverifiable")
+        if kb_id is None:
+            raise AnswerError("answer_unverifiable")
         if mode == "exact":
             return await self._resolve_exact(kb_id, question, exact or {}, answerer, context,
                                              on_preview)
@@ -528,6 +572,9 @@ class AnswerService:
         await self.session.commit()
         if not evidence:
             return "insufficient_evidence", "", []
+        evidence, citations = select_evidence(evidence, citations)
+        if not evidence:
+            return "needs_clarification", "原文片段过长，请缩小问题或定位范围。", []
         raw = await self._answer(answerer, question, evidence, context, on_preview)
         return await self._checked_result(answerer, raw, evidence, citations)
 
@@ -569,6 +616,9 @@ class AnswerService:
                 "excerpt": block.text,
             })
         await self.session.commit()
+        evidence, citations = select_evidence(evidence, citations)
+        if not evidence:
+            return "needs_clarification", "原文片段过长，请缩小问题或定位范围。", []
         raw = await self._answer(answerer, question, evidence, context, on_preview)
         return await self._checked_result(answerer, raw, evidence, citations)
 
@@ -620,6 +670,9 @@ class AnswerService:
                 "filename": document.filename, "locator": block.locator,
                 "excerpt": block.text,
             })
+        evidence, citations = select_evidence(evidence, citations)
+        if not evidence:
+            return "needs_clarification", "原文片段过长，请缩小问题或定位范围。", []
         raw = await self._answer(answerer, question, evidence, context, on_preview)
         return await self._checked_result(answerer, raw, evidence, citations)
 

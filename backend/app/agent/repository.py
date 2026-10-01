@@ -92,7 +92,13 @@ async def check_binding(session, run: AgentRun):
 
 
 async def fenced(session, run_id, generation, runner_id):
-    query = select(AgentRun).where(AgentRun.id == run_id).with_for_update()
+    # A locking SELECT must refresh an earlier identity-map read, including lease revocation.
+    query = (
+        select(AgentRun)
+        .where(AgentRun.id == run_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     run = await session.scalar(query)
     if (
         run is None

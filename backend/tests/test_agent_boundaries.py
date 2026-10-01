@@ -234,6 +234,43 @@ async def test_lost_lease_cancels_actual_model_task_and_charges_budget(environme
         await app.state.agent_runtime.close()
 
 
+@pytest.mark.parametrize("revocation", ["lease", "generation", "runner", "status"])
+async def test_fence_rechecks_database_after_run_was_preloaded(environment, revocation):  # noqa: F811
+    from app.agent.repository import fenced
+    from app.services.errors import ServiceError
+
+    api, database = environment
+    app, _, _, run, _ = await approval(api)
+    run_id = UUID(run["id"])
+    try:
+        async with database.sessions() as session:
+            row = await session.get(AgentRun, run_id, with_for_update=True)
+            row.status = "running"
+            row.lease_until = datetime.now(UTC) + timedelta(seconds=30)
+            row.runner_id = app.state.agent_runtime.id
+            await session.commit()
+        async with database.sessions() as reader:
+            cached = await reader.get(AgentRun, run_id)
+            generation, runner_id = cached.generation, cached.runner_id
+            assert cached.status == "running" and cached.lease_until > datetime.now(UTC)
+            async with database.sessions() as writer:
+                changed = await writer.get(AgentRun, run_id, with_for_update=True)
+                if revocation == "lease":
+                    changed.lease_until = datetime.now(UTC) - timedelta(seconds=1)
+                elif revocation == "generation":
+                    changed.generation += 1
+                elif revocation == "runner":
+                    changed.runner_id = uuid4()
+                else:
+                    changed.status = "cancelled"
+                await writer.commit()
+            with pytest.raises(ServiceError) as rejected:
+                await fenced(reader, run_id, generation, runner_id)
+            assert rejected.value.code == "agent_interrupted"
+    finally:
+        await app.state.agent_runtime.close()
+
+
 async def test_restart_charges_unjournaled_execution_interval(environment):  # noqa: F811
     from app.agent.repository import recover_running
 

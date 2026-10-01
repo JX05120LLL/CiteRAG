@@ -19,7 +19,7 @@ it('publishes one business state to React, does not mount native UI or start med
   expect(views.at(-1)?.state.loading).toBe(false);
   views.at(-1)!.actions.setDraft('待发送');
   expect(views.at(-1)?.state.chatDraft).toBe('待发送');
-  expect(calls).toEqual(['/api/knowledge-bases', '/api/conversations?limit=20&offset=0']);
+  expect(calls).toEqual(['/api/knowledge-bases', '/api/conversations?limit=20&offset=0', '/api/agent/capability']);
   dispose();
 });
 

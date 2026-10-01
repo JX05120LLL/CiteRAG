@@ -93,7 +93,7 @@ class ConversationService:
             raise ServiceError(404, "conversation_not_found", "聊天不存在或不可访问")
         if await self.session.scalar(select(AnswerAttempt.id).where(
             AnswerAttempt.conversation_id == conversation_id,
-            AnswerAttempt.status == "running",
+            AnswerAttempt.status.in_(("running", "waiting_input", "waiting_approval")),
         ).limit(1)):
             raise ServiceError(409, "answer_in_progress", "回答仍在处理中，请稍后归档")
         if await self.session.scalar(select(ToolCall.id).where(
@@ -123,7 +123,7 @@ class ConversationService:
             ).with_for_update())
         if await self.session.scalar(select(AnswerAttempt.id).where(
             AnswerAttempt.conversation_id == conversation_id,
-            AnswerAttempt.status == "running",
+            AnswerAttempt.status.in_(("running", "waiting_input", "waiting_approval")),
         ).limit(1)):
             raise ServiceError(409, "answer_in_progress", "回答仍在处理中，请稍后删除聊天")
         if await self.session.scalar(select(ToolCall.id).where(

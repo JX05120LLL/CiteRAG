@@ -389,6 +389,10 @@
   .citerag-app .voice-inline-caption { padding-left: 0; }
 }
 @media (max-width: 600px) {
+  .citerag-app .official-voice-stage .ant-card-body { padding: 18px 16px; }
+  .citerag-app .voice-meter { grid-column: 1 / -1; flex-wrap: wrap; gap: 12px; }
+  .citerag-app .official-voice-controls .ant-btn-lg { min-width: 0; width: 100%; }
+  .citerag-app .voice-source-button { height: auto; white-space: normal; overflow-wrap: anywhere; }
   .citerag-app .voice-dialogue { padding: 15px; }
   .citerag-app .voice-user-row, .citerag-app .voice-assistant-row { grid-template-columns: 34px minmax(0,1fr); gap: 8px; }
   .citerag-app .voice-user-avatar, .citerag-app .voice-assistant-avatar { width: 32px; height: 32px; }
@@ -422,3 +426,9 @@
   .citerag-app .job-row .job-stage, .citerag-app .job-row time { display: none; }
   .citerag-app .status-capabilities { grid-template-columns: 1fr; }
 }
+.agent-task { border: 1px solid var(--ant-color-border, #dededb); border-radius: 12px; padding: 16px; margin-block: 10px; min-width: 0; }
+.agent-arguments { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 180px; overflow: auto; }
+.agent-inputs { display: grid; gap: 10px; }
+.agent-inputs label { display: grid; gap: 4px; }
+.agent-tasks { min-width: 0; overflow-wrap: anywhere; }
+.agent-tasks details { margin-block: 8px; }

@@ -20,6 +20,7 @@ export interface RenameKnowledgeDraft extends KnowledgeDraft {
 
 export interface AppState {
   navigationOpen?: boolean;
+  agentEnabled?: boolean;
   selectedCitation?: { messageId: string; evidenceId: string } | null;
   bases: KnowledgeBase[] | null;
   chats: Conversation[] | null;

@@ -6,18 +6,20 @@ an arbitrary URL, command, path or process.
 """
 
 import asyncio
+import hashlib
 import json
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Conversation, Document, KnowledgeBase, ToolCall
+from app.models import AgentRun, AnswerAttempt, Conversation, Document, KnowledgeBase, ToolCall
 from app.services.conversation_retention import active_conversation
 from app.services.errors import ServiceError
+from app.tools.contracts import arguments_fingerprint, normalize_mcp_result  # noqa: F401
 
 
 @dataclass(frozen=True)
@@ -38,6 +40,32 @@ class ToolDefinition:
     impact: str
     validate: Callable[[dict], dict | None]
     run: Callable[[AsyncSession, ToolContext, dict], Awaitable[dict]]
+    version: str = "1"
+    input_schema: dict = field(default_factory=lambda: {
+        "type": "object", "properties": {}, "additionalProperties": False,
+    })
+    effect: str = "read_only"
+    timeout_seconds: float = 15
+    backend: str = "local"
+    destination: str = "local"
+
+    def __post_init__(self):
+        if (not self.version or len(self.version) > 80
+            or self.scope not in {"any", "knowledge"}
+            or self.effect not in {"read_only", "write"}
+            or self.backend not in {"local", "mcp"}
+            or not 0 < self.timeout_seconds <= 15
+            or self.effect == "write" and not self.approval_required):
+            raise ValueError("Invalid reviewed tool policy")
+
+    @property
+    def policy_hash(self) -> str:
+        value = {"id": self.id, "version": self.version, "scope": self.scope,
+                 "effect": self.effect, "approval": self.approval_required,
+                 "impact": self.impact, "destination": self.destination,
+                 "backend": self.backend, "schema": self.input_schema}
+        return hashlib.sha256(json.dumps(value, sort_keys=True, allow_nan=False,
+                                          ensure_ascii=False).encode()).hexdigest()
 
 
 def _no_arguments(arguments: dict) -> dict | None:
@@ -76,7 +104,9 @@ def call_view(call: ToolCall) -> dict:
             "impact": call.impact, "status": call.status, "result": call.result,
             "error_code": call.error_code, "created_at": call.created_at,
             "approved_at": call.approved_at, "finished_at": call.finished_at,
-            "source_type": "tool"}
+            "source_type": "tool", "run_id": call.run_id, "step_id": call.step_id,
+            "tool_version": call.tool_version, "arguments_hash": call.arguments_hash,
+            "effect": call.effect}
 
 
 class ToolGateway:
@@ -115,7 +145,10 @@ class ToolGateway:
         if conversation.archived_at is not None:
             raise ServiceError(409, "conversation_archived", "聊天已归档")
         return [{"id": spec.id, "title": spec.title, "scope": spec.scope,
-                 "approval_required": spec.approval_required, "impact": spec.impact}
+                 "approval_required": spec.approval_required, "impact": spec.impact,
+                 "version": spec.version, "input_schema": spec.input_schema,
+                 "effect": spec.effect, "backend": spec.backend,
+                 "destination": spec.destination}
                 for spec in self.registry.values()
                 if (spec.scope == "any" or
                     spec.scope == "knowledge" and kb is not None and kb.status == "ready")]
@@ -128,7 +161,8 @@ class ToolGateway:
         return [call_view(call) for call in calls]
 
     async def invoke(self, owner: UUID, conversation_id: UUID, request_id: UUID,
-                     tool_id: str, arguments: dict) -> dict:
+                     tool_id: str, arguments: dict, *, run_id: UUID | None = None,
+                     step_id: UUID | None = None, defer_execution: bool = False) -> dict:
         conversation, kb = await self._conversation(owner, conversation_id, lock=True)
         if conversation.archived_at is not None:
             raise ServiceError(409, "conversation_archived", "聊天已归档")
@@ -136,14 +170,35 @@ class ToolGateway:
             ToolCall.conversation_id == conversation_id, ToolCall.request_id == request_id,
         ))
         if existing is not None:
-            if existing.tool_id != tool_id or existing.arguments != arguments:
+            if (existing.tool_id != tool_id or existing.arguments != arguments
+                or existing.run_id != run_id):
                 raise ServiceError(409, "idempotency_conflict", "同一工具请求不能更换工具或参数")
             return call_view(existing)
         spec = self.registry.get(tool_id)
         self._check_spec(spec, kb)
         validated = spec.validate(arguments)
-        if validated is None or len(json.dumps(validated, ensure_ascii=False)) > 2048:
-            raise ServiceError(422, "tool_arguments_invalid", "工具参数不符合要求")
+        try:
+            fingerprint = arguments_fingerprint(validated)
+        except (TypeError, ValueError):
+            raise ServiceError(422, "tool_arguments_invalid", "工具参数不符合要求") from None
+        active_run = await self.session.scalar(select(AgentRun).where(
+            AgentRun.conversation_id == conversation_id,
+            AgentRun.status.in_(("running", "waiting_input", "waiting_approval")),
+        ).limit(1))
+        if active_run is not None and active_run.id != run_id:
+            raise ServiceError(409, "agent_in_progress", "请先结束当前任务")
+        if run_id is not None and (active_run is None or active_run.owner_id != owner):
+            raise ServiceError(409, "agent_interrupted", "任务已失效")
+        if run_id is None and await self.session.scalar(select(AnswerAttempt.id).where(
+            AnswerAttempt.conversation_id == conversation_id,
+            AnswerAttempt.status.in_(("running", "waiting_input", "waiting_approval")),
+        ).limit(1)):
+            raise ServiceError(409, "answer_in_progress", "当前聊天已有回答或等待任务")
+        if spec.effect == "write" and await self.session.scalar(select(ToolCall.id).where(
+            ToolCall.owner_id == owner, ToolCall.tool_id == tool_id,
+            ToolCall.status == "unknown",
+        ).limit(1)):
+            raise ServiceError(409, "tool_result_unknown", "先核查此前写入结果，不能重复执行")
         if await self.session.scalar(select(ToolCall.id).where(
             ToolCall.conversation_id == conversation_id,
             ToolCall.status.in_(("pending_approval", "running")),
@@ -156,10 +211,12 @@ class ToolGateway:
                         request_id=request_id, kb_id=context.kb_id,
                         kb_revision=context.kb_revision, workspace=context.workspace,
                         tool_id=tool_id, arguments=validated, impact=spec.impact,
+                        run_id=run_id, step_id=step_id, tool_version=spec.version,
+                        arguments_hash=fingerprint, effect=spec.effect,
                         status="pending_approval" if spec.approval_required else "running")
         self.session.add(call)
         await self.session.commit()
-        if spec.approval_required:
+        if spec.approval_required or defer_execution:
             return call_view(call)
         return await self._execute(call, spec, context)
 
@@ -172,6 +229,8 @@ class ToolGateway:
         ).with_for_update())
         if call is None:
             raise ServiceError(404, "tool_call_not_found", "工具调用不存在或不可访问")
+        if call.run_id is not None:
+            raise ServiceError(409, "agent_decision_required", "请通过所属任务审批并继续")
         if call.status != "pending_approval":
             raise ServiceError(409, "tool_decision_closed", "此工具调用已结束或正在执行")
         if not approve:
@@ -181,9 +240,11 @@ class ToolGateway:
         if conversation.archived_at is not None:
             raise ServiceError(409, "conversation_archived", "聊天已归档")
         spec = self.registry.get(call.tool_id)
-        if spec is None or call.kb_id != conversation.kb_id or (kb is not None and
+        if (spec is None or call.tool_version not in {None, spec.version}
+            or call.arguments_hash not in {None, arguments_fingerprint(call.arguments)}
+            or call.kb_id != conversation.kb_id or (kb is not None and
             (kb.status != "ready" and spec.scope == "knowledge" or
-             (call.kb_revision, call.workspace) != (kb.revision, kb.active_workspace))):
+             (call.kb_revision, call.workspace) != (kb.revision, kb.active_workspace)))):
             call.status = "failed"
             call.error_code = "tool_scope_changed" if spec is not None else "tool_unavailable"
             call.finished_at = datetime.now(UTC)
@@ -200,8 +261,10 @@ class ToolGateway:
                        context: ToolContext) -> dict:
         call_id = call.id
         try:
-            result = await spec.run(self.session, context, call.arguments)
-            if not isinstance(result, dict) or len(json.dumps(result, ensure_ascii=False)) > 16000:
+            async with asyncio.timeout(spec.timeout_seconds):
+                result = await spec.run(self.session, context, call.arguments)
+            if (not isinstance(result, dict)
+                or len(json.dumps(result, ensure_ascii=False, allow_nan=False)) > 16000):
                 raise ValueError("Tool result shape or size is invalid")
             if spec.scope == "knowledge":
                 kb = await self.session.scalar(select(KnowledgeBase).where(
@@ -215,18 +278,28 @@ class ToolGateway:
         except asyncio.CancelledError:
             await self.session.rollback()
             call = await self.session.get(ToolCall, call_id)
-            call.status, call.error_code = "interrupted", "tool_interrupted"
+            call.status = "unknown" if spec.effect == "write" else "interrupted"
+            call.error_code = (
+                "tool_result_unknown" if spec.effect == "write" else "tool_interrupted")
             call.finished_at = datetime.now(UTC)
             await self.session.commit()
             raise
+        except TimeoutError:
+            await self.session.rollback()
+            call = await self.session.get(ToolCall, call_id)
+            call.status = "unknown" if spec.effect == "write" else "failed"
+            call.error_code = "tool_result_unknown" if spec.effect == "write" else "tool_timeout"
         except ServiceError as error:
             await self.session.rollback()
             call = await self.session.get(ToolCall, call_id)
-            call.status, call.error_code = "failed", error.code
+            call.status = "unknown" if spec.effect == "write" else "failed"
+            call.error_code = "tool_result_unknown" if spec.effect == "write" else error.code
         except Exception:
             await self.session.rollback()
             call = await self.session.get(ToolCall, call_id)
-            call.status, call.error_code = "failed", "tool_execution_failed"
+            call.status = "unknown" if spec.effect == "write" else "failed"
+            call.error_code = (
+                "tool_result_unknown" if spec.effect == "write" else "tool_execution_failed")
         call.finished_at = datetime.now(UTC)
         await self.session.commit()
         return call_view(call)

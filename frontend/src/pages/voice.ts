@@ -24,8 +24,9 @@ export interface VoiceActions {
   hangup: () => void;
   microphone: () => void;
   output: () => void;
-  stop?: () => void;
+  stop?: () => void | Promise<void>;
   correct?: (text: string) => Promise<void>;
+  resumeAgent?: (input: Record<string, unknown>) => Promise<void>;
   originalUrl?: (id: string) => string;
   back: () => void | Promise<void>;
   status: () => void | Promise<void>;

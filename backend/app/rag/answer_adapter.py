@@ -78,6 +78,15 @@ class LightRAGAnswerAdapter:
         except Exception:
             raise AnswerError("answer_unavailable") from None
 
+    async def agent_decision(self, question, evidence, context, tools, results, general):
+        try:
+            return await self.runtime.complete_agent(question, evidence, context,
+                                                      tools, results, general)
+        except ProviderError as error:
+            raise _provider_answer_error(error) from None
+        except TokenBudgetExceeded:
+            raise AnswerError("answer_budget_exceeded") from None
+
     async def stream_general(self, question: str, context: dict) -> AsyncIterator[str]:
         try:
             async for piece in self.runtime.stream_general(question, context):

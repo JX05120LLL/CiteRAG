@@ -8,9 +8,11 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from sqlalchemy import select, update
+from sqlalchemy import case, select, update
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.api.agent import capability_router as agent_capability_router
+from app.api.agent import router as agent_router
 from app.api.answers import router as answers_router
 from app.api.boundaries import require_local_request
 from app.api.documents import router as documents_router
@@ -111,9 +113,19 @@ def create_app(
                              finished_at=datetime.now(UTC)))
                     await session.execute(update(ToolCall).where(
                         ToolCall.status == "running",
-                    ).values(status="interrupted", error_code="server_restarted",
+                    ).values(status=case((ToolCall.effect == "write", "unknown"),
+                                         else_="interrupted"), error_code="server_restarted",
                              finished_at=datetime.now(UTC)))
+                    from app.agent.repository import recover_running
+                    await recover_running(session)
                     await session.commit()
+                if settings.agent_enabled:
+                    from app.agent.checkpoints import checkpoint_store
+                    from app.agent.runner import AgentRunner
+                    saver = await stack.enter_async_context(checkpoint_store(db))
+                    application.state.agent_runtime = AgentRunner(application, saver)
+                    stack.push_async_callback(application.state.agent_runtime.close)
+                    await application.state.agent_runtime.start_monitor()
                 retention = RetentionRunner(db, application.state.owner.assert_owned,
                                             application.state.backup_gate,
                                             application.state.image_store)
@@ -150,9 +162,15 @@ def create_app(
     application.state.backup_gate = BackupGate()
     application.state.backup_runner = None
     application.state.answer_enabled = settings.answer_enabled
+    application.state.agent_enabled = settings.agent_enabled
+    application.state.agent_runtime = None
     application.state.query_adapter = None
     application.state.answer_adapter = None
     application.state.tool_registry = built_in_tools()
+    if settings.mcp_enabled:
+        from app.tools.mcp import load_reviewed_registry
+        application.state.tool_registry.update(load_reviewed_registry(
+            LOCAL_RUNTIME_ROOT / "tools" / "registry.json"))
     application.state.voice_runtime = VoiceRuntime(application)
 
     @application.middleware("http")
@@ -171,6 +189,8 @@ def create_app(
             response = await call_next(request)
             if admitted:
                 await application.state.voice_runtime.reconcile()
+                if application.state.agent_runtime is not None:
+                    await application.state.agent_runtime.reconcile()
             if owner is not None:
                 owner.assert_owned()
         except OwnerLost:
@@ -218,6 +238,8 @@ def create_app(
     application.include_router(documents_router)
     application.include_router(images_router)
     application.include_router(answers_router)
+    application.include_router(agent_router)
+    application.include_router(agent_capability_router)
     application.include_router(tools_router)
     application.include_router(voice_router)
     return application

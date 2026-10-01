@@ -50,6 +50,13 @@ jobs:
               "backend/tests/test_m3_image_provider.py",
               "backend/tests/test_conversation_modes.py",
               "backend/tests/test_tool_gateway.py",
+              "backend/tests/test_agent_contracts.py",
+              "backend/tests/test_agent_graph.py",
+              "backend/tests/test_agent_api.py",
+              "backend/tests/test_agent_boundaries.py",
+              "backend/tests/test_agent_knowledge.py",
+              "backend/tests/test_agent_mcp.py",
+              "backend/tests/test_agent_persistence.py",
               "frontend/src/api/client.test.ts",
               "frontend/src/api/stream.test.ts",
               "frontend/src/app.test.ts",
@@ -62,6 +69,7 @@ jobs:
               "frontend/src/preview/app.test.tsx",
               "frontend/src/react/controller.test.ts",
               "frontend/src/react/app.test.tsx",
+              "frontend/src/react/AgentTasks.test.tsx",
           }
           private_names = (
               ".env", ".env.*", "*.pem", "*.key", "*.p12", "*.pfx",
@@ -170,18 +178,18 @@ jobs:
           enable-cache: true
           cache-dependency-glob: backend/uv.lock
       - name: Install locked dependencies
-        run: uv sync --locked --extra rag --extra voice
+        run: uv sync --locked --extra rag --extra voice --extra agent --extra mcp
       - name: Lint and compile
         run: |
-          uv run --locked --extra rag --extra voice --no-env-file ruff check app migrations tests/test_postgres_local.py tests/test_ingestion_jobs.py tests/test_ingestion_lifecycle.py tests/test_query_routing.py tests/test_m13_exact_api.py tests/test_m13_answer_api.py tests/test_m1_stream.py tests/test_m14_lifecycle.py tests/test_voice_transport.py tests/test_m2_voice.py tests/test_voice_latency.py tests/test_m3_image_storage.py tests/test_m3_images_api.py tests/test_m3_image_provider.py tests/test_conversation_modes.py tests/test_tool_gateway.py
-          uv run --locked --extra rag --extra voice --no-env-file python -m compileall -q app migrations
+          uv run --locked --extra rag --extra voice --extra agent --extra mcp --no-env-file ruff check app migrations tests/test_postgres_local.py tests/test_ingestion_jobs.py tests/test_ingestion_lifecycle.py tests/test_query_routing.py tests/test_m13_exact_api.py tests/test_m13_answer_api.py tests/test_m1_stream.py tests/test_m14_lifecycle.py tests/test_voice_transport.py tests/test_m2_voice.py tests/test_voice_latency.py tests/test_m3_image_storage.py tests/test_m3_images_api.py tests/test_m3_image_provider.py tests/test_conversation_modes.py tests/test_tool_gateway.py tests/test_agent_contracts.py tests/test_agent_graph.py tests/test_agent_api.py tests/test_agent_boundaries.py tests/test_agent_knowledge.py tests/test_agent_mcp.py tests/test_agent_persistence.py
+          uv run --locked --extra rag --extra voice --extra agent --extra mcp --no-env-file python -m compileall -q app migrations
       - name: Public PostgreSQL and routing regressions
-        run: uv run --locked --extra rag --extra voice --no-env-file pytest -q tests/test_postgres_local.py tests/test_ingestion_jobs.py tests/test_ingestion_lifecycle.py tests/test_query_routing.py tests/test_m13_exact_api.py tests/test_m13_answer_api.py tests/test_m1_stream.py tests/test_m14_lifecycle.py tests/test_voice_transport.py tests/test_m2_voice.py tests/test_voice_latency.py tests/test_m3_image_storage.py tests/test_m3_images_api.py tests/test_m3_image_provider.py tests/test_conversation_modes.py tests/test_tool_gateway.py
+        run: uv run --locked --extra rag --extra voice --extra agent --extra mcp --no-env-file pytest -q tests/test_postgres_local.py tests/test_ingestion_jobs.py tests/test_ingestion_lifecycle.py tests/test_query_routing.py tests/test_m13_exact_api.py tests/test_m13_answer_api.py tests/test_m1_stream.py tests/test_m14_lifecycle.py tests/test_voice_transport.py tests/test_m2_voice.py tests/test_voice_latency.py tests/test_m3_image_storage.py tests/test_m3_images_api.py tests/test_m3_image_provider.py tests/test_conversation_modes.py tests/test_tool_gateway.py tests/test_agent_contracts.py tests/test_agent_graph.py tests/test_agent_api.py tests/test_agent_boundaries.py tests/test_agent_knowledge.py tests/test_agent_mcp.py tests/test_agent_persistence.py
       - name: Generate migration SQL
-        run: uv run --locked --extra rag --extra voice --no-env-file alembic upgrade head --sql > "$RUNNER_TEMP/citerag-migration.sql"
+        run: uv run --locked --extra rag --extra voice --extra agent --extra mcp --no-env-file alembic upgrade head --sql > "$RUNNER_TEMP/citerag-migration.sql"
       - name: Migrate and verify local API behavior
         run: |
-          uv run --locked --extra rag --extra voice --no-env-file python <<'PY'
+          uv run --locked --extra rag --extra voice --extra agent --extra mcp --no-env-file python <<'PY'
           import asyncio
           import os
           import subprocess

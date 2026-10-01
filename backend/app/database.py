@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async
 
 from app.config import Settings
 
-EXPECTED_SCHEMA_REVISION = "0011_tool_gateway"
+EXPECTED_SCHEMA_REVISION = "0012_agent_runs"
 
 
 class Database:

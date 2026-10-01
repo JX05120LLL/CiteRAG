@@ -133,7 +133,8 @@ class VoiceRuntime:
                                "本地房间回收未通过，请检查 LiveKit 后重启 API")
         binding = await self.binding(session, owner, conversation, lock=True)
         active = await session.scalar(select(AnswerAttempt.id).where(
-            AnswerAttempt.conversation_id == conversation, AnswerAttempt.status == "running",
+            AnswerAttempt.conversation_id == conversation,
+            AnswerAttempt.status.in_(("running", "waiting_input", "waiting_approval")),
         ).limit(1))
         if active:
             raise ServiceError(409, "answer_running", "请先结束当前回答")
@@ -168,6 +169,8 @@ class VoiceRuntime:
 
     async def answer(self, call, request_id, text, generation, on_general_segment=None):
         await self.check(call, generation)
+        if self.app.state.agent_enabled and self.app.state.agent_runtime is not None:
+            return await self.agent_answer(call, request_id, text, generation)
         gate = self.app.state.backup_gate
         await gate.enter()
         try:
@@ -190,6 +193,40 @@ class VoiceRuntime:
             return result
         finally:
             await gate.leave()
+
+    async def agent_answer(self, call, request_id, text, generation):
+        """Final transcripts share the durable runner; approval is never inferred from ASR."""
+        runner = self.app.state.agent_runtime
+        run = await runner.start(call.binding.owner, call.binding.conversation,
+                                 request_id, text, voice=call, voice_generation=generation)
+        run_id, last_seq = run["id"], -1
+        try:
+            while True:
+                await self.check(call, generation)
+                state = await runner.get(call.binding.owner, call.binding.conversation, run_id)
+                if state["seq"] != last_seq:
+                    last_seq = state["seq"]
+                    self.registry.emit(call, "agent", run=state)
+                    if state["status"] in {"waiting_input", "waiting_approval"}:
+                        call.phase = state["status"]
+                        self.registry.emit(call, "phase", phase=call.phase)
+                    elif state["status"] == "running" and call.phase != "generating":
+                        call.phase = "generating"
+                        self.registry.emit(call, "phase", phase=call.phase)
+                if state["status"] not in {"running", "waiting_input", "waiting_approval"}:
+                    async with self.app.state.database.sessions() as session:
+                        from app.models import ConversationMessage
+                        message = await session.get(ConversationMessage, state["message_id"])
+                        attempt = await session.get(AnswerAttempt, state["attempt_id"])
+                        view = await AnswerService(session)._view(message, attempt)
+                    await self.check(call, generation)
+                    return view
+                await asyncio.sleep(0.1)
+        except (asyncio.CancelledError, ServiceError):
+            # Stop real model/tool work in addition to VoiceSessions' audio flush.
+            await runner.cancel(call.binding.owner, call.binding.conversation, run_id,
+                                code="voice_interrupted", internal=True)
+            raise
 
     async def reconcile(self):
         for call in list(self.registry.calls.values()):

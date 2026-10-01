@@ -9,6 +9,7 @@ import { locationText } from '../pages/sources';
 import { displayCitations } from '../preview/model';
 import { StateTag } from '../preview/shared';
 import { answerRouteLabel } from './answerRoute';
+import { AgentTasks } from './AgentTasks';
 import logo from '../../../assets/brand/mark.svg';
 
 const messageTime = (value: string) => new Date(value).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
@@ -128,13 +129,18 @@ export function Workbench({ view, api }: { view: AppView; api: ApiClient }) {
         <Button size="small" onClick={() => setToolOpen(true)}>工具与调用记录</Button></Space>
     </div>}
     {s.chatError && <Alert showIcon type="error" title={s.chatError.message} />}
+    {s.agentEnabled && s.selectedChatId && <AgentTasks key={s.selectedChatId} chatId={s.selectedChatId}
+      api={api} changed={a.refreshAgentMessages} />}
     <div className="message-scroll" aria-live="polite" aria-busy={busy}>
       {!s.chatMessages.length && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={s.selectedChatId ? s.selectedKbId === null ? '直接提问；本聊天不会检索知识库' : '直接提问，自动区分交流与资料查询' : '新建普通聊天或选择知识库聊天'} />}
       {s.chatMessages.map((m) => {
         const readable = !m.hidden && !m.stale && (m.route === 'general' || m.route === 'chat' || base?.status === 'ready');
         const cited = base?.status === 'ready' && displayCitations(m).length > 0;
         const streaming = m.status === 'running' && s.chatStreamAttemptId === m.attempt_id;
-        const content = !readable ? '知识库已变化，此回答与来源已暂停展示。' : m.status === 'running' || !m.saved ? '正在生成并核验，正文提交后再展示。'
+        const content = !readable ? '知识库已变化，此回答与来源已暂停展示。'
+          : m.phase === 'waiting_approval' ? '等待你核对并审批工具操作，本轮回答尚未完成。'
+            : m.phase === 'waiting_input' ? '等待你补充参数，本轮回答尚未完成。'
+              : m.status === 'running' || !m.saved ? '正在生成并核验，正文提交后再展示。'
           : ['failed', 'interrupted'].includes(m.status) ? answerFailure(m.error_code)
             : m.status === 'insufficient_evidence' ? '当前知识库没有足够的可核查证据，暂不作答。'
               : m.status === 'needs_clarification' ? m.text || '请补充查询对象或范围。'
@@ -173,7 +179,8 @@ export function Workbench({ view, api }: { view: AppView; api: ApiClient }) {
           onClick={() => a.selectChatImages(s.chatImages.filter((_, item) => item !== index))}>移除</Button></span>)}</div>}
       <Sender value={s.chatDraft} onChange={(value) => a.setDraft(value.slice(0, 1000))} onSubmit={() => { if (enabled && s.chatDraft.trim()) void a.sendChat(); }}
       disabled={!enabled} loading={busy} autoSize={{ minRows: 2, maxRows: 6 }}
-      placeholder={enabled ? s.selectedKbId === null ? '输入问题，直接使用普通回答' : '输入问题，自动识别普通交流或知识库查询' : '先新建或打开聊天'}
+      placeholder={enabled ? s.selectedKbId === null ? '输入问题，直接使用普通回答' : '输入问题，自动识别普通交流或知识库查询'
+        : busy && s.selectedChatId ? '当前任务未结束，请先补充、审批或取消' : '先新建或打开聊天'}
       suffix={false} footer={<div className="composer-controls"><Space wrap><Tooltip title="每条问题最多 2 张 PNG/JPEG，每张 10 MiB"><Button icon={<PictureOutlined />}
         disabled={!enabled} onClick={() => imageInput.current?.click()}>添加图片</Button></Tooltip>
         <span className="composer-kb"><BookOutlined />{s.selectedKbId === null ? '普通聊天' : base?.name || '未选择知识库'}</span></Space>
@@ -210,21 +217,24 @@ export function Workbench({ view, api }: { view: AppView; api: ApiClient }) {
       {!!s.selectedChatId && !memorySources.length && <p className="muted">本聊天暂无可作为来源的已完成纯文字提问。</p>}
     </Drawer>
     <Drawer title="工具与调用记录" open={toolOpen && !!s.selectedChatId} onClose={() => setToolOpen(false)} size={460} destroyOnHidden>
-      <p className="muted">工具调用由服务端检查聊天范围，结果单独记录，不作为知识库引用。当前只提供本机只读工具；历史结果只反映调用当时的状态。</p>
+      <p className="muted">工具调用由服务端检查聊天范围，结果单独记录，不作为知识库引用。仅显示已登记工具；历史结果只反映调用当时的状态。</p>
       {toolError && <Alert type="error" showIcon title={toolError} />}
       <h3>可用工具</h3>
       {visibleTools.map((tool) => <div key={tool.id} className="tool-entry"><strong>{tool.title}</strong>
-        <p className="muted">{tool.impact}</p><Button size="small" aria-label={`调用工具：${tool.title}`} disabled={toolBusy || busy}
+        <p className="muted">{tool.impact}</p>
+        {!!tool.input_schema?.required?.length && <p className="muted">此工具需要参数；手动入口尚未接入参数输入，可通过已启用的自动任务补参。</p>}
+        <Button size="small" aria-label={`调用工具：${tool.title}`} disabled={toolBusy || busy || !!tool.input_schema?.required?.length}
           onClick={() => void runTool(tool.id)}>调用工具</Button></div>)}
       {!visibleTools.length && <p className="muted">当前聊天暂无可用工具。</p>}
       <h3>最近调用</h3>
       {visibleToolCalls.map((call) => <div key={call.id} className="tool-entry"><strong>{call.tool_id}</strong>
         <Tag>{({ pending_approval: '待确认', running: '执行中', succeeded: '已完成', failed: '失败',
-          rejected: '已拒绝', interrupted: '已中断' } as const)[call.status]}</Tag>
+          rejected: '已拒绝', interrupted: '已中断', unknown: '结果未知，禁止自动重试' } as const)[call.status]}</Tag>
         <p className="muted">{call.impact} · <time dateTime={call.created_at}>{new Date(call.created_at).toLocaleString('zh-CN')}</time></p>
         {call.status === 'succeeded' && <ToolResult call={call} />}
         {call.error_code && <p className="failure-reason">错误代码：{call.error_code}</p>}
-        {call.status === 'pending_approval' && <div><p>待确认参数：{JSON.stringify(call.arguments)}</p>
+        {call.status === 'pending_approval' && call.run_id && <p>此调用由任务执行器管理，请使用任务审批卡片。</p>}
+        {call.status === 'pending_approval' && !call.run_id && <div><p>待确认参数：{JSON.stringify(call.arguments)}</p>
           <Space><Popconfirm title="确认按所示参数执行？" description={call.impact}
             onConfirm={() => void decideTool(call.id, true)}><Button size="small" type="primary" disabled={toolBusy}>确认执行</Button></Popconfirm>
             <Button size="small" disabled={toolBusy} onClick={() => void decideTool(call.id, false)}>拒绝</Button></Space></div>}

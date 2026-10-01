@@ -8,6 +8,7 @@ import { answerRouteLabel } from './answerRoute';
 import { locationText } from '../pages/sources';
 import { answerFailure } from '../pages/workbench';
 import logo from '../../../assets/brand/mark.svg';
+import { AgentTaskCard } from './AgentTasks';
 
 // React adaptation of LiveKit's MIT welcome-view and agent-session-view-01.
 // Source pinned in vendor/livekit/README.md. Media remains owned by VoiceController.
@@ -56,7 +57,8 @@ export function Voice({ context, actions, levels = [], readOnly = false }: {
   const [correction, setCorrection] = useState('');
   const assistant = actions.capability?.purpose === 'voice_assistant';
   const phaseLabels: Record<string, string> = { starting: '等待助手就绪', listening: '助手就绪，等待说话',
-    recognizing: '正在识别', generating: '正在生成并核验', speaking: '正在发送播报音频', ended: '助手已停止', not_configured: '助手未配置' };
+    recognizing: '正在识别', generating: '正在生成并核验', speaking: '正在发送播报音频', ended: '助手已停止', not_configured: '助手未配置',
+    waiting_input: '任务等待补充，请在页面填写', waiting_approval: '任务等待审批，请核对操作后点击' };
   const selected = media.answers?.find((answer) => answer.message_id === source?.message);
   const citation = selected && displayCitations(selected).find((item) => item.evidence_id === source?.evidence);
   const active = ['connecting', 'connected', 'reconnecting', 'ending'].includes(media.phase);
@@ -119,6 +121,10 @@ export function Voice({ context, actions, levels = [], readOnly = false }: {
     </Card>
     {(assistant || answers.length > 0) && <section className="voice-dialogue" aria-label="当前对话的语音字幕与已保存回答">
       {assistant && active && <p className="voice-caption-note muted">{media.subtitle && media.subtitle === media.finalTranscript ? '最终转写，保存后进入当前对话' : '临时字幕，尚未保存为问题'}</p>}
+      {media.agentRun && <AgentTaskCard key={`${media.agentRun.id}:${media.agentRun.generation}`} run={media.agentRun}
+        voiceControl={!readOnly && !!actions.resumeAgent && active}
+        resume={async (input) => { await actions.resumeAgent?.(input); }}
+        cancel={async () => { await actions.stop?.(); }} />}
       <h2 className="voice-record-heading">当前对话记录</h2>
       {answers.length > 3 && <details className="voice-history"><summary>早前记录（{answers.length - 3} 条）</summary>
         <div className="voice-dialogue">{answers.slice(0, -3).map(answerCard)}</div></details>}

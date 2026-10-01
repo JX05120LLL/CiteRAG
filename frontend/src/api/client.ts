@@ -40,7 +40,7 @@ export interface VoiceEvent {
   session_id: string;
   seq: number;
   generation: number;
-  type: 'ready' | 'phase' | 'transcript' | 'speech_text' | 'timing' | 'answer' | 'error' | 'interrupted' | 'ended' | 'playout_drained';
+  type: 'ready' | 'phase' | 'transcript' | 'speech_text' | 'timing' | 'answer' | 'error' | 'interrupted' | 'ended' | 'playout_drained' | 'agent';
   phase?: string;
   text?: string;
   metric?: 'first_text' | 'first_audio_sent';
@@ -51,11 +51,33 @@ export interface VoiceEvent {
   answer?: ChatMessage;
   code?: string;
   reason?: string;
+  run?: AgentRun;
 }
 const voiceEventTypes: Record<VoiceEvent['type'], true> = {
   ready: true, phase: true, transcript: true, speech_text: true, timing: true,
-  answer: true, error: true, interrupted: true, ended: true, playout_drained: true,
+  answer: true, error: true, interrupted: true, ended: true, playout_drained: true, agent: true,
 };
+
+export interface AgentRun {
+  id: string; conversation_id: string; message_id: string; attempt_id: string;
+  status: 'running' | 'waiting_input' | 'waiting_approval' | 'completed' | 'failed' | 'cancelled' | 'interrupted' | 'expired';
+  generation: number; seq: number; model_rounds: number; tool_attempts: number;
+  active_ms: number; error_code: string | null; voice_session_id: string | null;
+  created_at: string; finished_at: string | null;
+  waiting: { kind: 'input' | 'approval'; prompt?: string; fields?: Record<string, string>;
+    call_id?: string; tool_id?: string; tool_version?: string; arguments?: Record<string, unknown>;
+    impact?: string; destination?: string; policy_hash?: string } | null;
+}
+
+function agentRun(value: unknown, chatId: string): AgentRun {
+  if (!isRecord(value) || value.conversation_id !== chatId ||
+    !['id', 'message_id', 'attempt_id', 'created_at'].every((key) => typeof value[key] === 'string') ||
+    !['running', 'waiting_input', 'waiting_approval', 'completed', 'failed', 'cancelled', 'interrupted', 'expired'].includes(String(value.status)) ||
+    !['generation', 'seq', 'model_rounds', 'tool_attempts', 'active_ms'].every((key) => Number.isSafeInteger(value[key]) && Number(value[key]) >= 0) ||
+    (value.waiting !== null && (!isRecord(value.waiting) || !['input', 'approval'].includes(String(value.waiting.kind)))))
+    throw new ApiError('invalid-response');
+  return value as unknown as AgentRun;
+}
 
 function localVoiceUrl(value: unknown): value is string {
   if (typeof value !== 'string') return false;
@@ -77,6 +99,7 @@ export interface Citation {
 }
 
 export interface ChatMessage {
+  phase?: 'waiting_input' | 'waiting_approval';
   message_id: string;
   attempt_id: string;
   client_message_id: string;
@@ -113,6 +136,7 @@ export interface ToolInfo {
   scope: 'any' | 'knowledge';
   approval_required: boolean;
   impact: string;
+  input_schema?: { required?: string[] };
 }
 
 export interface ToolCallRecord {
@@ -123,7 +147,8 @@ export interface ToolCallRecord {
   tool_id: string;
   arguments: Record<string, unknown>;
   impact: string;
-  status: 'pending_approval' | 'running' | 'succeeded' | 'failed' | 'rejected' | 'interrupted';
+  status: 'pending_approval' | 'running' | 'succeeded' | 'failed' | 'rejected' | 'interrupted' | 'unknown';
+  run_id?: string | null;
   result: Record<string, unknown> | null;
   error_code: string | null;
   created_at: string;
@@ -135,7 +160,7 @@ export interface ToolCallRecord {
 function toolCall(value: unknown, chatId: string): ToolCallRecord {
   if (!isRecord(value) || value.conversation_id !== chatId ||
     !['id', 'request_id', 'tool_id', 'impact', 'created_at'].every((key) => typeof value[key] === 'string') ||
-    !['pending_approval', 'running', 'succeeded', 'failed', 'rejected', 'interrupted'].includes(String(value.status)) ||
+    !['pending_approval', 'running', 'succeeded', 'failed', 'rejected', 'interrupted', 'unknown'].includes(String(value.status)) ||
     !isRecord(value.arguments) || (value.result !== null && !isRecord(value.result)) ||
     (value.error_code !== null && typeof value.error_code !== 'string') ||
     (value.kb_id !== null && typeof value.kb_id !== 'string') || value.source_type !== 'tool')
@@ -633,6 +658,27 @@ export function createApi(fetcher: typeof fetch = globalThis.fetch) {
       const value = await request(`/api/conversations/${encodeURIComponent(id)}`, 'DELETE');
       if (!isRecord(value) || value.deleted !== true) throw new ApiError('invalid-response');
     },
+    agentCapability: async (): Promise<{ enabled: boolean }> => {
+      const value = await request('/api/agent/capability');
+      if (!isRecord(value) || typeof value.enabled !== 'boolean') throw new ApiError('invalid-response');
+      return { enabled: value.enabled };
+    },
+    agentRuns: async (chatId: string): Promise<AgentRun[]> => collection<Record<string, unknown>>(
+      await request(`/api/conversations/${encodeURIComponent(chatId)}/agent-runs`), () => true)
+      .map((item) => agentRun(item, chatId)),
+    startAgent: async (chatId: string, text: string, requestId: string, imageIds: string[] = []): Promise<AgentRun> => agentRun(
+      await request(`/api/conversations/${encodeURIComponent(chatId)}/agent-runs`, 'POST',
+        { client_message_id: requestId, text, mode: 'auto', image_ids: imageIds }), chatId),
+    retryAgent: async (chatId: string, messageId: string, requestId: string): Promise<AgentRun> => agentRun(
+      await request(`/api/conversations/${encodeURIComponent(chatId)}/agent-runs/retry`, 'POST',
+        { message_id: messageId, request_id: requestId }), chatId),
+    resumeAgent: async (run: AgentRun, requestId: string, input: Record<string, unknown>,
+      control?: { voice_session_id: string; control_token: string }): Promise<AgentRun> => agentRun(
+      await request(`/api/conversations/${encodeURIComponent(run.conversation_id)}/agent-runs/${encodeURIComponent(run.id)}/resume`,
+        'POST', { request_id: requestId, generation: run.generation, input, ...control }), run.conversation_id),
+    cancelAgent: async (run: AgentRun, control?: { voice_session_id: string; control_token: string }): Promise<AgentRun> => agentRun(
+      await request(`/api/conversations/${encodeURIComponent(run.conversation_id)}/agent-runs/${encodeURIComponent(run.id)}/cancel`,
+        'POST', control ? { request_id: crypto.randomUUID(), generation: run.generation, input: {}, ...control } : undefined), run.conversation_id),
     conversationTools: async (chatId: string): Promise<ToolInfo[]> => collection<ToolInfo>(
       await request(`/api/conversations/${encodeURIComponent(chatId)}/tools`),
       (item) => typeof item.id === 'string' && typeof item.title === 'string' &&
@@ -779,6 +825,10 @@ export function createApi(fetcher: typeof fetch = globalThis.fetch) {
               const answer = chatMessage(event.answer);
               if (!answer.saved || answer.status === 'running') throw new ApiError('invalid-response');
               event.answer = answer;
+            }
+            if (event.type === 'agent') {
+              if (!isRecord(event.run) || typeof event.run.conversation_id !== 'string') throw new ApiError('invalid-response');
+              event.run = agentRun(event.run, event.run.conversation_id);
             }
             if (event.type === 'transcript' && (typeof event.text !== 'string' || event.text.length > 1000 ||
                 typeof event.final !== 'boolean' || !Number.isInteger(event.utterance) || !Number.isInteger(event.revision)))

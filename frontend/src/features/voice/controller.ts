@@ -1,5 +1,5 @@
 import { ApiError } from '../../api/client';
-import type { ApiClient, ChatMessage, VoiceConnection, VoiceEvent, VoiceSessionConnection } from '../../api/client';
+import type { AgentRun, ApiClient, ChatMessage, VoiceConnection, VoiceEvent, VoiceSessionConnection } from '../../api/client';
 
 export interface MediaRoom {
   connect: (url: string, token: string) => Promise<void>;
@@ -28,7 +28,8 @@ export interface VoiceState {
   playbackRequired: boolean;
   meterUnavailable: boolean;
   error: string | null;
-  assistantPhase?: 'not_configured' | 'starting' | 'listening' | 'recognizing' | 'generating' | 'speaking' | 'ended';
+  assistantPhase?: 'not_configured' | 'starting' | 'listening' | 'recognizing' | 'generating' | 'speaking' | 'ended' | 'waiting_input' | 'waiting_approval';
+  agentRun?: AgentRun | null;
   subtitle?: string;
   speechText?: string;
   firstTextMs?: number;
@@ -40,7 +41,7 @@ export interface VoiceState {
 }
 
 type VoiceApi = { voiceToken: (id: string) => Promise<VoiceConnection> } & Partial<Pick<ApiClient,
-  'voiceStart' | 'voiceRenew' | 'voiceStop' | 'voiceEnd' | 'voiceEvents' | 'voiceCorrection' | 'conversationMessages'>>;
+  'voiceStart' | 'voiceRenew' | 'voiceStop' | 'voiceEnd' | 'voiceEvents' | 'voiceCorrection' | 'conversationMessages' | 'resumeAgent'>>;
 
 export class VoiceController {
   readonly state: VoiceState = { phase: 'idle', muted: false, outputMuted: false,
@@ -54,6 +55,7 @@ export class VoiceController {
   private events: AbortController | null = null;
   private serverGeneration = 0;
   private minimumGeneration = 0;
+  private resumeKeys = new Map<string, string>();
   constructor(private readonly api: VoiceApi,
               private readonly changed: () => void, private readonly factory: RoomFactory,
               private readonly levelsChanged: (levels: readonly number[]) => void = () => {}) {}
@@ -132,11 +134,12 @@ export class VoiceController {
       void this.fail(event.reason === 'hangup' ? 'disconnected' : 'voice_session_ended'); return;
     }
     if (event.type === 'interrupted') {
+      this.state.agentRun = null;
       this.state.assistantPhase = 'listening'; this.state.subtitle = ''; this.state.speechText = '';
       this.state.firstTextMs = this.state.firstAudioSentMs = undefined;
       this.room?.discardOutput?.(event.generation);
     } else if (event.type === 'ready' || event.type === 'phase') {
-      if (['listening', 'recognizing', 'generating', 'speaking', 'starting'].includes(event.phase ?? ''))
+      if (['listening', 'recognizing', 'generating', 'speaking', 'starting', 'waiting_input', 'waiting_approval'].includes(event.phase ?? ''))
         this.state.assistantPhase = event.phase as VoiceState['assistantPhase'];
     } else if (event.type === 'transcript') {
       this.state.subtitle = event.text ?? '';
@@ -153,7 +156,12 @@ export class VoiceController {
       (event.elapsed_ms ?? -1) >= 0) {
       if (event.metric === 'first_text') this.state.firstTextMs = event.elapsed_ms;
       if (event.metric === 'first_audio_sent') this.state.firstAudioSentMs = event.elapsed_ms;
+    } else if (event.type === 'agent' && event.run && event.run.conversation_id === this.session.conversation_id && event.run.voice_session_id === this.session.session_id) {
+      const current = this.state.agentRun;
+      if (!current || current.id !== event.run.id ||
+        current.generation <= event.run.generation && current.seq <= event.run.seq) this.state.agentRun = event.run;
     } else if (event.type === 'answer' && event.answer) {
+      this.state.agentRun = null;
       this.state.speechText = '';
       this.state.answers = [...(this.state.answers ?? []).filter((item) => item.message_id !== event.answer!.message_id), event.answer].slice(-50);
     } else if (event.type === 'error') {
@@ -223,6 +231,27 @@ export class VoiceController {
     finally { if (generation === this.generation) { this.state.busy = false; this.changed(); } }
   }
 
+  async resumeAgent(input: Record<string, unknown>): Promise<void> {
+    const session = this.session;
+    const run = this.state.agentRun;
+    if (!session || !run || !this.api.resumeAgent || this.state.busy) return;
+    const generation = this.generation;
+    const fingerprint = `${run.id}:${run.generation}:${JSON.stringify(input)}`;
+    const key = this.resumeKeys.get(fingerprint) ?? crypto.randomUUID();
+    this.resumeKeys.set(fingerprint, key);
+    this.state.busy = true; this.changed();
+    try {
+      const result = await this.api.resumeAgent(run, key, input, {
+        voice_session_id: session.session_id, control_token: session.control_token });
+      const current = this.state.agentRun;
+      if (generation === this.generation && (!current || current.id !== result.id ||
+        current.generation <= result.generation && current.seq <= result.seq)) this.state.agentRun = result;
+    } catch (error) {
+      if (generation === this.generation) this.state.error = error instanceof ApiError ? error.code : 'agent_unavailable';
+      throw error;
+    } finally { if (generation === this.generation) { this.state.busy = false; this.changed(); } }
+  }
+
   async correctTranscript(text: string): Promise<void> {
     const session = this.session;
     if (!session || !this.api.voiceCorrection || !this.state.utterance || this.state.busy || !text.trim()) return;
@@ -283,6 +312,7 @@ export class VoiceController {
         this.state.muted = false; this.state.outputMuted = false; this.state.playbackRequired = false;
         this.state.meterUnavailable = false;
         this.state.assistantPhase = 'ended'; this.state.subtitle = ''; this.state.speechText = '';
+        this.state.agentRun = null; this.resumeKeys.clear();
         this.state.firstTextMs = this.state.firstAudioSentMs = undefined;
         this.changed();
       }

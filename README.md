@@ -58,7 +58,7 @@ CiteRAG 使用 [LightRAG](https://github.com/HKUDS/LightRAG) 为本地资料建�
 | 图片提问 | PNG/JPEG 私有附件先经视觉模型观察；不确定编号可要求确认，图片不会自动入库。 |
 | 实时语音 | LiveKit 音轨、火山 ASR、本地 Silero VAD、共用问答、MiniMax TTS 和浏览器播放；提供字幕、插话取消与文字降级。 |
 | 状态与记录 | 原问题、回答尝试、摘要和持久任务保存在业务库；工作台显示来源、错误与系统状态。 |
-| 受控工具首片 | 普通聊天可手动读取本机时间，固定库聊天还可查看本库资料目录；服务端检查范围，结果与引用分开。 |
+| 工具与 Agent（可选） | LangGraph 有界自动工具循环、补参/审批暂停、持久恢复和取消；自写工具与已审查 MCP 共用网关，结果与资料引用分开。 |
 
 上表表示**代码已接线**，不是完整 M0—M3 验收结论。
 
@@ -136,24 +136,36 @@ CiteRAG/
 
 - [后端](backend/README.md) · [前端](frontend/README.md) · [贡献指南](CONTRIBUTING.md)
 
-## 🗺️ 会话类型与后续工具边界
+## 🗺️ 系统流程与工具网关
 
-当前源码支持创建普通聊天或固定知识库聊天。普通聊天不检索知识库，保留至主动删除；知识库聊天保留 180 天规则，并可手动保存来源明确的同库共享摘要。工具网关首片提供手动只读调用、服务端范围门禁、持久结果和审批状态；模型自动选工具、外部 MCP 与写入操作尚未接入。新 schema `0011` 只在隔离库验证，**实际业务库尚未迁移**。
+当前源码支持普通聊天与固定知识库聊天；同库共享摘要保留来源与失效规则。可选 LangGraph 编排已接入模型工具决策、补参/审批暂停、预算和持久恢复，MCP 提供受控 Streamable HTTP 适配器。Agent/MCP 默认关闭，内置工具仍为本机只读工具，没有注册真实外部写入。新 schema `0012` 只在隔离库验证，**实际业务库尚未迁移**。
+
+下图展示启用 Agent 后的调用链。LangGraph 编排下一步，工具网关执行权限和幂等检查，AnswerService 继续负责唯一正式聊天历史、知识库路由与提交核验。每任务最多 6 次决策生成、4 次工具尝试、60 秒活动预算；资料路由/观察/核验可能另有模型请求。关闭 Agent 时保留原问答链路。安装、协议、恢复与 MCP 审查见 [Agent 说明](backend/AGENT.md)。本轮验证使用隔离数据库、合成模型和本地合成 MCP，尚未验收真实模型、用户 MCP 服务或真人语音。
 
 ```mermaid
 flowchart TD
-    A["文字输入 / 语音最终转写 / 图片观察"] --> B["读取聊天绑定与本聊天上下文"]
-    B --> C{"聊天绑定知识库？"}
-    C -- "否：普通聊天" --> D["本聊天近期记录与摘要"]
-    D --> E["普通回答路径"]
-    C -- "是：知识库聊天" --> F["本聊天上下文 + 有效的同库共享摘要"]
-    F --> G{"意图路由"}
-    G -- "普通问题" --> E
-    G -- "需要当前库证据" --> H{"精确检索 / 语义检索"}
-    H --> I["当前库检索与原文核验"]
-    E --> K["生成并保存回答；资料回答先核验"]
-    I --> K
-    K --> M["页面展示；语音回答再送 TTS 播放"]
+    UI["React 工作台 / 独立语音页"]
+    INPUT["文字 / 图片观察 / ASR 最终转写"]
+    ANSWER["AnswerService<br/>聊天归属、上下文、取消、历史"]
+
+    UI --> INPUT --> ANSWER
+    ANSWER --> TYPE{"固定聊天类型"}
+    TYPE -->|普通聊天| CONTEXT["准备回答上下文"]
+    TYPE -->|知识库聊天| ROUTE["普通回答 / 知识库回答"]
+    ROUTE -->|普通回答| CONTEXT
+    ROUTE -->|知识库回答| RAG["精确 / 语义检索<br/>当前原文证据"]
+    RAG --> CONTEXT
+
+    CONTEXT --> AGENT["LangGraph Agent<br/>模型决定回答、调用工具或补参"]
+    AGENT -->|工具请求| GATE["统一 ToolGateway<br/>校验、审批、幂等、执行"]
+    GATE --> LOCAL["自写工具"]
+    GATE --> MCP["已审查的 MCP 服务"]
+    LOCAL --> RESULT["持久保存实际结果"]
+    MCP --> RESULT
+    RESULT --> AGENT
+
+    AGENT -->|最终回答| CHECK["AnswerService<br/>事实与来源核验、提交"]
+    CHECK --> OUT["正文、引用、工具记录<br/>语音保存后交给 TTS"]
 ```
 
 无库聊天不会自动读取知识库；共享摘要只用于理解背景，不能代替本轮原文证据。共享内容随来源删除或库修订失效；工具历史结果仅反映调用当时状态，也不能代替知识库原文证据。
@@ -162,4 +174,4 @@ flowchart TD
 
 CiteRAG 的自有内容采用 [Apache License 2.0](LICENSE)。该许可证允许商用与修改，但不授予项目名称或标志的商标使用权。
 
-第三方材料保留各自许可：[LightRAG](https://github.com/HKUDS/LightRAG/blob/59af311307c7417b342f44850b097648d47e83bd/LICENSE) 为 MIT；改写的 LiveKit starter 布局及其 MIT 声明见[供应商说明](frontend/vendor/livekit/README.md)；Silero VAD 参考实现及 MIT 声明见[后端供应商说明](backend/vendor/silero/README.md)。云模型和语音服务仍按各供应商条款使用。
+第三方材料保留各自许可：[LightRAG](https://github.com/HKUDS/LightRAG/blob/59af311307c7417b342f44850b097648d47e83bd/LICENSE) 为 MIT；改写的 LiveKit starter 布局及其 MIT 声明见[供应商说明](frontend/vendor/livekit/README.md)；Silero VAD 参考实现及 MIT 声明见[后端供应商说明](backend/vendor/silero/README.md)。Agent 可选依赖包含 MIT 与 LGPL-3.0-only，见[依赖许可](backend/vendor/agent/README.md)。云模型和语音服务仍按各供应商条款使用。

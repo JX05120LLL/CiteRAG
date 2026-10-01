@@ -42,8 +42,9 @@ export async function mountVoicePage(root: HTMLElement, api: ApiClient, conversa
     connect: () => { if (!disposed && !hidden && !leaving && !checking && context.chatId && context.kbReady &&
       !context.error && capability?.transport === 'configured') void voice.connect(context.chatId, capability.purpose === 'voice_assistant'); },
     hangup: () => { void voice.hangup(); }, microphone: () => { void voice.toggleMicrophone(); },
-    output: () => { void voice.toggleOutput(); }, stop: () => { void voice.stopAnswer(); },
+    output: () => { void voice.toggleOutput(); }, stop: () => voice.stopAnswer(),
     correct: (text: string) => voice.correctTranscript(text),
+    resumeAgent: (input: Record<string, unknown>) => voice.resumeAgent(input),
     originalUrl: api.originalUrl,
     back: () => leave('workbench'), status: () => leave('status') });
   const view = options ? null : createVoiceView(context, actions());

@@ -49,12 +49,15 @@ async def schema_database():
     finally:
         await engine.dispose()
         async with control.begin() as connection:
+            from app.agent.checkpoints import checkpoint_namespace
+            await connection.execute(text(f'DROP SCHEMA IF EXISTS "{checkpoint_namespace(schema)}" '
+                                          'CASCADE'))
             await connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
         await control.dispose()
 
 
 @pytest_asyncio.fixture
-async def environment(schema_database, monkeypatch):
+async def environment(schema_database, monkeypatch, tmp_path):
     # Business DB tests do not depend on optional model/engine credentials.
     async def unconfigured(_state):
         return {"models": "not_configured", "rag": "not_configured"}
@@ -66,6 +69,8 @@ async def environment(schema_database, monkeypatch):
     database, settings = schema_database
     await migrate(database)
     app = create_app(settings, database=database)
+    app.state.source_root = tmp_path / "sources"
+    app.state.image_root = tmp_path / "attachments"
     async with app.router.lifespan_context(app):
         async with AsyncClient(
             transport=ASGITransport(app, raise_app_exceptions=False),

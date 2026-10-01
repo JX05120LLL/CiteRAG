@@ -282,7 +282,7 @@ describe('M0 local workbench', () => {
       calls.push(String(input));
       return json({ items: [] });
     });
-    expect(calls.sort()).toEqual(['/api/conversations?limit=20&offset=0', '/api/knowledge-bases']);
+    expect(calls.sort()).toEqual(['/api/agent/capability', '/api/conversations?limit=20&offset=0', '/api/knowledge-bases']);
     expect(root.textContent).toContain('本地工作台');
     expect(root.textContent).toContain('暂无聊天');
     expect(root.textContent).toContain('普通聊天 · 不检索知识库');

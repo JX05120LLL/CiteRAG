@@ -11,7 +11,7 @@ uv sync --locked
 uv run --no-env-file uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1 --no-proxy-headers
 ```
 
-`GET /api/health` 只表明进程存活；`GET /api/status` 分别报告数据库、引擎、模型、备份等状态。持久服务需单独准备 PostgreSQL 业务库，将敏感的 CITERAG_DATABASE_URL 注入受控进程环境，并在**新建空库**上显式执行 `uv run --no-env-file alembic upgrade head`。当前源码要求 `0011_tool_gateway`。已有业务库升级前要停写并成套备份业务库、引擎库、私有原文/图片与配置；启动不会自动迁移或认领旧资料。未完成显式升级的旧业务库不能用本版本启动。
+`GET /api/health` 只表明进程存活；`GET /api/status` 分别报告数据库、引擎、模型、备份等状态。持久服务需单独准备 PostgreSQL 业务库，将敏感的 CITERAG_DATABASE_URL 注入受控进程环境，并在**新建空库**上显式执行 `uv run --no-env-file alembic upgrade head`。当前源码要求 `0012_agent_runs`。已有业务库升级前要停写并成套备份业务库、引擎库、私有原文/图片与配置；启动不会自动迁移或认领旧资料。未完成显式升级的旧业务库不能用本版本启动。
 
 入库、问答、备份、LiveKit 传输和语音助手默认关闭；安装可选依赖或配置 Key 不会自动启用。可选依赖使用 `uv sync --locked --extra rag --extra voice` 安装，配置字段见 [app/config.py](app/config.py)。不要把本地服务开放到局域网或公网，应用拒绝代理来源身份并核对 Host、Origin 与资源归属。
 
@@ -26,12 +26,15 @@ uv run --no-env-file uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers
 | `app/images/` | 图片私有附件与观察 |
 | `app/voice/` | 会话租约、RTC 音轨、ASR/VAD、TTS 与取消 |
 | `app/tools/` | 统一工具目录、聊天范围、审批与持久调用结果；当前仅注册只读本机工具 |
+| `app/agent/` | 可选 LangGraph 串行任务、补参/审批、预算、租约和持久检查点 |
 | `app/providers/` | 后端模型适配与安全错误分类 |
 | `migrations/` | 业务库的显式、追加式 Alembic 迁移 |
 
 `POST /api/conversations` 须显式提供空或非空 `kb_id`。普通聊天不调用知识库路由或 LightRAG；知识库聊天固定一个库，资料回答仍需当前库原文证据。语音最终转写、文字和图片观察后的问题复用 AnswerService。公开产品边界见[README](../README.md)。
 
-工具入口为 `GET /api/conversations/{id}/tools`、`GET/POST /api/conversations/{id}/tools/calls` 和 `POST /api/conversations/{id}/tools/calls/{call_id}/decision`。调用带客户端 UUID 幂等键，服务端固定注册表，普通聊天不可调用知识库工具；历史结果标记为 `source_type=tool`，不进入 AnswerService 的引用。审批只对已持久记录的确切参数生效，拒绝和异常也写入状态。当前页面由用户手动触发只读工具，尚无模型自动调用、外部 MCP 或写入适配器。
+工具入口为 `GET /api/conversations/{id}/tools`、`GET/POST /api/conversations/{id}/tools/calls` 和 `POST /api/conversations/{id}/tools/calls/{call_id}/decision`。调用带客户端 UUID 幂等键，服务端固定注册表，普通聊天不可调用知识库工具；历史结果标记为 `source_type=tool`，不进入 AnswerService 的引用。审批只对已持久记录的确切参数生效，拒绝和异常也写入状态。内置生产工具仍为只读工具；没有注册真实外部写入工具。
+
+可选 Agent 自动选择工具、返回结果后继续回答，支持补参和审批暂停。安装、显式检查点初始化、协议、回滚与 MCP 审查规则见 [Agent 与工具网关](AGENT.md)。`CITERAG_AGENT_ENABLED`、`CITERAG_MCP_ENABLED` 均默认 `false`；自动任务不另建 RAG 或聊天记录，最终回答仍经 AnswerService 保存与核验。新迁移只在隔离环境验证，实际业务库未迁移。
 
 ## 检查
 

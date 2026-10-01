@@ -26,6 +26,7 @@ export interface AppView {
     renameChat: (id?: string) => Promise<void>; deleteChat: (id?: string) => Promise<void>; loadMoreChats: () => Promise<void>;
     loadArchivedChats: (reset?: boolean) => Promise<void>; setChatArchived: (id: string, archived: boolean) => Promise<void>;
     sendChat: () => Promise<void>; retryChat: (id: string) => Promise<void>; setDraft: (text: string) => void;
+    refreshAgentMessages?: (chatId: string) => Promise<void>;
     selectChatImages: (files: File[]) => void; confirmChatImage: (messageId: string, imageId: string) => Promise<void>;
     selectKb: (id: string) => void; selectCitation: (messageId: string, evidenceId: string) => void; closeCitation: () => void;
     createKnowledgeBase: () => Promise<void>; beginRename: (id: string) => void;
@@ -68,6 +69,7 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
   let generation = 0;
   let healthGeneration = 0;
   let chatGeneration = 0;
+  let agentMessageRead = 0;
   let hasMoreChats = false;
   let archivedChats: Conversation[] = [];
   let archivedChatOffset = 0;
@@ -363,6 +365,14 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
         state.chatUploadedImages.push(await api.uploadImage(state.selectedChatId, file));
         render();
       }
+      if (state.agentEnabled) {
+        await api.startAgent(state.selectedChatId, question, state.chatRequestKey,
+          state.chatUploadedImages.map((image) => image.id));
+        state.chatMessages = await api.conversationMessages(state.selectedChatId);
+        state.chatDraft = ''; state.chatRequestKey = state.chatRequestText = null;
+        state.chatImages = []; state.chatUploadedImages = [];
+        return;
+      }
       const message = await api.askMessageStream(state.selectedChatId, question, state.chatRequestKey,
         'auto', undefined, (progress) => {
           if (progress.type === 'accepted') {
@@ -480,6 +490,12 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
     state.chatError = null;
     render();
     try {
+      if (state.agentEnabled) {
+        await api.retryAgent(chatId, messageId, key);
+        state.chatMessages = await api.conversationMessages(chatId);
+        retryKeys.delete(messageId);
+        return;
+      }
       const message = await api.retryAnswer(chatId, messageId, key);
       state.chatMessages = state.chatMessages.map((item) => item.message_id === messageId ? message : item);
       retryKeys.delete(messageId);
@@ -637,16 +653,17 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
           chatTitle: state.chats?.find((item) => item.id === state.selectedChatId)?.title ?? '',
           kbName: base?.name ?? '', kbReady: state.selectedKbId === null || base?.status === 'ready', chatPending: state.chatPending || state.chatMessages.some((item) => item.status === 'running') },
           levels, actions: { capability: voiceCapability, checking: voiceChecking, capabilityError: voiceCapabilityError,
+            resumeAgent: (input) => voice.resumeAgent(input),
             media: { ...voice.state }, refresh: loadVoiceCapability,
             connect: () => { if (!disposed && state.page === 'voice' && !voiceChecking && state.selectedChatId && (state.selectedKbId === null || base?.status === 'ready') && !state.chatPending &&
               !state.chatMessages.some((item) => item.status === 'running') && voiceCapability?.transport === 'configured') void voice.connect(state.selectedChatId, voiceCapability.purpose === 'voice_assistant'); },
             hangup: () => { void voice.hangup(); }, microphone: () => { void voice.toggleMicrophone(); }, output: () => { void voice.toggleOutput(); },
-            stop: () => { void voice.stopAnswer(); }, correct: (text: string) => voice.correctTranscript(text),
+            stop: () => voice.stopAnswer(), correct: (text: string) => voice.correctTranscript(text),
             originalUrl: api.originalUrl,
             back: async () => { await voice.hangup(); navigate('workbench'); }, status: async () => { await voice.hangup(); navigate('status'); } } },
         actions: { navigate, refresh, loadHealth, selectChat, createChat, renameChat, deleteChat, loadMoreChats,
           loadArchivedChats, setChatArchived, sendChat, retryChat,
-          selectChatImages, confirmChatImage,
+          selectChatImages, confirmChatImage, refreshAgentMessages,
           selectKb: (id) => { if (disposed || state.chatPending || documentsPanel.snapshot.busy ||
             (id && !state.bases?.some((item) => item.id === id))) return;
             discardDraftImages(); ++chatGeneration; state.selectedKbId = id || null; state.selectedChatId = null; rememberSelection();
@@ -670,7 +687,7 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
           voiceCapability?.transport === 'configured') void voice.connect(context.chatId, voiceCapability.purpose === 'voice_assistant'); },
         hangup: () => { void voice.hangup(); }, microphone: () => { void voice.toggleMicrophone(); },
         output: () => { void voice.toggleOutput(); },
-        stop: () => { void voice.stopAnswer(); }, correct: (text: string) => voice.correctTranscript(text),
+        stop: () => voice.stopAnswer(), correct: (text: string) => voice.correctTranscript(text),
         originalUrl: api.originalUrl,
         back: async () => { await voice.hangup(); navigate('workbench'); },
         status: async () => { await voice.hangup(); navigate('status'); } };
@@ -735,6 +752,18 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
     root.replaceChildren(skip, shell);
   }
 
-  await refresh();
+  async function refreshAgentMessages(chatId: string) {
+    const current = chatGeneration;
+    const reading = ++agentMessageRead;
+    const messages = await api.conversationMessages(chatId);
+    if (!disposed && reading === agentMessageRead && current === chatGeneration && state.selectedChatId === chatId) {
+      state.chatMessages = messages; render();
+    }
+  }
+  const initialRefresh = refresh();
+  try { state.agentEnabled = (await api.agentCapability?.())?.enabled === true; }
+  catch { state.agentEnabled = false; }
+  if (!disposed) render();
+  await initialRefresh;
   if (initialPage === 'status') await loadHealth();
 }

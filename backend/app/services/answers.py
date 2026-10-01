@@ -12,9 +12,11 @@ from uuid import UUID, uuid4
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agent.errors import AgentError, AgentPaused
 from app.images.service import ImageService, image_view
 from app.images.storage import PrivateImageStore
 from app.models import (
+    AgentRun,
     AnswerAttempt,
     Conversation,
     ConversationMessage,
@@ -23,6 +25,7 @@ from app.models import (
     KnowledgeBase,
     MessageImage,
     ParsedBlockRecord,
+    ToolCall,
 )
 from app.rag.answer_adapter import AnswerError, checked_answer, checked_route
 from app.rag.query_adapter import QueryError, RetrievedChunk
@@ -98,11 +101,16 @@ def answer_view(message: ConversationMessage, attempt: AnswerAttempt) -> dict:
     view = {
         "message_id": message.id, "attempt_id": attempt.id,
         "client_message_id": message.client_message_id,
-        "question": message.content, "mode": message.mode, "status": attempt.status,
+        "question": message.content, "mode": message.mode,
+        "status": "running" if attempt.status in {"waiting_input", "waiting_approval"}
+        else attempt.status,
         "text": attempt.text or "", "citations": attempt.citations or [],
         "kb_revision": attempt.kb_revision, "error_code": attempt.error_code,
-        "created_at": message.created_at, "saved": attempt.status != "running",
+        "created_at": message.created_at,
+        "saved": attempt.status not in {"running", "waiting_input", "waiting_approval"},
     }
+    if attempt.status in {"waiting_input", "waiting_approval"}:
+        view["phase"] = attempt.status
     if message.mode == "auto" and isinstance(message.query_filter, dict):
         route = message.query_filter.get("mode")
         if route in {"semantic", "exact", "literal", "general", "chat",
@@ -179,8 +187,7 @@ class AnswerService:
             raise ServiceError(409, "kb_changed", "通话的知识库修订或活动空间已失效")
         return conversation, kb
 
-    async def list_messages(self, owner: UUID, conversation_id: UUID) -> list[dict]:
-        _, kb = await self._owned_conversation(owner, conversation_id)
+    async def _expired_image_at(self, conversation_id: UUID):
         expired_image_at = None
         if self.images is not None:
             expired_image_at = await self.session.scalar(
@@ -190,6 +197,28 @@ class AnswerService:
                 .where(ConversationMessage.conversation_id == conversation_id,
                        ImageAttachment.expires_at <= datetime.now(UTC))
             )
+        return expired_image_at
+
+    @staticmethod
+    def _history_visibility(view, message, attempt, kb, expired_image_at):
+        hidden = ((kb is not None and (kb.status != "ready"
+                  or attempt.kb_revision < kb.hide_history_before_revision))
+                  or (expired_image_at is not None and message.created_at >= expired_image_at))
+        view["stale"] = (kb is not None and
+                         (attempt.kb_revision != kb.revision or kb.status != "ready"))
+        view["hidden"] = hidden
+        if hidden:
+            view["text"], view["citations"], view["images"] = "", [], []
+        return view
+
+    async def history_view(self, owner, conversation_id, message, attempt):
+        _, kb = await self._owned_conversation(owner, conversation_id)
+        return self._history_visibility(await self._view(message, attempt), message, attempt,
+                                        kb, await self._expired_image_at(conversation_id))
+
+    async def list_messages(self, owner: UUID, conversation_id: UUID) -> list[dict]:
+        _, kb = await self._owned_conversation(owner, conversation_id)
+        expired_image_at = await self._expired_image_at(conversation_id)
         rows = await self.session.execute(
             select(ConversationMessage, AnswerAttempt)
             .join(AnswerAttempt, AnswerAttempt.message_id == ConversationMessage.id)
@@ -201,16 +230,7 @@ class AnswerService:
         messages: dict[UUID, dict] = {}
         for message, attempt in rows:
             view = await self._view(message, attempt)
-            hidden = ((kb is not None and (kb.status != "ready"
-                      or attempt.kb_revision < kb.hide_history_before_revision))
-                      or (expired_image_at is not None
-                          and message.created_at >= expired_image_at))
-            view["stale"] = (kb is not None and
-                             (attempt.kb_revision != kb.revision or kb.status != "ready"))
-            view["hidden"] = hidden
-            if hidden:
-                view["text"], view["citations"] = "", []
-                view["images"] = []
+            self._history_visibility(view, message, attempt, kb, expired_image_at)
             messages.setdefault(message.id, view)
         return list(reversed(list(messages.values())))
 
@@ -222,6 +242,7 @@ class AnswerService:
         on_accepted: Callable[[dict], Awaitable[None]] | None = None,
         on_preview: Callable[[UUID, str], Awaitable[None]] | None = None,
         on_general_segment: Callable[[str], Awaitable[None]] | None = None,
+        defer_finish: bool = False,
     ) -> dict:
         conversation, kb = await self._owned_conversation(owner, conversation_id, lock=True)
         if kb is None and (mode != "auto" or exact is not None):
@@ -257,10 +278,15 @@ class AnswerService:
             raise ServiceError(409, "kb_not_ready", "知识库未就绪，暂不能问答")
         active = await self.session.scalar(select(AnswerAttempt.id).where(
             AnswerAttempt.conversation_id == conversation_id,
-            AnswerAttempt.status == "running",
+            AnswerAttempt.status.in_(("running", "waiting_input", "waiting_approval")),
         ))
         if active is not None:
             raise ServiceError(409, "answer_in_progress", "当前聊天已有提问正在处理")
+        if await self.session.scalar(select(ToolCall.id).where(
+            ToolCall.conversation_id == conversation_id,
+            ToolCall.status.in_(("pending_approval", "running")),
+        ).limit(1)):
+            raise ServiceError(409, "tool_in_progress", "请先完成当前工具调用或审批")
         message = ConversationMessage(
             id=uuid4(), conversation_id=conversation_id,
             client_message_id=request_id, content=question, mode=mode, query_filter=exact,
@@ -278,12 +304,16 @@ class AnswerService:
         await self.session.commit()
         if on_accepted is not None:
             await on_accepted(await self._view(message, attempt))
+        if defer_finish:
+            return await self._view(message, attempt)
         return await self._finish_attempt(owner, conversation_id, kb, message, attempt,
                                           retriever, answerer, mode, exact, on_preview,
                                           on_general_segment)
 
     async def retry(self, owner: UUID, conversation_id: UUID, message_id: UUID,
-                    retry_id: UUID, retriever: Retriever, answerer: Answerer) -> dict:
+                    retry_id: UUID, retriever: Retriever, answerer: Answerer, *,
+                    on_accepted: Callable[[dict], Awaitable[None]] | None = None,
+                    defer_finish: bool = False) -> dict:
         conversation, kb = await self._owned_conversation(owner, conversation_id, lock=True)
         if conversation.archived_at is not None:
             raise ServiceError(409, "conversation_archived", "聊天已归档，请恢复后再重试")
@@ -295,6 +325,14 @@ class AnswerService:
         ))
         if message is None:
             raise ServiceError(404, "message_not_found", "消息不存在或不可访问")
+        unknown = await self.session.scalar(select(ToolCall.id).join(
+            AgentRun, AgentRun.id == ToolCall.run_id).where(
+                AgentRun.message_id == message_id, ToolCall.status == "unknown",
+                ToolCall.effect == "write",
+            ).limit(1))
+        if unknown:
+            raise ServiceError(409, "tool_result_unknown",
+                               "写入结果未知，请人工核对后再处理；禁止自动重试")
         existing = await self.session.get(AnswerAttempt, retry_id)
         if existing is not None:
             if existing.message_id != message_id or existing.conversation_id != conversation_id:
@@ -311,7 +349,7 @@ class AnswerService:
             raise ServiceError(409, "kb_not_ready", "知识库未就绪，暂不能重试")
         active = await self.session.scalar(select(AnswerAttempt.id).where(
             AnswerAttempt.conversation_id == conversation_id,
-            AnswerAttempt.status == "running",
+            AnswerAttempt.status.in_(("running", "waiting_input", "waiting_approval")),
         ).limit(1))
         if active is not None:
             raise ServiceError(409, "answer_in_progress", "当前聊天已有提问正在处理")
@@ -338,6 +376,10 @@ class AnswerService:
         )
         self.session.add(attempt)
         await self.session.commit()
+        if on_accepted is not None:
+            await on_accepted(await self._view(message, attempt))
+        if defer_finish:
+            return await self._view(message, attempt)
         return await self._finish_attempt(owner, conversation_id, kb, message, attempt,
                                           retriever, answerer, message.mode,
                                           message.query_filter)
@@ -430,6 +472,13 @@ class AnswerService:
             error_code = None
         except _ImageNeedsConfirmation:
             pass
+        except AgentPaused:
+            await self.session.rollback()
+            waiting_attempt = await self.session.get(AnswerAttempt, attempt.id,
+                                                     populate_existing=True)
+            if waiting_attempt.status not in {"waiting_input", "waiting_approval"}:
+                raise ServiceError(409, "agent_interrupted", "等待任务已失效") from None
+            return await self._view(message, waiting_attempt)
         except asyncio.CancelledError:
             # A disconnected request must not hold the conversation until restart.
             async def interrupt() -> None:
@@ -449,7 +498,7 @@ class AnswerService:
                 # The separate task still commits; startup also recovers on process loss.
                 pass
             raise
-        except (QueryError, AnswerError) as error:
+        except (QueryError, AnswerError, AgentError) as error:
             status, text, citations, error_code = (
                 "partial" if previewed else "failed", previewed, [], str(error)
             )
@@ -462,6 +511,11 @@ class AnswerService:
             status, text, citations, error_code = (
                 "partial" if previewed else "failed", previewed, [], "answer_unavailable"
             )
+        return await self._commit_result(owner, conversation_id, kb, message, attempt,
+                                         status, text, citations, error_code)
+
+    async def _commit_result(self, owner, conversation_id, kb, message, attempt,
+                             status, text, citations, error_code=None):
         current_kb = (await self.session.scalar(select(KnowledgeBase).where(
             KnowledgeBase.id == kb.id, KnowledgeBase.owner_id == owner,
         ).with_for_update().execution_options(populate_existing=True)) if kb else None)
@@ -502,6 +556,22 @@ class AnswerService:
         current_attempt.finished_at = datetime.now(UTC)
         await self.session.commit()
         return await self._view(message, current_attempt)
+
+    async def finish_prepared(self, owner, conversation_id, message, attempt,
+                              answerer, prepared, raw):
+        """Resume generation with frozen inputs; reuse source checks and final binding gates."""
+        _, kb = await self._owned_conversation(owner, conversation_id)
+        if prepared["general"]:
+            class Draft:
+                async def general_answer(self, question, context):
+                    return raw
+            status, text, citations = await self._resolve(None, attempt.workspace,
+                prepared["question"], None, Draft(), "auto", {"mode": "general"}, {})
+        else:
+            status, text, citations = await self._checked_result(answerer, raw,
+                prepared["evidence"], prepared["citations"])
+        return await self._commit_result(owner, conversation_id, kb, message, attempt,
+                                         status, text, citations)
 
     async def _route_auto(self, kb: KnowledgeBase, question: str, answerer: Answerer,
                           context: dict) -> dict:
@@ -650,7 +720,7 @@ class AnswerService:
         evidence, citations = select_evidence(evidence, citations)
         if not evidence:
             return "needs_clarification", "原文片段过长，请缩小问题或定位范围。", []
-        raw = await self._answer(answerer, question, evidence, context, on_preview)
+        raw = await self._answer(answerer, question, evidence, context, on_preview, citations)
         return await self._checked_result(answerer, raw, evidence, citations)
 
     async def _resolve_literal(
@@ -694,7 +764,7 @@ class AnswerService:
         evidence, citations = select_evidence(evidence, citations)
         if not evidence:
             return "needs_clarification", "原文片段过长，请缩小问题或定位范围。", []
-        raw = await self._answer(answerer, question, evidence, context, on_preview)
+        raw = await self._answer(answerer, question, evidence, context, on_preview, citations)
         return await self._checked_result(answerer, raw, evidence, citations)
 
     async def _resolve_exact(
@@ -748,7 +818,7 @@ class AnswerService:
         evidence, citations = select_evidence(evidence, citations)
         if not evidence:
             return "needs_clarification", "原文片段过长，请缩小问题或定位范围。", []
-        raw = await self._answer(answerer, question, evidence, context, on_preview)
+        raw = await self._answer(answerer, question, evidence, context, on_preview, citations)
         return await self._checked_result(answerer, raw, evidence, citations)
 
     @staticmethod
@@ -777,7 +847,11 @@ class AnswerService:
     @staticmethod
     async def _answer(answerer: Answerer, question: str, evidence: list[dict],
                       context: dict,
-                      on_preview: Callable[[str], Awaitable[None]] | None = None) -> str:
+                      on_preview: Callable[[str], Awaitable[None]] | None = None,
+                      citations: list[dict] | None = None) -> str:
+        prepare_sources = getattr(answerer, "prepare_sources", None)
+        if prepare_sources is not None:
+            prepare_sources(citations or [])
         streamed = getattr(answerer, "stream_with_context", None) if on_preview else None
         if streamed is not None:
             draft = None if getattr(answerer, "requires_support_verification", False) else (

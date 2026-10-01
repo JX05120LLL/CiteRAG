@@ -21,6 +21,31 @@ function fixture() {
 }
 
 describe('LiveKit media lifecycle', () => {
+  it('keeps newer task events when an older resume response arrives late', async () => {
+    const { controller, api } = fixture();
+    let push!: (event: import('../../api/client').VoiceEvent) => void;
+    let release!: (run: import('../../api/client').AgentRun) => void;
+    const run = { id: 'task', conversation_id: 'chat', voice_session_id: 's',
+      status: 'waiting_input', generation: 1, seq: 2 } as import('../../api/client').AgentRun;
+    Object.assign(api, {
+      voiceStart: async () => ({ ...details, session_id: 's', control_token: 'synthetic-control-1234567890',
+        assistant_identity: 'assistant', assistant: 'starting', purpose: 'voice_assistant', lease_seconds: 40, generation: 0 }),
+      voiceEvents: async (_id: string, _control: string, signal: AbortSignal, callback: typeof push) => {
+        push = callback; await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve()));
+      },
+      resumeAgent: () => new Promise<import('../../api/client').AgentRun>((resolve) => { release = resolve; }),
+      voiceEnd: async () => ({ status: 'ended' }),
+    });
+    await controller.connect('chat', true);
+    push({ type: 'agent', run, seq: 1, session_id: 's', generation: 1 });
+    const pending = controller.resumeAgent({ detail: '合成补充' });
+    push({ type: 'agent', run: { ...run, generation: 2, seq: 6 }, seq: 2, session_id: 's', generation: 1 });
+    release({ ...run, status: 'running', generation: 2, seq: 4 });
+    await pending;
+    expect(controller.state.agentRun?.status).toBe('waiting_input');
+    expect(controller.state.agentRun?.seq).toBe(6);
+    await controller.hangup();
+  });
   it('shows speech text by segment and rejects it after interruption', async () => {
     const { controller, api } = fixture();
     let push!: (event: import('../../api/client').VoiceEvent) => void;

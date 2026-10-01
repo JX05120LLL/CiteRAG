@@ -41,7 +41,7 @@ async def sweep_expired_conversations(database, *, now: datetime | None = None,
                 ~active_conversation(now),
                 ~exists(select(AnswerAttempt.id).where(
                     AnswerAttempt.conversation_id == Conversation.id,
-                    AnswerAttempt.status == "running",
+                    AnswerAttempt.status.in_(("running", "waiting_input", "waiting_approval")),
                 )),
                 ~exists(select(ToolCall.id).where(
                     ToolCall.conversation_id == Conversation.id,
@@ -90,7 +90,7 @@ async def sweep_expired_images(database, image_store, *, now: datetime | None = 
             ImageAttachment.expires_at <= now,
             ~exists(select(AnswerAttempt.id).where(
                 AnswerAttempt.conversation_id == ImageAttachment.conversation_id,
-                AnswerAttempt.status == "running",
+                AnswerAttempt.status.in_(("running", "waiting_input", "waiting_approval")),
             )),
         ).order_by(ImageAttachment.expires_at, ImageAttachment.id).limit(100)
             .with_for_update(skip_locked=True)))

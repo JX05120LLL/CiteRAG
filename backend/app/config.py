@@ -40,6 +40,8 @@ class Settings(BaseModel):
     api_workers: int = Field(default=1, ge=1, le=1)
     ingestion_enabled: bool = False
     answer_enabled: bool = False
+    agent_enabled: bool = False
+    mcp_enabled: bool = False
     backup_enabled: bool = False
     voice_transport_enabled: bool = False
     voice_assistant_enabled: bool = False
@@ -167,6 +169,8 @@ class Settings(BaseModel):
             "CITERAG_API_WORKERS": "api_workers",
             "CITERAG_INGESTION_ENABLED": "ingestion_enabled",
             "CITERAG_ANSWER_ENABLED": "answer_enabled",
+            "CITERAG_AGENT_ENABLED": "agent_enabled",
+            "CITERAG_MCP_ENABLED": "mcp_enabled",
             "CITERAG_BACKUP_ENABLED": "backup_enabled",
             "CITERAG_VOICE_TRANSPORT_ENABLED": "voice_transport_enabled",
             "CITERAG_VOICE_ASSISTANT_ENABLED": "voice_assistant_enabled",

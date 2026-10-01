@@ -266,11 +266,12 @@ class AnswerAttempt(Base):
     __table_args__ = (
         CheckConstraint(
             "status IN ('running','answered','insufficient_evidence','needs_clarification',"
-            "'conflicting_evidence','failed','interrupted','partial')",
+            "'conflicting_evidence','failed','interrupted','partial','waiting_input',"
+            "'waiting_approval')",
             name="ck_answer_attempt_status",
         ),
         Index("uq_answer_attempt_active", "conversation_id", unique=True,
-              postgresql_where=text("status = 'running'")),
+              postgresql_where=text("status IN ('running','waiting_input','waiting_approval')")),
         Index("ix_answer_attempts_message", "message_id", "created_at", "id"),
     )
 
@@ -333,7 +334,7 @@ class ToolCall(Base):
         Index("uq_tool_calls_active_conversation", "conversation_id", unique=True,
               postgresql_where=text("status IN ('pending_approval','running')")),
         CheckConstraint("status IN ('pending_approval','running','succeeded','failed',"
-                        "'rejected','interrupted')", name="ck_tool_calls_status"),
+                        "'rejected','interrupted','unknown')", name="ck_tool_calls_status"),
     )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
@@ -345,6 +346,12 @@ class ToolCall(Base):
     workspace: Mapped[str] = mapped_column(String(100))
     tool_id: Mapped[str] = mapped_column(String(80))
     arguments: Mapped[dict] = mapped_column(JSON)
+    run_id: Mapped[UUID | None] = mapped_column(ForeignKey("agent_runs.id", ondelete="SET NULL"))
+    step_id: Mapped[UUID | None] = mapped_column(ForeignKey("agent_steps.id", ondelete="SET NULL"))
+    tool_version: Mapped[str | None] = mapped_column(String(80))
+    arguments_hash: Mapped[str | None] = mapped_column(String(64))
+    effect: Mapped[str | None] = mapped_column(String(16))
+    decision_id: Mapped[UUID | None] = mapped_column()
     impact: Mapped[str] = mapped_column(String(300))
     status: Mapped[str] = mapped_column(String(24))
     result: Mapped[dict | None] = mapped_column(JSON)
@@ -352,3 +359,69 @@ class ToolCall(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AgentRun(Base):
+    __tablename__ = "agent_runs"
+    __table_args__ = (
+        UniqueConstraint("conversation_id", "request_id", name="uq_agent_request"),
+        UniqueConstraint("attempt_id", name="uq_agent_attempt"),
+        Index("uq_agent_active_chat", "conversation_id", unique=True,
+              postgresql_where=text("status IN ('running','waiting_input','waiting_approval')")),
+        CheckConstraint("status IN ('running','waiting_input','waiting_approval','completed',"
+                        "'failed','interrupted','cancelled','expired')", name="ck_agent_status"),
+    )
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    owner_id: Mapped[UUID] = mapped_column(ForeignKey("local_profiles.id"))
+    conversation_id: Mapped[UUID] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"))
+    message_id: Mapped[UUID] = mapped_column(
+        ForeignKey("conversation_messages.id", ondelete="CASCADE"))
+    attempt_id: Mapped[UUID] = mapped_column(
+        ForeignKey("answer_attempts.id", ondelete="CASCADE"))
+    request_id: Mapped[UUID] = mapped_column()
+    kb_id: Mapped[UUID | None] = mapped_column(ForeignKey("knowledge_bases.id"))
+    kb_revision: Mapped[int] = mapped_column(Integer)
+    workspace: Mapped[str] = mapped_column(String(100))
+    graph_version: Mapped[str] = mapped_column(String(40))
+    status: Mapped[str] = mapped_column(String(24), default="running")
+    generation: Mapped[int] = mapped_column(Integer, default=1)
+    model_rounds: Mapped[int] = mapped_column(Integer, default=0)
+    tool_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    active_ms: Mapped[int] = mapped_column(Integer, default=0)
+    event_seq: Mapped[int] = mapped_column(Integer, default=0)
+    prepared: Mapped[dict | None] = mapped_column(JSON)
+    waiting: Mapped[dict | None] = mapped_column(JSON)
+    resume_id: Mapped[UUID | None] = mapped_column()
+    resume_payload: Mapped[dict | None] = mapped_column(JSON)
+    runner_id: Mapped[UUID | None] = mapped_column()
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    wait_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    voice_session_id: Mapped[UUID | None] = mapped_column()
+    voice_generation: Mapped[int | None] = mapped_column(Integer)
+    error_code: Mapped[str | None] = mapped_column(String(60))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AgentStep(Base):
+    __tablename__ = "agent_steps"
+    __table_args__ = (UniqueConstraint("run_id", "key", name="uq_agent_step"),)
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    run_id: Mapped[UUID] = mapped_column(ForeignKey("agent_runs.id", ondelete="CASCADE"))
+    key: Mapped[str] = mapped_column(String(100))
+    kind: Mapped[str] = mapped_column(String(24))
+    status: Mapped[str] = mapped_column(String(24))
+    data: Mapped[dict | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class AgentEvent(Base):
+    __tablename__ = "agent_events"
+    run_id: Mapped[UUID] = mapped_column(ForeignKey("agent_runs.id", ondelete="CASCADE"),
+                                       primary_key=True)
+    seq: Mapped[int] = mapped_column(Integer, primary_key=True)
+    generation: Mapped[int] = mapped_column(Integer)
+    type: Mapped[str] = mapped_column(String(32))
+    payload: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

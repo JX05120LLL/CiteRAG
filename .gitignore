@@ -27,6 +27,14 @@
 !/backend/tests/test_m3_images_api.py
 !/backend/tests/test_conversation_modes.py
 !/backend/tests/test_m3_image_provider.py
+!/backend/tests/test_agent_contracts.py
+!/backend/tests/test_agent_graph.py
+!/backend/tests/test_agent_api.py
+!/backend/tests/test_agent_boundaries.py
+!/backend/tests/test_agent_knowledge.py
+!/backend/tests/test_agent_mcp.py
+!/backend/tests/test_agent_persistence.py
+!/backend/tests/test_tool_gateway.py
 /frontend/**/*.test.*
 /frontend/**/*.spec.*
 !/frontend/src/api/client.test.ts
@@ -41,6 +49,7 @@
 !/frontend/src/preview/app.test.tsx
 !/frontend/src/react/controller.test.ts
 !/frontend/src/react/app.test.tsx
+!/frontend/src/react/AgentTasks.test.tsx
 
 # Credentials and local configuration
 .env

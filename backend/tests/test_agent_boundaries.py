@@ -277,6 +277,8 @@ async def test_restart_charges_unjournaled_execution_interval(environment):  # n
     api, database = environment
     app, _, path, run, _ = await approval(api)
     try:
+        # A restarted process has no live executor still unwinding the durable pause.
+        await app.state.agent_runtime.close()
         async with database.sessions() as session:
             row = await session.get(AgentRun, UUID(run["id"]))
             row.status = "running"

@@ -1,6 +1,7 @@
 """Explicit environment configuration with opt-in protected voice records; no dotenv."""
 
 import os
+import re
 from ipaddress import ip_address
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -42,6 +43,9 @@ class Settings(BaseModel):
     answer_enabled: bool = False
     agent_enabled: bool = False
     mcp_enabled: bool = False
+    qweather_enabled: bool = False
+    qweather_api_host: str | None = Field(default=None, repr=False)
+    qweather_api_key: SecretStr | None = None
     backup_enabled: bool = False
     voice_transport_enabled: bool = False
     voice_assistant_enabled: bool = False
@@ -58,6 +62,24 @@ class Settings(BaseModel):
     backup_root: Path = PROJECT_ROOT / ".local" / "backups"
     rag_database_record: Path = LOCAL_RUNTIME_ROOT / "rag-postgres" / "credential.xml"
     rag_workspace_root: Path = LOCAL_RUNTIME_ROOT / "rag-workspaces"
+
+    @field_validator("qweather_api_host")
+    @classmethod
+    def weather_host(cls, value: str | None) -> str | None:
+        if value is not None and (len(value) > 253 or not re.fullmatch(
+            r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.){1,3}qweatherapi\.com", value,
+        )):
+            raise ValueError("QWeather requires its dedicated hostname without a URL or port")
+        return value
+
+    @field_validator("qweather_api_key")
+    @classmethod
+    def weather_key(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is not None:
+            secret = value.get_secret_value()
+            if not 1 <= len(secret) <= 512 or any(not 33 <= ord(char) <= 126 for char in secret):
+                raise ValueError("Invalid QWeather credential format")
+        return value
 
     @field_validator("livekit_url")
     @classmethod
@@ -171,6 +193,9 @@ class Settings(BaseModel):
             "CITERAG_ANSWER_ENABLED": "answer_enabled",
             "CITERAG_AGENT_ENABLED": "agent_enabled",
             "CITERAG_MCP_ENABLED": "mcp_enabled",
+            "CITERAG_QWEATHER_ENABLED": "qweather_enabled",
+            "CITERAG_QWEATHER_API_HOST": "qweather_api_host",
+            "CITERAG_QWEATHER_API_KEY": "qweather_api_key",
             "CITERAG_BACKUP_ENABLED": "backup_enabled",
             "CITERAG_VOICE_TRANSPORT_ENABLED": "voice_transport_enabled",
             "CITERAG_VOICE_ASSISTANT_ENABLED": "voice_assistant_enabled",

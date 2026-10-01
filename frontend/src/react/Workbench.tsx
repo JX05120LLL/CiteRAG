@@ -10,6 +10,7 @@ import { displayCitations } from '../preview/model';
 import { StateTag } from '../preview/shared';
 import { answerRouteLabel } from './answerRoute';
 import { AgentTasks } from './AgentTasks';
+import { ToolInvocation, WeatherResult, toolFailure } from './ToolControls';
 import logo from '../../../assets/brand/mark.svg';
 
 const messageTime = (value: string) => new Date(value).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
@@ -17,6 +18,8 @@ const messageTime = (value: string) => new Date(value).toLocaleTimeString('zh-CN
 function ToolResult({ call }: { call: ToolCallRecord }) {
   const result = call.result;
   if (!result) return null;
+  if (call.tool_id.startsWith('weather.') && result.provider === 'QWeather' && result.source_type === 'tool')
+    return <WeatherResult result={result} />;
   if (call.tool_id === 'local.time' && typeof result.time === 'string' &&
     Number.isFinite(Date.parse(result.time))) return <p className="tool-result">
       本机时间：<time dateTime={result.time}>{new Date(result.time).toLocaleString('zh-CN')}</time>
@@ -73,12 +76,12 @@ export function Workbench({ view, api }: { view: AppView; api: ApiClient }) {
     }, () => { if (active) setToolError('工具目录或记录读取失败，请重试。'); });
     return () => { active = false; };
   }, [toolOpen, s.selectedChatId, api]);
-  async function runTool(toolId: string) {
+  async function runTool(toolId: string, arguments_: Record<string, unknown>) {
     if (!s.selectedChatId || toolBusy) return;
     const chatId = s.selectedChatId;
     setToolBusy(true); setToolError('');
     try {
-      await api.invokeTool(chatId, toolId, crypto.randomUUID());
+      await api.invokeTool(chatId, toolId, crypto.randomUUID(), arguments_);
       setToolCalls(await api.toolCalls(chatId)); setLoadedToolChatId(chatId);
     } catch { setToolError('工具调用未确认成功，请检查聊天状态与服务后刷新记录。'); }
     finally { setToolBusy(false); }
@@ -216,15 +219,13 @@ export function Workbench({ view, api }: { view: AppView; api: ApiClient }) {
       </div>}
       {!!s.selectedChatId && !memorySources.length && <p className="muted">本聊天暂无可作为来源的已完成纯文字提问。</p>}
     </Drawer>
-    <Drawer title="工具与调用记录" open={toolOpen && !!s.selectedChatId} onClose={() => setToolOpen(false)} size={460} destroyOnHidden>
+    <Drawer title="工具与调用记录" open={toolOpen && !!s.selectedChatId} onClose={() => setToolOpen(false)} size="min(460px, 100vw)" destroyOnHidden>
       <p className="muted">工具调用由服务端检查聊天范围，结果单独记录，不作为知识库引用。仅显示已登记工具；历史结果只反映调用当时的状态。</p>
       {toolError && <Alert type="error" showIcon title={toolError} />}
       <h3>可用工具</h3>
       {visibleTools.map((tool) => <div key={tool.id} className="tool-entry"><strong>{tool.title}</strong>
         <p className="muted">{tool.impact}</p>
-        {!!tool.input_schema?.required?.length && <p className="muted">此工具需要参数；手动入口尚未接入参数输入，可通过已启用的自动任务补参。</p>}
-        <Button size="small" aria-label={`调用工具：${tool.title}`} disabled={toolBusy || busy || !!tool.input_schema?.required?.length}
-          onClick={() => void runTool(tool.id)}>调用工具</Button></div>)}
+        <ToolInvocation tool={tool} disabled={toolBusy || busy} invoke={(arguments_) => void runTool(tool.id, arguments_)} /></div>)}
       {!visibleTools.length && <p className="muted">当前聊天暂无可用工具。</p>}
       <h3>最近调用</h3>
       {visibleToolCalls.map((call) => <div key={call.id} className="tool-entry"><strong>{call.tool_id}</strong>
@@ -232,7 +233,7 @@ export function Workbench({ view, api }: { view: AppView; api: ApiClient }) {
           rejected: '已拒绝', interrupted: '已中断', unknown: '结果未知，禁止自动重试' } as const)[call.status]}</Tag>
         <p className="muted">{call.impact} · <time dateTime={call.created_at}>{new Date(call.created_at).toLocaleString('zh-CN')}</time></p>
         {call.status === 'succeeded' && <ToolResult call={call} />}
-        {call.error_code && <p className="failure-reason">错误代码：{call.error_code}</p>}
+        {call.error_code && <p className="failure-reason">{toolFailure(call.error_code)}<br />错误代码：{call.error_code}</p>}
         {call.status === 'pending_approval' && call.run_id && <p>此调用由任务执行器管理，请使用任务审批卡片。</p>}
         {call.status === 'pending_approval' && !call.run_id && <div><p>待确认参数：{JSON.stringify(call.arguments)}</p>
           <Space><Popconfirm title="确认按所示参数执行？" description={call.impact}

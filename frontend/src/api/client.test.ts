@@ -1,10 +1,43 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createApi } from './client';
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 const status = { status: 'partial', mode: 'local_single_user', database: 'available', rag: 'not_configured', models: 'not_configured' };
 
 describe('local same-origin API boundary', () => {
+  it('waits for a tool decision beyond the ordinary ten-second request timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      const api = createApi((_input, init) => new Promise((resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+        setTimeout(() => resolve(json({ id: 'synthetic-call', conversation_id: 'chat',
+          request_id: 'synthetic-request', kb_id: null, error_code: 'weather_timeout',
+          tool_id: 'weather.current', arguments: { latitude: 0, longitude: 0 },
+          status: 'failed', result: null, impact: 'Synthetic weather timeout',
+          created_at: '2026-10-01T00:00:00Z', source_type: 'tool' })), 12000);
+      }));
+      const finished = api.decideTool('chat', 'synthetic-call', true).catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(12000);
+      expect(await finished).toMatchObject({ status: 'failed', error_code: 'weather_timeout', result: null });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('sends explicit tool arguments and preserves the zero-argument default', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const api = createApi(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)); bodies.push(body);
+      return json({ id: 'synthetic-call', conversation_id: 'chat', request_id: body.request_id,
+        kb_id: null, error_code: null,
+        tool_id: body.tool_id, arguments: body.arguments, status: 'pending_approval', result: null,
+        impact: 'Synthetic tool approval', created_at: '2026-10-01T00:00:00Z', source_type: 'tool' });
+    });
+    await api.invokeTool('chat', 'weather.current', 'synthetic-request', { latitude: 0, longitude: 0 });
+    expect(bodies[0].arguments).toEqual({ latitude: 0, longitude: 0 });
+    await api.invokeTool('chat', 'local.time', 'synthetic-request-2');
+    expect(bodies[1].arguments).toEqual({});
+  });
+
   it('uploads private image bytes, validates metadata, and confirms uncertain IDs through same-origin APIs', async () => {
     const image = { id: 'image-1', filename: 'synthetic.png', mime_type: 'image/png',
       width: 16, height: 12, size: 81, observation: null, observation_status: 'pending',

@@ -1,8 +1,8 @@
 """One admission, approval and audit path for all registered tools.
 
-Only built-in read-only tools are registered in production. An MCP server or
-write adapter must be reviewed before registration; request input never names
-an arbitrary URL, command, path or process.
+Built-in tools and explicitly configured weather tools are read-only. An MCP
+server or write adapter must be reviewed before registration; request input
+never names an arbitrary URL, command, path or process.
 """
 
 import asyncio
@@ -170,7 +170,9 @@ class ToolGateway:
             ToolCall.conversation_id == conversation_id, ToolCall.request_id == request_id,
         ))
         if existing is not None:
-            if (existing.tool_id != tool_id or existing.arguments != arguments
+            spec = self.registry.get(tool_id)
+            replayed = spec.validate(arguments) if spec is not None else arguments
+            if (existing.tool_id != tool_id or existing.arguments != replayed
                 or existing.run_id != run_id):
                 raise ServiceError(409, "idempotency_conflict", "同一工具请求不能更换工具或参数")
             return call_view(existing)

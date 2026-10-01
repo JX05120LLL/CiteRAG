@@ -77,6 +77,10 @@ uv run --locked --extra rag --extra voice --extra agent --extra mcp --no-env-fil
 
 `isError` 不算成功；只接文字/结构化结果，输出按已审查 schema 校验、限长，并禁止外部 schema 引用。图片资源、任意嵌入资源、sampling/elicitation 和 MCP 凭证加载未接入。远端返回内容不是指令，不能扩大工具权限或充当知识库引用。MCP 协议本身不证明服务可信，真实服务须逐个审查和独立验收。
 
+## 外部 HTTP 天气工具
+
+显式配置后可用 `weather.city_search/current/forecast`。使用本地 Python 执行器与受控 QWeather HTTPS 请求，`backend=local` 不表示没有外发；`destination` 明确标为 QWeather。两类聊天均可使用，每次 1 个请求并要求审批；不把结果变成知识库引用。手动入口支持简单文字/数字参数，复杂 MCP 参数仍明确禁用手动入口。关闭开关/缺配置时不加入目录。配置及真实验收步骤见 [天气工具](QWEATHER.md)。
+
 ## 依赖与验证
 
 版本锁在 `uv.lock`；LangGraph/checkpoint/MCP 是可选 extras。许可见 [依赖说明](vendor/agent/README.md)。公开 CI 使用隔离 PostgreSQL、模型替身和本地合成 MCP，不用真实密钥。测试通过不等于真实供应商、真实 MCP 或真人设备验收。

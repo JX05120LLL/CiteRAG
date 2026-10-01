@@ -51,7 +51,7 @@ it('downloads a voice source without navigating the active call document', async
   expect(within(drawer).getByRole('link', { name: '下载原文' }).getAttribute('download')).toBe(citation.filename);
   expect(actions.hangup).not.toHaveBeenCalled();
 });
-function fixture(messages = sampleMessages[sampleChats[0].id], chats = sampleChats) {
+function fixture(messages = sampleMessages[sampleChats[0].id], chats = sampleChats, weather = false) {
   const calls: { path: string; method: string; body: unknown }[] = [];
   let archived = false;
   let toolRecords: unknown[] = [];
@@ -70,16 +70,36 @@ function fixture(messages = sampleMessages[sampleChats[0].id], chats = sampleCha
         impact: '读取本机当前 UTC 时间；不访问知识库或外部服务。' },
       { id: 'kb.documents', title: '当前知识库资料目录', scope: 'knowledge', approval_required: false,
         impact: '只读取当前聊天绑定知识库的资料名称与处理状态；不读取正文。' },
+      ...(weather ? [{ id: 'weather.current', title: '和风实时天气', scope: 'any', approval_required: true,
+        impact: '合成天气测试：将坐标发送和风天气，可能按量计费。', input_schema: {
+          type: 'object', additionalProperties: false, required: ['latitude', 'longitude'], properties: {
+            latitude: { type: 'number', title: '纬度', minimum: -90, maximum: 90 },
+            longitude: { type: 'number', title: '经度', minimum: -180, maximum: 180 },
+          },
+        } }] : []),
     ] });
     if (path.endsWith('/tools/calls') && method === 'GET') return json({ items: toolRecords });
     if (path.endsWith('/tools/calls') && method === 'POST') {
       const body = JSON.parse(String(init?.body));
       const record = { id: 'synthetic-tool-call', conversation_id: sampleChats[0].id,
         request_id: body.request_id, kb_id: sampleBases[0].id, tool_id: body.tool_id,
-        arguments: {}, impact: '读取本机当前 UTC 时间；不访问知识库或外部服务。',
-        status: 'succeeded', result: { time: '2026-09-30T00:00:00Z' }, error_code: null,
+        arguments: body.arguments, impact: body.tool_id.startsWith('weather.') ?
+          '合成天气测试：将坐标发送和风天气，可能按量计费。' : '读取本机当前 UTC 时间；不访问知识库或外部服务。',
+        status: body.tool_id.startsWith('weather.') ? 'pending_approval' : 'succeeded',
+        result: body.tool_id.startsWith('weather.') ? null : { time: '2026-09-30T00:00:00Z' }, error_code: null,
         created_at: '2026-09-30T00:00:00Z', approved_at: null,
         finished_at: '2026-09-30T00:00:00Z', source_type: 'tool' };
+      toolRecords = [record]; return json(record);
+    }
+    if (path.endsWith('/synthetic-tool-call/decision') && method === 'POST') {
+      const approved = JSON.parse(String(init?.body)).approve;
+      const record = { ...toolRecords[0] as Record<string, unknown>,
+        status: approved ? 'succeeded' : 'rejected', result: approved ? {
+          provider: 'QWeather', source_type: 'tool', kind: 'current',
+          queried_at: '2026-10-01T00:00:00Z', location: { latitude: 0, longitude: 0 },
+          current: { condition: '合成少云', temperature: { value: 25, unit: '°C' }, humidity_percent: 69 },
+          attributions: ['https://developer.qweather.com/attribution.html'],
+        } : null };
       toolRecords = [record]; return json(record);
     }
     if (path.includes('/memories/') && method === 'DELETE') { memories = []; return json({ deleted: true }); }
@@ -143,6 +163,32 @@ it('runs a registered tool through the API and displays the separate durable res
   expect(await within(drawer).findByText(/本机时间：/)).toBeTruthy();
   expect(calls.some((call) => call.path.endsWith('/tools/calls') && call.method === 'POST')).toBe(true);
   expect(within(drawer).getByText(/不作为知识库引用/)).toBeTruthy();
+}, 20000);
+
+it('submits explicit weather coordinates and only shows an attributed result after approval', async () => {
+  const { api, calls } = fixture(undefined, undefined, true);
+  render(<CiteRagApp api={api} />);
+  fireEvent.click(await screen.findByRole('button', { name: '工具与调用记录' }, { timeout: 8000 }));
+  const drawer = await screen.findByRole('dialog');
+  const call = within(drawer).getByRole<HTMLButtonElement>('button', { name: '调用工具：和风实时天气' });
+  expect(call.disabled).toBe(true);
+  fireEvent.change(within(drawer).getByLabelText('纬度'), { target: { value: 'NaN' } });
+  fireEvent.change(within(drawer).getByLabelText('经度'), { target: { value: '0' } });
+  expect(call.disabled).toBe(true);
+  fireEvent.change(within(drawer).getByLabelText('纬度'), { target: { value: '0' } });
+  expect(call.disabled).toBe(false);
+  fireEvent.click(call);
+  expect(await within(drawer).findByText('待确认')).toBeTruthy();
+  const request = calls.find((item) => item.path.endsWith('/tools/calls') && item.method === 'POST');
+  expect(JSON.parse(String(request?.body)).arguments).toEqual({ latitude: 0, longitude: 0 });
+  expect(within(drawer).queryByText('合成少云')).toBeNull();
+  fireEvent.click(within(drawer).getByRole('button', { name: '确认执行' }));
+  fireEvent.click(await screen.findByRole('button', { name: '确定' }));
+  expect(await within(drawer).findByText(/合成少云/)).toBeTruthy();
+  expect(within(drawer).getByText(/69%/)).toBeTruthy();
+  expect(within(drawer).getByText('https://developer.qweather.com/attribution.html')).toBeTruthy();
+  expect(within(drawer).getByText(/查询时间/)).toBeTruthy();
+  expect(calls.filter((item) => item.path.endsWith('/decision')).length).toBe(1);
 }, 20000);
 
 it('restores fixed chat, opens a verified source and restores focus without writes under StrictMode', async () => {

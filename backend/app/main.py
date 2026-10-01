@@ -167,6 +167,9 @@ def create_app(
     application.state.query_adapter = None
     application.state.answer_adapter = None
     application.state.tool_registry = built_in_tools()
+    if settings.qweather_enabled:
+        from app.tools.qweather import qweather_tools
+        application.state.tool_registry.update(qweather_tools(settings))
     if settings.mcp_enabled:
         from app.tools.mcp import load_reviewed_registry
         application.state.tool_registry.update(load_reviewed_registry(

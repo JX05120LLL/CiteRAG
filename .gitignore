@@ -35,6 +35,8 @@
 !/backend/tests/test_agent_mcp.py
 !/backend/tests/test_agent_persistence.py
 !/backend/tests/test_tool_gateway.py
+!/backend/tests/test_qweather_tools.py
+!/backend/tests/test_qweather_api.py
 /frontend/**/*.test.*
 /frontend/**/*.spec.*
 !/frontend/src/api/client.test.ts

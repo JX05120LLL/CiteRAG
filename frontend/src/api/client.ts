@@ -136,7 +136,10 @@ export interface ToolInfo {
   scope: 'any' | 'knowledge';
   approval_required: boolean;
   impact: string;
-  input_schema?: { required?: string[] };
+  input_schema?: { type?: string; required?: string[]; properties?: Record<string, {
+    type?: string; title?: string; default?: unknown; minimum?: number; maximum?: number;
+    minLength?: number; maxLength?: number;
+  }> };
 }
 
 export interface ToolCallRecord {
@@ -687,12 +690,13 @@ export function createApi(fetcher: typeof fetch = globalThis.fetch) {
     toolCalls: async (chatId: string): Promise<ToolCallRecord[]> => collection<Record<string, unknown>>(
       await request(`/api/conversations/${encodeURIComponent(chatId)}/tools/calls`),
       () => true).map((item) => toolCall(item, chatId)),
-    invokeTool: async (chatId: string, toolId: string, requestId: string): Promise<ToolCallRecord> => toolCall(
+    invokeTool: async (chatId: string, toolId: string, requestId: string,
+      arguments_: Record<string, unknown> = {}): Promise<ToolCallRecord> => toolCall(
       await request(`/api/conversations/${encodeURIComponent(chatId)}/tools/calls`, 'POST',
-        { request_id: requestId, tool_id: toolId, arguments: {} }), chatId),
+        { request_id: requestId, tool_id: toolId, arguments: arguments_ }), chatId),
     decideTool: async (chatId: string, callId: string, approve: boolean): Promise<ToolCallRecord> => toolCall(
       await request(`/api/conversations/${encodeURIComponent(chatId)}/tools/calls/${encodeURIComponent(callId)}/decision`,
-        'POST', { approve }), chatId),
+        'POST', { approve }, 20000), chatId),
     knowledgeMemories: async (kbId: string): Promise<KnowledgeMemory[]> => collection<KnowledgeMemory>(
       await request(`/api/knowledge-bases/${encodeURIComponent(kbId)}/memories`),
       (item) => typeof item.id === 'string' &&

@@ -86,6 +86,8 @@ async def _kb_documents(session: AsyncSession, context: ToolContext, _arguments:
 
 
 def built_in_tools() -> dict[str, ToolDefinition]:
+    from app.tools.calculator import INPUT_SCHEMA, calculate, validate
+
     definitions = (
         ToolDefinition("local.time", "本机当前时间", "any", False,
                        "读取本机当前 UTC 时间；不访问知识库或外部服务。",
@@ -93,6 +95,10 @@ def built_in_tools() -> dict[str, ToolDefinition]:
         ToolDefinition("kb.documents", "当前知识库资料目录", "knowledge", False,
                        "只读取当前聊天绑定知识库的资料名称与处理状态；不读取正文。",
                        _no_arguments, _kb_documents),
+        ToolDefinition("local.calculate", "本地计算器", "any", False,
+                       "本地十进制四则运算，28位有效数字；rounded 标记近似结果。"
+                       "不执行代码、不访问文件、知识库或外部服务。",
+                       validate, calculate, input_schema=INPUT_SCHEMA),
     )
     return {item.id: item for item in definitions}
 

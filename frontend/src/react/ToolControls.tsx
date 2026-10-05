@@ -92,6 +92,20 @@ export function WeatherResult({ result }: { result: Record<string, unknown> }) {
 
 export function toolFailure(code: string): string {
   return ({
+    calculation_zero_division: '除数不能为零，请修改表达式后重新计算。',
+    calculation_limit: '计算结果超过支持范围，请简化表达式或缩小数字。',
+    mcp_auth_failed: 'MCP 认证失败；当前适配器尚未接入凭证加载，请检查服务接入方式。',
+    mcp_access_denied: 'MCP 服务拒绝访问，请检查已登记服务的权限。',
+    mcp_rate_limited: 'MCP 服务限流，请稍后主动重试。',
+    mcp_timeout: 'MCP 服务超时，请先核对调用记录，避免重复执行。',
+    mcp_unavailable: 'MCP 服务暂不可用，请检查登记地址、服务进程和连接。',
+    mcp_version_changed: 'MCP 服务版本变化，须重新审查登记后再调用。',
+    mcp_contract_changed: 'MCP 工具参数或描述变化，须重新审查契约。',
+    mcp_tool_failed: 'MCP 工具返回失败，未获得可用结果，请核对服务状态和参数。',
+    mcp_output_invalid: 'MCP 结果不符合已审查格式，未作为成功结果展示。',
+    mcp_content_unsupported: 'MCP 返回了当前不支持的内容类型，请使用文字或结构化结果。',
+    tool_timeout: '工具执行超时，请先核对调用记录再决定是否重试。',
+    tool_arguments_invalid: '工具参数不符合登记规则，请核对类型、必填项和支持范围。',
     weather_not_configured: '天气未配置，请在后端配置 API Host 和 API Key 并显式启用。',
     weather_auth_failed: '天气认证失败，请检查后端 API Key。',
     weather_access_denied: '天气访问被拒绝，请检查账户额度、接口权限、API Host 或请求限制。',

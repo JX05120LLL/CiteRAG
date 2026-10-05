@@ -18,13 +18,67 @@ pytest_plugins = ["test_postgres_local"]
 pytestmark = pytest.mark.postgres
 
 
+async def test_calculator_has_persistent_results_errors_and_no_knowledge_reads(environment):  # noqa: F811
+    api, _ = environment
+    chat = (await api.post("/api/conversations", json={"kb_id": None})).json()["id"]
+    path = f"/api/conversations/{chat}/tools/calls"
+    body = {"request_id": str(uuid4()), "tool_id": "local.calculate",
+            "arguments": {"expression": " 0.1 + 0.2 "}}
+    first = await api.post(path, json=body)
+    assert first.status_code == 201, first.text
+    assert first.json()["result"]["value"] == "0.3"
+    assert first.json()["kb_id"] is None and first.json()["source_type"] == "tool"
+    assert (await api.post(path, json=body)).json() == first.json()
+    bad = await api.post(path, json={**body, "request_id": str(uuid4()),
+                                   "arguments": {"expression": "open('private')"}})
+    assert bad.status_code == 422
+    failure = (await api.post(path, json={**body, "request_id": str(uuid4()),
+                                         "arguments": {"expression": "1 / 0"}})).json()
+    assert failure["status"] == "failed"
+    assert failure["error_code"] == "calculation_zero_division"
+    assert failure["result"] is None
+    assert len((await api.get(path)).json()["items"]) == 2
+    assert (await api.get(f"/api/conversations/{chat}/messages")).json()["items"] == []
+
+
+async def test_actual_mcp_protocol_requires_approval_and_replays_saved_result(environment):  # noqa: F811
+    import json
+
+    from test_agent_mcp import synthetic_server
+
+    from app.tools.local_mcp import create_server, reviewed_registry
+    from app.tools.mcp import MCPAdapter, ReviewedMCPTool
+
+    api, _ = environment
+    chat = (await api.post("/api/conversations", json={"kb_id": None})).json()["id"]
+    path = f"/api/conversations/{chat}/tools/calls"
+    async with synthetic_server(create_server()) as url:
+        entry = (await reviewed_registry(create_server(), url))[0]
+        spec = MCPAdapter(url, entry["version"]).definition(ReviewedMCPTool(**entry["tools"][0]))
+        api._transport.app.state.tool_registry[spec.id] = spec
+        body = {"request_id": str(uuid4()), "tool_id": spec.id,
+                "arguments": {"expression": "0.1 + 0.2"}}
+        invalid = await api.post(path, json={**body, "arguments": {"expression": 123}})
+        assert invalid.status_code == 422
+        pending = (await api.post(path, json=body)).json()
+        assert pending["status"] == "pending_approval" and pending["result"] is None
+        approved = await api.post(f"{path}/{pending['id']}/decision", json={"approve": True})
+        assert approved.status_code == 200, approved.text
+        result = approved.json()
+        assert result["status"] == "succeeded" and result["effect"] == "read_only"
+        assert json.loads(result["result"]["text"])["value"] == "0.3"
+        assert (await api.post(path, json=body)).json() == result
+        assert (await api.post(f"{path}/{pending['id']}/decision",
+                               json={"approve": True})).status_code == 409
+
+
 async def test_ordinary_chat_catalog_call_idempotency_and_scope(environment):  # noqa: F811
     api, database = environment
     kb, _ = await seed_knowledge_base(database, "Synthetic", "ready")
     ordinary = (await api.post("/api/conversations", json={"kb_id": None})).json()["id"]
     path = f"/api/conversations/{ordinary}/tools"
     catalog = (await api.get(path)).json()["items"]
-    assert [item["id"] for item in catalog] == ["local.time"]
+    assert [item["id"] for item in catalog] == ["local.time", "local.calculate"]
     assert (await api.post(f"{path}/calls", json={
         "request_id": str(uuid4()), "tool_id": "kb.documents", "arguments": {},
     })).status_code == 403
@@ -43,7 +97,7 @@ async def test_ordinary_chat_catalog_call_idempotency_and_scope(environment):  #
     knowledge = (await api.post("/api/conversations", json={"kb_id": str(kb)})).json()["id"]
     knowledge_catalog = (await api.get(f"/api/conversations/{knowledge}/tools")).json()
     assert [item["id"] for item in knowledge_catalog["items"]] == [
-        "local.time", "kb.documents",
+        "local.time", "kb.documents", "local.calculate",
     ]
 
 

@@ -73,9 +73,9 @@ uv run --locked --extra rag --extra voice --extra agent --extra mcp --no-env-fil
 
 仅提供受控 Streamable HTTP 适配器，`CITERAG_MCP_ENABLED=true` 时读取 `.local/runtime/tools/registry.json`。没有公共新增 URL/命令接口、自动注册发现或任意 stdio 子进程。固定 HTTPS 或回环 HTTP 端点，不允许 URL 内凭证/查询参数、跨端点跳转或系统代理；请求参数会发送到登记服务。
 
-维护者必须审查服务版本、完整工具 descriptor、输入/输出 schema、目标、效果、归属范围和数据外发。登记格式是数组：服务具有 `url,version,tools`；每项工具具有 `id`（`mcp.` 前缀）、`title,scope,descriptor`。目前 MCP 只读；最多 8 个服务、每服务 8 个已审查工具，运行目录不得超过 50 条或分页。每次调用重查版本和契约，变化即拒绝。
+维护者必须审查服务版本、完整工具 descriptor、输入/输出 schema、目标、效果、归属范围和数据外发。登记格式是数组：服务具有 `url,version,tools`；每项工具具有 `id`（`mcp.` 前缀）、`title,scope,descriptor`，可选布尔 `approval_required`（省略保留旧行为 `false`）。数据外发需要确认时设为 `true`，复用现有审批；审批不能替代审查。目前 MCP 只读；最多 8 个服务、每服务 8 个已审查工具，运行目录不得超过 50 条或分页。每次调用重查版本和契约，变化即拒绝。登记文件位于 `backend/.local/runtime/tools/registry.json`，具体示例见[工具与 MCP](TOOLS.md)。
 
-`isError` 不算成功；只接文字/结构化结果，输出按已审查 schema 校验、限长，并禁止外部 schema 引用。图片资源、任意嵌入资源、sampling/elicitation 和 MCP 凭证加载未接入。远端返回内容不是指令，不能扩大工具权限或充当知识库引用。MCP 协议本身不证明服务可信，真实服务须逐个审查和独立验收。
+`isError` 不算成功；只接文字/结构化结果，输入在创建可执行记录前校验，输出按已审查 schema 校验、限长，并禁止外部 schema 引用。HTTP 401/403/429 保留安全的认证/权限/限流原因，不输出远端诊断内容。图片资源、任意嵌入资源、sampling/elicitation 和 MCP 凭证加载未接入。远端返回内容不是指令，不能扩大工具权限或充当知识库引用。MCP 协议本身不证明服务可信，真实服务须逐个审查和独立验收。
 
 ## 外部 HTTP 天气工具
 

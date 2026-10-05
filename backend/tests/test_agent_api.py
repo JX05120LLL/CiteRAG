@@ -59,6 +59,55 @@ async def settled(api, path, run):
     pytest.fail("Synthetic Agent did not settle")
 
 
+async def test_real_mcp_approval_result_returns_to_agent_without_knowledge_access(environment):  # noqa: F811
+    import json
+
+    from test_agent_mcp import synthetic_server
+
+    from app.tools.local_mcp import create_server, reviewed_registry
+    from app.tools.mcp import MCPAdapter, ReviewedMCPTool
+
+    api, _ = environment
+    app, chat, path = await ready(api, [
+        {"action": "call_tool", "tool_id": "mcp.local.calculate",
+         "arguments": {"expression": "0.1 + 0.2"}},
+        {"action": "finish", "answer": {"text": "本地 MCP 实际计算结果为 0.3。"}},
+    ])
+
+    class ForbiddenRetriever:
+        async def retrieve(self, *args):
+            pytest.fail("Ordinary MCP Agent must never call LightRAG")
+
+    app.state.query_adapter = ForbiddenRetriever()
+    try:
+        async with synthetic_server(create_server()) as url:
+            entry = (await reviewed_registry(create_server(), url))[0]
+            spec = MCPAdapter(url, entry["version"]).definition(
+                ReviewedMCPTool(**entry["tools"][0]))
+            app.state.tool_registry[spec.id] = spec
+            accepted = await api.post(path, json={"client_message_id": str(uuid4()),
+                                                  "text": "用本地 MCP 计算 0.1 + 0.2"})
+            assert accepted.status_code == 202, accepted.text
+            run = await settled(api, path, accepted.json()["id"])
+            assert run["status"] == "waiting_approval" and len(app.state.answer_adapter.inputs) == 1
+            pending = (await api.get(f"/api/conversations/{chat}/tools/calls")).json()["items"]
+            assert pending[0]["status"] == "pending_approval" and pending[0]["result"] is None
+            resumed = await api.post(f"{path}/{run['id']}/resume", json={
+                "request_id": str(uuid4()), "generation": run["generation"],
+                "input": {"approve": True}})
+            assert resumed.status_code == 202, resumed.text
+            done = await settled(api, path, run["id"])
+            assert done["status"] == "completed" and done["tool_attempts"] == 1
+            observed = app.state.answer_adapter.inputs[-1]["results"][0]
+            assert observed["status"] == "succeeded" and observed["source_type"] == "tool"
+            assert json.loads(observed["data"]["text"])["value"] == "0.3"
+            messages = (await api.get(f"/api/conversations/{chat}/messages")).json()["items"]
+            assert len(messages) == 1 and messages[0]["status"] == "answered"
+            assert messages[0]["route"] == "general" and messages[0]["citations"] == []
+    finally:
+        await app.state.agent_runtime.close()
+
+
 async def test_real_local_tool_and_direct_answer_reuse_answer_service(environment):  # noqa: F811
     api, database = environment
     app, chat, path = await ready(
@@ -151,7 +200,7 @@ async def test_ordinary_model_cannot_request_knowledge_tool(environment):  # noq
         result = await settled(api, path, response.json()["id"])
         assert result["status"] == "failed" and result["error_code"] == "tool_scope_forbidden"
         assert [item["id"] for item in app.state.answer_adapter.inputs[0]["tools"]] == [
-            "local.time"
+            "local.time", "local.calculate"
         ]
     finally:
         await app.state.agent_runtime.close()

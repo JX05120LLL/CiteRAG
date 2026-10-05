@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from ipaddress import ip_address
@@ -15,12 +16,52 @@ from app.tools.contracts import arguments_fingerprint, normalize_mcp_result
 from app.tools.gateway import ToolDefinition
 
 
+class _SafeMCPDiagnostics(logging.Filter):
+    """The SDK's validation traceback can contain entire remote responses."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.msg = "MCP transport diagnostic; check the persisted tool outcome."
+        record.args = ()
+        record.exc_info = record.exc_text = record.stack_info = None
+        return True
+
+
+# This API owns its MCP client. Keep severity/module/time, never remote content,
+# session identifiers, request parameters or exception traces in SDK diagnostics.
+for _logger_name in ("mcp.client.streamable_http", "mcp.shared.session"):
+    logging.getLogger(_logger_name).addFilter(_SafeMCPDiagnostics())
+
+
 @dataclass(frozen=True)
 class ReviewedMCPTool:
     id: str
     title: str
     scope: str
     descriptor: dict
+    approval_required: bool = False
+
+    def __post_init__(self):
+        if not isinstance(self.approval_required, bool):
+            raise ValueError("MCP approval_required must be a boolean")
+
+
+def _connection_failure(error: BaseException, status: int | None = None) -> ServiceError:
+    """Keep upstream HTTP diagnostics and URLs out of business errors."""
+    import httpx2
+
+    if isinstance(error, httpx2.TimeoutException):
+        return ServiceError(503, "mcp_timeout", "MCP 服务超时，请先核对调用记录")
+    if isinstance(error, httpx2.HTTPStatusError):
+        status = error.response.status_code
+    if status is not None:
+        code, message = {
+            401: ("mcp_auth_failed", "MCP 认证失败；当前适配器尚未接入凭证加载"),
+            403: ("mcp_access_denied", "MCP 服务拒绝访问，请检查服务权限"),
+            429: ("mcp_rate_limited", "MCP 服务限流，请稍后主动重试"),
+        }.get(status,
+              ("mcp_unavailable", "MCP 服务暂不可用，请检查连接与服务状态"))
+        return ServiceError(503, code, message)
+    return ServiceError(503, "mcp_unavailable", "MCP 服务暂不可用，请检查连接与服务状态")
 
 
 class MCPAdapter:
@@ -53,6 +94,15 @@ class MCPAdapter:
         from mcp import ClientSession
         from mcp.client.streamable_http import streamable_http_client
 
+        upstream_status = None
+
+        async def capture_status(response):
+            nonlocal upstream_status
+            # The SDK converts non-2xx POSTs into generic JSON-RPC errors. Preserve
+            # only the status, never a body/header/URL, for safe business diagnostics.
+            if response.request.method == "POST" and response.status_code >= 400:
+                upstream_status = response.status_code
+
         async def only_registered_endpoint(request):
             if str(request.url).rstrip("/") != self.url.rstrip("/"):
                 raise ServiceError(403, "mcp_redirect_forbidden", "MCP 不能转发到未登记目标")
@@ -64,7 +114,8 @@ class MCPAdapter:
                     timeout=15,
                     follow_redirects=False,
                     trust_env=False,
-                    event_hooks={"request": [only_registered_endpoint]},
+                    event_hooks={"request": [only_registered_endpoint],
+                                 "response": [capture_status]},
                 ) as http,
             ):
                 async with streamable_http_client(self.url, http_client=http) as streams:
@@ -77,6 +128,7 @@ class MCPAdapter:
                         yield session
         except BaseExceptionGroup as error:
             pending = list(error.exceptions)
+            failures = []
             while pending:
                 item = pending.pop()
                 if isinstance(item, BaseExceptionGroup):
@@ -85,7 +137,11 @@ class MCPAdapter:
                     raise asyncio.CancelledError from None
                 elif isinstance(item, ServiceError):
                     raise item from None
-            raise ServiceError(503, "mcp_unavailable", "MCP 服务暂不可用，请检查连接") from None
+                else:
+                    failures.append(item)
+            raise _connection_failure(failures[0] if failures else error, upstream_status) from None
+        except httpx2.HTTPError as error:
+            raise _connection_failure(error, upstream_status) from None
 
     async def _descriptors(self, session):
         page = await session.list_tools()
@@ -150,6 +206,15 @@ class MCPAdapter:
             reject_remote_refs(output_schema)
             Draft202012Validator.check_schema(output_schema)
 
+        validator = Draft202012Validator(schema)
+
+        def validate(arguments):
+            try:
+                arguments_fingerprint(arguments)
+                return None if next(validator.iter_errors(arguments), None) else arguments
+            except (ValueError, TypeError):
+                return None
+
         async def run(_session, _context, arguments):
             result = await self.call(tool, arguments)
             return {**result["data"], "truncated": result["truncated"]}
@@ -158,9 +223,9 @@ class MCPAdapter:
             tool.id,
             tool.title,
             tool.scope,
-            False,
+            tool.approval_required,
             "读取已审查 MCP 服务；参数会发往所登记服务，结果不是知识库引用。",
-            lambda args: args,
+            validate,
             run,
             version=self.server_version,
             input_schema=schema,

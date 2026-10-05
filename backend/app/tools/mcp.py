@@ -1,10 +1,11 @@
 """Reviewed Streamable HTTP MCP adapter. Discovery never registers tools automatically."""
 
 import asyncio
+import hashlib
 import json
 import logging
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from ipaddress import ip_address
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -219,7 +220,7 @@ class MCPAdapter:
             result = await self.call(tool, arguments)
             return {**result["data"], "truncated": result["truncated"]}
 
-        return ToolDefinition(
+        definition = ToolDefinition(
             tool.id,
             tool.title,
             tool.scope,
@@ -232,6 +233,14 @@ class MCPAdapter:
             backend="mcp",
             destination=self.url,
         )
+        # Manual approvals persist the tool version. Bind it to the reviewed
+        # destination and descriptor so a registry edit invalidates old approval.
+        reviewed = hashlib.sha256(json.dumps(
+            {"policy": definition.policy_hash, "descriptor": tool.descriptor,
+             "title": tool.title},
+            sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False,
+        ).encode()).hexdigest()
+        return replace(definition, version=f"mcp-{reviewed}")
 
 
 def load_reviewed_registry(path: Path) -> dict[str, ToolDefinition]:

@@ -127,6 +127,22 @@ def test_mcp_definition_rejects_bad_arguments_before_execution():
         assert spec.validate(arguments) is None
 
 
+def test_mcp_reviewed_version_changes_with_target_contract_or_approval():
+    from app.tools.mcp import MCPAdapter, ReviewedMCPTool
+
+    descriptor = {"name": "add", "inputSchema": {"type": "object"}}
+    tool = ReviewedMCPTool("mcp.synthetic.add", "合成加法", "any", descriptor, True)
+    original = MCPAdapter("http://127.0.0.1:17651/mcp", "reviewed").definition(tool)
+    changed_target = MCPAdapter("http://127.0.0.1:17652/mcp", "reviewed").definition(tool)
+    changed_contract = MCPAdapter("http://127.0.0.1:17651/mcp", "reviewed").definition(
+        ReviewedMCPTool(tool.id, tool.title, tool.scope,
+                        {**descriptor, "description": "updated"}, True))
+    changed_approval = MCPAdapter("http://127.0.0.1:17651/mcp", "reviewed").definition(
+        ReviewedMCPTool(tool.id, tool.title, tool.scope, descriptor, False))
+    assert len({original.version, changed_target.version, changed_contract.version,
+                changed_approval.version}) == 4
+
+
 @pytest.mark.parametrize("approval", [None, False, True])
 def test_mcp_registry_approval_extension_is_backward_compatible(tmp_path, approval):
     from app.tools.mcp import load_reviewed_registry

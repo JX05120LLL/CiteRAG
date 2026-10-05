@@ -72,6 +72,36 @@ async def test_actual_mcp_protocol_requires_approval_and_replays_saved_result(en
                                json={"approve": True})).status_code == 409
 
 
+async def test_pending_mcp_approval_rejects_changed_destination(environment):  # noqa: F811
+    from dataclasses import replace
+
+    from app.tools.mcp import MCPAdapter, ReviewedMCPTool
+
+    api, _ = environment
+    chat = (await api.post("/api/conversations", json={"kb_id": None})).json()["id"]
+    path = f"/api/conversations/{chat}/tools/calls"
+    descriptor = {"name": "add", "inputSchema": {"type": "object"}}
+    tool = ReviewedMCPTool("mcp.synthetic.add", "合成加法", "any", descriptor, True)
+    first = MCPAdapter("http://127.0.0.1:17651/mcp", "reviewed").definition(tool)
+    registry = api._transport.app.state.tool_registry
+    registry[tool.id] = first
+    pending = (await api.post(path, json={
+        "request_id": str(uuid4()), "tool_id": tool.id, "arguments": {},
+    })).json()
+    assert pending["status"] == "pending_approval" and pending["result"] is None
+
+    async def forbidden(*_args):
+        pytest.fail("Changed MCP destination must not execute under old approval")
+
+    second = MCPAdapter("http://127.0.0.1:17652/mcp", "reviewed").definition(tool)
+    registry[tool.id] = replace(second, run=forbidden)
+    decision = await api.post(f"{path}/{pending['id']}/decision", json={"approve": True})
+    assert decision.status_code == 200, decision.text
+    assert decision.json()["status"] == "failed"
+    assert decision.json()["error_code"] == "tool_scope_changed"
+    assert decision.json()["result"] is None
+
+
 async def test_ordinary_chat_catalog_call_idempotency_and_scope(environment):  # noqa: F811
     api, database = environment
     kb, _ = await seed_knowledge_base(database, "Synthetic", "ready")

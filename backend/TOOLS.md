@@ -40,7 +40,22 @@ uv run --locked --extra mcp --no-env-file python -m app.tools.local_mcp --port 8
 
 ## 审批与兼容
 
-每项 MCP 工具新增可选 `approval_required` 布尔值。旧登记省略时仍为 `false`，保留原行为；显式 `true` 则走现有手动/任务审批流程。`null`、数字或字符串不会视作布尔值。只读也可能外发数据，维护者应按目标和参数敏感性选择审批。审批不是信任证明，不取代版本和契约审查。
+每项 MCP 工具可设置 `approval_required` 布尔值。显式 `true` 始终走手动/任务审批；省略或旧登记中的 `false` **不再单独获得免审批资格**，没有有效审核记录时同样逐次审批。`null`、数字或字符串不是布尔值，会拒绝登记。服务自报的 `readOnly` annotation 也不能证明实际行为。内置工具及天气工具的审批策略不受此项改变。
+
+首版免审批仅面向维护者控制部署、可核实版本、无凭据、免费且实际只读的 MCP 服务。维护者须对每个工具审查来源、实际行为、接收方、权限和公开参数范围，再在该工具条目登记完整的 `unattended_read_review` 对象：
+
+| 字段 | 审核内容 |
+| --- | --- |
+| `reviewed_by`, `reviewed_at`, `evidence_ref` | 审核人、带时区的审核时间、无秘密的证据引用 |
+| `source`, `deployment_id`, `behavior` | 可控来源、已核实的发布/部署标识、实际读行为与副作用 |
+| `url`, `server_version`, `descriptor_sha256` | 与服务登记完全一致的固定目标、版本和完整 descriptor 规范化 SHA-256 |
+| `data_destination`, `allowed_data` | 与登记 URL 相同的接收方；首版只允许 `public` |
+| `permissions`, `cost` | 首版分别必须是空数组 `[]` 和 `free` |
+| `allowed_arguments_schema` | 限定顶层公开参数：字符串仅有限枚举，数字必须有上下界；不得包含自由文本、嵌套对象/数组或额外字段 |
+
+缺少审核对象时逐次审批；有审核对象但字段缺失、未知、格式不符或与目标/版本/descriptor 不匹配时，登记直接失败，须修正后再启动 API。符合工具输入 schema 但超出审核的公开参数范围时逐次审批；不符合工具输入 schema 时直接拒绝。完整 descriptor 的摘要按 UTF-8 规范化 JSON（`sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False`）计算。证据必须来自维护者实际核查，不能仅复制远端声明；参考 CLI 模板保留 `approval_required=true`，不预填虚构审核结论。
+
+目标、服务版本、descriptor、参数范围、权限、去向、收费状态或审核记录变化后，旧豁免不再适用，须重新审核。API 仍会在每次 MCP 调用前复核服务版本和完整 descriptor；这无法证明服务在同一版本和 descriptor 下没有被原地替换，因此不可核实部署的第三方服务始终逐次审批。审批不是信任证明，也不取代登记审查。
 
 登记在 API 启动时加载；更改后先结束活动调用，再有序重启自己的 API。等待任务恢复时会重新检查工具策略，策略变更不会沿用旧批准；手动调用也继续检查当前登记、绑定、归属和版本。没有新增公共注册 URL/命令接口，仍只支持已审查的 Streamable HTTP 只读服务；认证凭证加载、stdio、写入及 sampling/elicitation 尚未接入。
 

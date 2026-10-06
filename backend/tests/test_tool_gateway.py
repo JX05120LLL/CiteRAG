@@ -74,6 +74,7 @@ async def test_actual_mcp_protocol_requires_approval_and_replays_saved_result(en
 
 async def test_reviewed_public_mcp_arguments_execute_without_approval(environment):  # noqa: F811
     import json
+    from dataclasses import replace
 
     from test_agent_mcp import _public_add_review, synthetic_server
 
@@ -89,7 +90,13 @@ async def test_reviewed_public_mcp_arguments_execute_without_approval(environmen
         spec = adapter.definition(ReviewedMCPTool(
             "mcp.synthetic.add", "Synthetic add", "any", descriptor, False, review
         ))
-        api._transport.app.state.tool_registry[spec.id] = spec
+        executions = []
+
+        async def counted_run(session, context, arguments):
+            executions.append(arguments)
+            return await spec.run(session, context, arguments)
+
+        api._transport.app.state.tool_registry[spec.id] = replace(spec, run=counted_run)
         assert spec.approval_required is True
         approved_body = {"request_id": str(uuid4()), "tool_id": spec.id,
                          "arguments": {"a": 2, "b": 3}}
@@ -100,15 +107,23 @@ async def test_reviewed_public_mcp_arguments_execute_without_approval(environmen
         assert (await api.post(path, json=approved_body)).json() == first.json()
         public_calls = (await api.get(path)).json()["items"]
         assert len(public_calls) == 1 and public_calls[0]["status"] == "succeeded"
+        assert executions == [{"a": 2, "b": 3}]
 
         outside = await api.post(path, json={"request_id": str(uuid4()),
             "tool_id": spec.id, "arguments": {"a": 11, "b": 3}})
         assert outside.status_code == 201
         assert outside.json()["status"] == "pending_approval"
         assert outside.json()["result"] is None
+        assert executions == [{"a": 2, "b": 3}]
         invalid = await api.post(path, json={"request_id": str(uuid4()),
             "tool_id": spec.id, "arguments": {"a": "private", "b": 3}})
         assert invalid.status_code == 422
+        assert executions == [{"a": 2, "b": 3}]
+        approved = await api.post(f"{path}/{outside.json()['id']}/decision",
+                                  json={"approve": True})
+        assert approved.status_code == 200
+        assert approved.json()["status"] == "succeeded"
+        assert executions == [{"a": 2, "b": 3}, {"a": 11, "b": 3}]
 
 
 async def test_pending_mcp_approval_rejects_changed_destination(environment):  # noqa: F811

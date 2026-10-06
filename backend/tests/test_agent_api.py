@@ -108,6 +108,98 @@ async def test_real_mcp_approval_result_returns_to_agent_without_knowledge_acces
         await app.state.agent_runtime.close()
 
 
+async def test_reviewed_public_mcp_agent_completes_without_approval(environment):  # noqa: F811
+    import json
+    from dataclasses import replace
+
+    from test_agent_mcp import _public_add_review, synthetic_server
+
+    from app.tools.mcp import MCPAdapter, ReviewedMCPTool
+
+    api, _ = environment
+    app, chat, path = await ready(api, [
+        {"action": "call_tool", "tool_id": "mcp.synthetic.add", "arguments": {"a": 2, "b": 3}},
+        {"action": "finish", "answer": {"text": "Synthetic sum is five."}},
+    ])
+    executions = []
+    try:
+        async with synthetic_server() as url:
+            adapter = MCPAdapter(url, "synthetic-1")
+            descriptor = next(item for item in await adapter.discover() if item["name"] == "add")
+            review = _public_add_review(url, "synthetic-1", descriptor)
+            spec = adapter.definition(ReviewedMCPTool(
+                "mcp.synthetic.add", "Synthetic add", "any", descriptor, False, review
+            ))
+
+            async def counted_run(session, context, arguments):
+                executions.append(arguments)
+                return await spec.run(session, context, arguments)
+
+            app.state.tool_registry[spec.id] = replace(spec, run=counted_run)
+            body = {"client_message_id": str(uuid4()), "text": "Add two public numbers"}
+            accepted = await api.post(path, json=body)
+            assert accepted.status_code == 202, accepted.text
+            done = await settled(api, path, accepted.json()["id"])
+            assert done["status"] == "completed" and done["tool_attempts"] == 1
+            result = app.state.answer_adapter.inputs[-1]["results"][0]
+            assert result["status"] == "succeeded"
+            assert json.loads(result["data"]["text"])["sum"] == 5
+            assert executions == [{"a": 2, "b": 3}]
+            calls = (await api.get(f"/api/conversations/{chat}/tools/calls")).json()["items"]
+            assert len(calls) == 1 and calls[0]["status"] == "succeeded"
+            assert (await api.post(path, json=body)).json()["id"] == done["id"]
+            assert executions == [{"a": 2, "b": 3}]
+    finally:
+        await app.state.agent_runtime.close()
+
+
+async def test_reviewed_mcp_agent_waiting_call_rejects_policy_change(environment):  # noqa: F811
+    from dataclasses import replace
+
+    from test_agent_mcp import _public_add_review, synthetic_server
+
+    from app.tools.mcp import MCPAdapter, ReviewedMCPTool
+
+    api, _ = environment
+    app, chat, path = await ready(api, [
+        {"action": "call_tool", "tool_id": "mcp.synthetic.add", "arguments": {"a": 11, "b": 3}},
+    ])
+    try:
+        async with synthetic_server() as url:
+            adapter = MCPAdapter(url, "synthetic-1")
+            descriptor = next(item for item in await adapter.discover() if item["name"] == "add")
+            review = _public_add_review(url, "synthetic-1", descriptor)
+            spec = adapter.definition(ReviewedMCPTool(
+                "mcp.synthetic.add", "Synthetic add", "any", descriptor, False, review
+            ))
+
+            async def forbidden_run(_session, _context, _arguments):
+                pytest.fail("Changed policy must not execute the old pending call")
+
+            app.state.tool_registry[spec.id] = replace(spec, run=forbidden_run)
+            accepted = await api.post(path, json={"client_message_id": str(uuid4()),
+                                                  "text": "Add outside reviewed range"})
+            waiting = await settled(api, path, accepted.json()["id"])
+            assert waiting["status"] == "waiting_approval"
+            calls = (await api.get(f"/api/conversations/{chat}/tools/calls")).json()["items"]
+            assert calls[0]["status"] == "pending_approval" and calls[0]["result"] is None
+            changed_review = {**review, "behavior": "Changed review evidence"}
+            changed = adapter.definition(ReviewedMCPTool(
+                "mcp.synthetic.add", "Synthetic add", "any", descriptor,
+                False, changed_review,
+            ))
+            assert changed.policy_hash != spec.policy_hash
+            app.state.tool_registry[spec.id] = replace(changed, run=forbidden_run)
+            resumed = await api.post(f"{path}/{waiting['id']}/resume", json={
+                "request_id": str(uuid4()), "generation": waiting["generation"],
+                "input": {"approve": True},
+            })
+            assert resumed.status_code == 409
+            assert resumed.json()["detail"]["code"] == "tool_approval_changed"
+    finally:
+        await app.state.agent_runtime.close()
+
+
 async def test_real_local_tool_and_direct_answer_reuse_answer_service(environment):  # noqa: F811
     api, database = environment
     app, chat, path = await ready(

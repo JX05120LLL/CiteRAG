@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from uuid import UUID
 
+from jsonschema import Draft202012Validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -68,6 +69,13 @@ class ToolDefinition:
                  "unattended_read_review": self.unattended_read_review}
         return hashlib.sha256(json.dumps(value, sort_keys=True, allow_nan=False,
                                           ensure_ascii=False).encode()).hexdigest()
+
+    def requires_approval(self, arguments: dict) -> bool:
+        if (self.backend == "mcp" and self.effect == "read_only"
+            and self.unattended_read_review is not None):
+            schema = self.unattended_read_review["allowed_arguments_schema"]
+            return not Draft202012Validator(schema).is_valid(arguments)
+        return self.approval_required
 
 
 def _no_arguments(arguments: dict) -> dict | None:
@@ -191,6 +199,7 @@ class ToolGateway:
             fingerprint = arguments_fingerprint(validated)
         except (TypeError, ValueError):
             raise ServiceError(422, "tool_arguments_invalid", "工具参数不符合要求") from None
+        requires_approval = spec.requires_approval(validated)
         active_run = await self.session.scalar(select(AgentRun).where(
             AgentRun.conversation_id == conversation_id,
             AgentRun.status.in_(("running", "waiting_input", "waiting_approval")),
@@ -223,10 +232,10 @@ class ToolGateway:
                         tool_id=tool_id, arguments=validated, impact=spec.impact,
                         run_id=run_id, step_id=step_id, tool_version=spec.version,
                         arguments_hash=fingerprint, effect=spec.effect,
-                        status="pending_approval" if spec.approval_required else "running")
+                        status="pending_approval" if requires_approval else "running")
         self.session.add(call)
         await self.session.commit()
-        if spec.approval_required or defer_execution:
+        if requires_approval or defer_execution:
             return call_view(call)
         return await self._execute(call, spec, context)
 

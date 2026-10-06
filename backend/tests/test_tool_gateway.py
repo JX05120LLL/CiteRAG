@@ -72,6 +72,45 @@ async def test_actual_mcp_protocol_requires_approval_and_replays_saved_result(en
                                json={"approve": True})).status_code == 409
 
 
+async def test_reviewed_public_mcp_arguments_execute_without_approval(environment):  # noqa: F811
+    import json
+
+    from test_agent_mcp import _public_add_review, synthetic_server
+
+    from app.tools.mcp import MCPAdapter, ReviewedMCPTool
+
+    api, _ = environment
+    chat = (await api.post("/api/conversations", json={"kb_id": None})).json()["id"]
+    path = f"/api/conversations/{chat}/tools/calls"
+    async with synthetic_server() as url:
+        adapter = MCPAdapter(url, "synthetic-1")
+        descriptor = next(item for item in await adapter.discover() if item["name"] == "add")
+        review = _public_add_review(url, "synthetic-1", descriptor)
+        spec = adapter.definition(ReviewedMCPTool(
+            "mcp.synthetic.add", "Synthetic add", "any", descriptor, False, review
+        ))
+        api._transport.app.state.tool_registry[spec.id] = spec
+        assert spec.approval_required is True
+        approved_body = {"request_id": str(uuid4()), "tool_id": spec.id,
+                         "arguments": {"a": 2, "b": 3}}
+        first = await api.post(path, json=approved_body)
+        assert first.status_code == 201, first.text
+        assert first.json()["status"] == "succeeded"
+        assert json.loads(first.json()["result"]["text"])["sum"] == 5
+        assert (await api.post(path, json=approved_body)).json() == first.json()
+        public_calls = (await api.get(path)).json()["items"]
+        assert len(public_calls) == 1 and public_calls[0]["status"] == "succeeded"
+
+        outside = await api.post(path, json={"request_id": str(uuid4()),
+            "tool_id": spec.id, "arguments": {"a": 11, "b": 3}})
+        assert outside.status_code == 201
+        assert outside.json()["status"] == "pending_approval"
+        assert outside.json()["result"] is None
+        invalid = await api.post(path, json={"request_id": str(uuid4()),
+            "tool_id": spec.id, "arguments": {"a": "private", "b": 3}})
+        assert invalid.status_code == 422
+
+
 async def test_pending_mcp_approval_rejects_changed_destination(environment):  # noqa: F811
     from dataclasses import replace
 

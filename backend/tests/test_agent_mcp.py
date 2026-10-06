@@ -1,6 +1,7 @@
 """Actual MCP Streamable HTTP handshake against a public synthetic local server."""
 
 import asyncio
+import hashlib
 import json
 import socket
 import subprocess
@@ -127,7 +128,7 @@ def test_mcp_definition_rejects_bad_arguments_before_execution():
         assert spec.validate(arguments) is None
 
 
-def test_mcp_reviewed_version_changes_with_target_contract_or_approval():
+def test_mcp_reviewed_version_changes_with_target_or_contract_not_legacy_false():
     from app.tools.mcp import MCPAdapter, ReviewedMCPTool
 
     descriptor = {"name": "add", "inputSchema": {"type": "object"}}
@@ -139,12 +140,12 @@ def test_mcp_reviewed_version_changes_with_target_contract_or_approval():
                         {**descriptor, "description": "updated"}, True))
     changed_approval = MCPAdapter("http://127.0.0.1:17651/mcp", "reviewed").definition(
         ReviewedMCPTool(tool.id, tool.title, tool.scope, descriptor, False))
-    assert len({original.version, changed_target.version, changed_contract.version,
-                changed_approval.version}) == 4
+    assert len({original.version, changed_target.version, changed_contract.version}) == 3
+    assert changed_approval.version == original.version
 
 
 @pytest.mark.parametrize("approval", [None, False, True])
-def test_mcp_registry_approval_extension_is_backward_compatible(tmp_path, approval):
+def test_mcp_registry_without_review_requires_approval(tmp_path, approval):
     from app.tools.mcp import load_reviewed_registry
 
     item = {"id": "mcp.synthetic.add", "title": "合成加法", "scope": "any",
@@ -154,7 +155,97 @@ def test_mcp_registry_approval_extension_is_backward_compatible(tmp_path, approv
     path = tmp_path / "registry.json"
     path.write_text(json.dumps([{"url": "http://127.0.0.1:1/mcp", "version": "reviewed",
                                  "tools": [item]}]), encoding="utf-8")
-    assert load_reviewed_registry(path)[item["id"]].approval_required is bool(approval)
+    spec = load_reviewed_registry(path)[item["id"]]
+    assert spec.approval_required is True
+    assert spec.unattended_read_review is None
+
+
+def _public_add_review(url, version, descriptor):
+    return {
+        "reviewed_by": "maintainer", "reviewed_at": "2026-10-06T08:00:00Z",
+        "evidence_ref": "docs/reviews/synthetic-add.md", "source": "controlled synthetic server",
+        "deployment_id": "synthetic-release-1", "behavior": "Add two public integers only",
+        "data_destination": url, "allowed_data": "public",
+        "allowed_arguments_schema": {"type": "object", "properties": {
+            "a": {"type": "integer", "minimum": 0, "maximum": 10},
+            "b": {"type": "integer", "minimum": 0, "maximum": 10},
+        }, "required": ["a", "b"], "additionalProperties": False},
+        "permissions": [], "cost": "free", "url": url, "server_version": version,
+        "descriptor_sha256": hashlib.sha256(json.dumps(
+            descriptor, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+            allow_nan=False,
+        ).encode()).hexdigest(),
+    }
+
+
+def _write_review_registry(path, *, review=None, approval=False, descriptor=None):
+    descriptor = descriptor or {"name": "add", "inputSchema": {"type": "object",
+        "properties": {"a": {"type": "integer"}, "b": {"type": "integer"}},
+        "required": ["a", "b"]}}
+    url, version = "http://127.0.0.1:17651/mcp", "controlled-1"
+    item = {"id": "mcp.synthetic.add", "title": "Synthetic add", "scope": "any",
+            "approval_required": approval, "descriptor": descriptor}
+    if review is not None:
+        item["unattended_read_review"] = review
+    path.write_text(json.dumps([{"url": url, "version": version, "tools": [item]}]),
+                    encoding="utf-8")
+    return url, version, descriptor
+
+
+def test_mcp_valid_public_review_is_bound_to_fixed_registry(tmp_path):
+    from app.tools.mcp import load_reviewed_registry
+
+    path = tmp_path / "registry.json"
+    url, version, descriptor = _write_review_registry(path)
+    review = _public_add_review(url, version, descriptor)
+    _write_review_registry(path, review=review)
+    spec = load_reviewed_registry(path)["mcp.synthetic.add"]
+    assert spec.approval_required is True  # Catalog remains conservative.
+    assert spec.unattended_read_review == review
+    assert spec.version != load_reviewed_registry(
+        _write_unreviewed_registry(tmp_path / "old-version.json")
+    )["mcp.synthetic.add"].version
+    assert spec.policy_hash != load_reviewed_registry(
+        _write_unreviewed_registry(tmp_path / "old.json")
+    )["mcp.synthetic.add"].policy_hash
+
+
+def _write_unreviewed_registry(path):
+    _write_review_registry(path)
+    return path
+
+
+@pytest.mark.parametrize("change", [
+    lambda review: review.pop("reviewed_by"),
+    lambda review: review.update(extra="not reviewed"),
+    lambda review: review.update(url="http://127.0.0.1:17652/mcp"),
+    lambda review: review.update(server_version="changed"),
+    lambda review: review.update(descriptor_sha256="0" * 64),
+    lambda review: review.update(permissions=["read_private"]),
+    lambda review: review.update(cost="metered"),
+    lambda review: review.update(allowed_data="private"),
+    lambda review: review.update(data_destination="https://elsewhere.example"),
+    lambda review: review.update(allowed_arguments_schema={"type": "object",
+        "properties": {"text": {"type": "string"}}, "additionalProperties": False}),
+    lambda review: review.update(allowed_arguments_schema={"type": "object",
+        "properties": {"nested": {"type": "object"}}, "additionalProperties": False}),
+    lambda review: review.update(allowed_arguments_schema={"type": "object",
+        "properties": {"a": {"type": "number", "minimum": 0}},
+        "additionalProperties": False}),
+    lambda review: review["allowed_arguments_schema"].update(required=[[]]),
+    lambda review: review["allowed_arguments_schema"]["properties"]["a"].update(
+        minimum=float("nan")),
+])
+def test_mcp_invalid_public_review_fails_registration(tmp_path, change):
+    from app.tools.mcp import load_reviewed_registry
+
+    path = tmp_path / "registry.json"
+    url, version, descriptor = _write_review_registry(path)
+    review = _public_add_review(url, version, descriptor)
+    change(review)
+    _write_review_registry(path, review=review)
+    with pytest.raises(ValueError, match="review"):
+        load_reviewed_registry(path)
 
 
 @pytest.mark.parametrize("approval", ["false", 0, {}, None])

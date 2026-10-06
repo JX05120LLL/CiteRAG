@@ -48,6 +48,7 @@ class ToolDefinition:
     timeout_seconds: float = 15
     backend: str = "local"
     destination: str = "local"
+    unattended_read_review: dict | None = None
 
     def __post_init__(self):
         if (not self.version or len(self.version) > 80
@@ -63,7 +64,8 @@ class ToolDefinition:
         value = {"id": self.id, "version": self.version, "scope": self.scope,
                  "effect": self.effect, "approval": self.approval_required,
                  "impact": self.impact, "destination": self.destination,
-                 "backend": self.backend, "schema": self.input_schema}
+                 "backend": self.backend, "schema": self.input_schema,
+                 "unattended_read_review": self.unattended_read_review}
         return hashlib.sha256(json.dumps(value, sort_keys=True, allow_nan=False,
                                           ensure_ascii=False).encode()).hexdigest()
 

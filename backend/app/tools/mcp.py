@@ -4,8 +4,10 @@ import asyncio
 import hashlib
 import json
 import logging
+import math
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
+from datetime import datetime
 from ipaddress import ip_address
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -40,10 +42,87 @@ class ReviewedMCPTool:
     scope: str
     descriptor: dict
     approval_required: bool = False
+    unattended_read_review: dict | None = None
 
     def __post_init__(self):
         if not isinstance(self.approval_required, bool):
             raise ValueError("MCP approval_required must be a boolean")
+
+
+_REVIEW_FIELDS = frozenset({
+    "reviewed_by", "reviewed_at", "evidence_ref", "source", "deployment_id",
+    "behavior", "data_destination", "allowed_data", "allowed_arguments_schema",
+    "permissions", "cost", "url", "server_version", "descriptor_sha256",
+})
+
+
+def _reviewed_public_schema(schema: object, descriptor: dict) -> bool:
+    if not isinstance(schema, dict) or set(schema) != {
+        "type", "properties", "required", "additionalProperties"
+    } or schema["type"] != "object" or schema["additionalProperties"] is not False:
+        return False
+    properties, required = schema["properties"], schema["required"]
+    remote_properties = descriptor["inputSchema"].get("properties", {})
+    if (not isinstance(properties, dict) or len(properties) > 12
+        or not isinstance(remote_properties, dict)
+        or not isinstance(required, list)
+        or any(not isinstance(key, str) for key in required)
+        or len(required) != len(set(required))
+        or not set(required) <= set(properties)
+        or not set(properties) <= set(remote_properties)):
+        return False
+    for name, field in properties.items():
+        if not isinstance(name, str) or not isinstance(field, dict):
+            return False
+        if field.get("type") == "string":
+            values = field.get("enum")
+            if (set(field) != {"type", "enum"} or not isinstance(values, list)
+                or not 0 < len(values) <= 32 or any(
+                    not isinstance(value, str) or not value or len(value) > 64
+                    for value in values
+                ) or len(values) != len(set(values))):
+                return False
+        elif field.get("type") in {"integer", "number"}:
+            if set(field) != {"type", "minimum", "maximum"}:
+                return False
+            low, high = field["minimum"], field["maximum"]
+            if (type(low) not in {int, float} or type(high) not in {int, float}
+                or not math.isfinite(low) or not math.isfinite(high) or low > high
+                or field["type"] == "integer" and
+                (not float(low).is_integer() or not float(high).is_integer())):
+                return False
+        else:
+            return False
+    return True
+
+
+def _validate_public_review(review: object, url: str, version: str,
+                            descriptor: dict) -> dict:
+    if not isinstance(review, dict) or set(review) != _REVIEW_FIELDS:
+        raise ValueError("Invalid MCP unattended read review fields")
+    text_fields = ("reviewed_by", "reviewed_at", "evidence_ref", "source",
+                   "deployment_id", "behavior")
+    if any(not isinstance(review[key], str) or not review[key].strip()
+           or len(review[key]) > 256 for key in text_fields):
+        raise ValueError("Invalid MCP unattended read review evidence")
+    try:
+        date = datetime.fromisoformat(review["reviewed_at"].replace("Z", "+00:00"))
+    except ValueError:
+        raise ValueError("Invalid MCP unattended read review date") from None
+    if date.tzinfo is None:
+        raise ValueError("Invalid MCP unattended read review date")
+    descriptor_hash = hashlib.sha256(json.dumps(
+        descriptor, sort_keys=True, separators=(",", ":"),
+        ensure_ascii=False, allow_nan=False,
+    ).encode()).hexdigest()
+    if (review["url"] != url or review["data_destination"] != url
+        or review["server_version"] != version
+        or review["descriptor_sha256"] != descriptor_hash
+        or review["allowed_data"] != "public" or review["permissions"] != []
+        or review["cost"] != "free"
+        or not _reviewed_public_schema(review["allowed_arguments_schema"], descriptor)):
+        raise ValueError("Invalid MCP unattended read review scope")
+    return review
 
 
 def _connection_failure(error: BaseException, status: int | None = None) -> ServiceError:
@@ -209,6 +288,14 @@ class MCPAdapter:
 
         validator = Draft202012Validator(schema)
 
+        review = None
+        if tool.unattended_read_review is not None:
+            checked = _validate_public_review(
+                tool.unattended_read_review, self.url, self.server_version, tool.descriptor
+            )
+            if not tool.approval_required:
+                review = checked
+
         def validate(arguments):
             try:
                 arguments_fingerprint(arguments)
@@ -224,7 +311,7 @@ class MCPAdapter:
             tool.id,
             tool.title,
             tool.scope,
-            tool.approval_required,
+            True,
             "读取已审查 MCP 服务；参数会发往所登记服务，结果不是知识库引用。",
             validate,
             run,
@@ -232,6 +319,7 @@ class MCPAdapter:
             input_schema=schema,
             backend="mcp",
             destination=self.url,
+            unattended_read_review=review,
         )
         # Manual approvals persist the tool version. Bind it to the reviewed
         # destination and descriptor so a registry edit invalidates old approval.

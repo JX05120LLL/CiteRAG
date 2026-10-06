@@ -95,6 +95,37 @@ def locate_chunk(chunk: str, original: str, blocks: list[SourceBlock]) -> Locate
         return None
     matches = [block for block in blocks if block.start <= start and end <= block.end
                and original[block.start:block.end] == block.text]
-    if len(matches) != 1:
+    if len(matches) == 1:
+        return LocatedChunk(quote, matches[0].locator, start, end)
+    if matches:
         return None
-    return LocatedChunk(quote, matches[0].locator, start, end)
+
+    # Markdown/plain-text parsing records each paragraph as a separate line
+    # block, while LightRAG can index a chunk spanning several paragraphs.
+    # The full chunk has already been matched uniquely against this document.
+    # Join only verified line blocks separated by whitespace; PDF pages and
+    # DOCX paragraphs retain their stricter single-location requirement.
+    covered = sorted((block for block in blocks
+                      if block.start < end and start < block.end),
+                     key=lambda block: block.start)
+    if (len(covered) < 2 or not covered[0].start <= start < covered[0].end
+            or not covered[-1].start < end <= covered[-1].end):
+        return None
+    cursor = start
+    for block in covered:
+        locator = block.locator
+        if (block.start < 0 or block.end > len(original)
+                or original[block.start:block.end] != block.text
+                or not isinstance(locator, dict) or locator.get("kind") != "lines"
+                or type(locator.get("line_start")) is not int
+                or type(locator.get("line_end")) is not int
+                or locator["line_start"] != original.count("\n", 0, block.start) + 1
+                or locator["line_end"] != original.count("\n", 0, block.end - 1) + 1
+                or block.start < cursor and block is not covered[0]
+                or (block.start > cursor and original[cursor:block.start].strip())):
+            return None
+        cursor = block.end
+    return LocatedChunk(quote, {"kind": "lines",
+                                "line_start": covered[0].locator["line_start"],
+                                "line_end": covered[-1].locator["line_end"]},
+                        start, end)

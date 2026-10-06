@@ -200,6 +200,63 @@ async def test_reviewed_mcp_agent_waiting_call_rejects_policy_change(environment
         await app.state.agent_runtime.close()
 
 
+async def test_reviewed_mcp_agent_unattended_call_rechecks_policy_before_execute(
+    environment, monkeypatch,  # noqa: F811
+):
+    from dataclasses import replace
+
+    from test_agent_mcp import _public_add_review
+
+    from app.tools.gateway import ToolGateway
+    from app.tools.mcp import MCPAdapter, ReviewedMCPTool
+
+    api, _ = environment
+    app, chat, path = await ready(api, [
+        {"action": "call_tool", "tool_id": "mcp.synthetic.add", "arguments": {"a": 2, "b": 3}},
+    ])
+    url, version = "http://127.0.0.1:17651/mcp", "controlled-1"
+    descriptor = {"name": "add", "inputSchema": {"type": "object",
+        "properties": {"a": {"type": "integer"}, "b": {"type": "integer"}},
+        "required": ["a", "b"]}}
+    adapter = MCPAdapter(url, version)
+    review = _public_add_review(url, version, descriptor)
+    spec = adapter.definition(ReviewedMCPTool(
+        "mcp.synthetic.add", "Synthetic add", "any", descriptor, False, review
+    ))
+    changed = adapter.definition(ReviewedMCPTool(
+        "mcp.synthetic.add", "Synthetic add", "any", descriptor, False,
+        {**review, "behavior": "Revised review evidence"},
+    ))
+    assert changed.version != spec.version
+    executions = []
+
+    async def forbidden_run(_session, _context, _arguments):
+        executions.append(True)
+        pytest.fail("Stale unattended tool call must not execute")
+
+    app.state.tool_registry[spec.id] = replace(spec, run=forbidden_run)
+    original_invoke = ToolGateway.invoke
+
+    async def change_review_after_prepare(gateway, *args, **kwargs):
+        view = await original_invoke(gateway, *args, **kwargs)
+        if kwargs.get("defer_execution") and view["status"] == "running":
+            app.state.tool_registry[spec.id] = replace(changed, run=forbidden_run)
+        return view
+
+    monkeypatch.setattr(ToolGateway, "invoke", change_review_after_prepare)
+    try:
+        accepted = await api.post(path, json={"client_message_id": str(uuid4()),
+                                              "text": "Add public values"})
+        assert accepted.status_code == 202, accepted.text
+        outcome = await settled(api, path, accepted.json()["id"])
+        assert outcome["status"] == "failed"
+        assert executions == []
+        calls = (await api.get(f"/api/conversations/{chat}/tools/calls")).json()["items"]
+        assert len(calls) == 1 and calls[0]["result"] is None
+    finally:
+        await app.state.agent_runtime.close()
+
+
 async def test_real_local_tool_and_direct_answer_reuse_answer_service(environment):  # noqa: F811
     api, database = environment
     app, chat, path = await ready(

@@ -210,6 +210,18 @@ def test_mcp_valid_public_review_is_bound_to_fixed_registry(tmp_path):
     )["mcp.synthetic.add"].policy_hash
 
 
+def test_mcp_explicit_approval_remains_required_with_valid_review(tmp_path):
+    from app.tools.mcp import load_reviewed_registry
+
+    path = tmp_path / "registry.json"
+    url, version, descriptor = _write_review_registry(path)
+    review = _public_add_review(url, version, descriptor)
+    _write_review_registry(path, review=review, approval=True)
+    spec = load_reviewed_registry(path)["mcp.synthetic.add"]
+    assert spec.approval_required is True
+    assert spec.unattended_read_review is None
+
+
 def _write_unreviewed_registry(path):
     _write_review_registry(path)
     return path

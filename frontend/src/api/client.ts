@@ -300,6 +300,7 @@ const recoveryMessages: Record<string, string> = {
 };
 
 const conflictMessages: Record<string, string> = {
+  tool_in_progress: '当前聊天的工具调用尚未结束。请在“工具与调用记录”中处理待确认调用，或等待运行中的调用完成，再继续提问；也可新建聊天。',
   capacity_exceeded: '最多可创建 5 个知识库，当前已达到上限。',
   idempotency_conflict: '请求与先前的名称不一致，请刷新列表并检查已创建的知识库。',
   kb_not_ready: '知识库尚未就绪，当前不能问答。',

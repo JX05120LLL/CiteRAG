@@ -71,11 +71,11 @@ export function CiteRagApp({ api: suppliedApi, factory }: { api?: ApiClient; fac
   const menu = <Menu selectedKeys={[s?.page ?? 'workbench']} items={(Object.keys(pageTitles) as Page[]).map((key) => ({ key, icon: icons[key], label: key === 'knowledge' ? '我的知识库' : pageTitles[key] }))}
     onClick={({ key }) => navigate(key as Page)} />;
   const brand = <div className="brand"><img src={logo} alt="回响 Logo" /><strong>CiteRAG</strong></div>;
-  const chatList = <><div className="sidebar-chat-heading"><span>对话记录</span><Dropdown trigger={['click']} menu={{ items: [
-    { key: 'general', label: '普通聊天 · 不检索知识库' },
+  const chatList = <><div className="sidebar-chat-heading"><span>对话记录</span><Button className="sidebar-new-chat" type="text" icon={<PlusOutlined />} aria-label="新建聊天" title="新建普通聊天"
+    disabled={busy || mediaActive || s?.loading} onClick={() => { setHistory(false); view?.actions.navigate('workbench'); void view?.actions.createChat(null); }} /><Dropdown trigger={['click']} menu={{ items: [
     ...(s?.bases ?? []).map((kb) => ({ key: kb.id, label: `知识库 · ${kb.name}`, disabled: kb.status !== 'ready' })),
   ], onClick: ({ key }) => { setHistory(false); view?.actions.navigate('workbench');
-    void view?.actions.createChat(key === 'general' ? null : key); } }}><Button className="sidebar-new-chat" type="text" icon={<PlusOutlined />} aria-label="新建聊天" title="新建聊天"
+    void view?.actions.createChat(key); } }}><Button className="sidebar-new-chat" type="text" icon={<DownOutlined />} aria-label="新建知识库聊天" title="新建知识库聊天"
     disabled={busy || mediaActive || s?.loading} /></Dropdown></div>
     {s?.chatsError && <Alert type="error" title={s.chatsError.message} />}
     <div className="sidebar-chat-groups" aria-label="按知识库分组的聊天">

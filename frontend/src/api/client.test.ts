@@ -151,6 +151,15 @@ describe('local same-origin API boundary', () => {
     await expect(api.createKnowledgeBase('资料', 'request-id')).rejects.toThrow(String(message));
   });
 
+  it('explains that a pending or running tool blocks a streamed question', async () => {
+    const api = createApi(async () => new Response(
+      'event: error\ndata: {"status":409,"code":"tool_in_progress"}\n\n',
+      { headers: { 'Content-Type': 'text/event-stream' } },
+    ));
+    await expect(api.askMessageStream('chat', '合成问题', 'request-id', 'auto'))
+      .rejects.toThrow('当前聊天的工具调用尚未结束。请在“工具与调用记录”中处理待确认调用，或等待运行中的调用完成，再继续提问；也可新建聊天。');
+  });
+
   it('rejects malformed mutation results instead of claiming success', async () => {
     const api = createApi(async () => json({ id: 'kb', name: '资料', status: 'unknown' }, 201));
     await expect(api.createKnowledgeBase('资料', 'request-id')).rejects.toMatchObject({ kind: 'invalid-response' });

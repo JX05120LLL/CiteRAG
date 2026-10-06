@@ -144,11 +144,10 @@ it('groups chats by knowledge base and archives and restores through the API', a
   await waitFor(() => expect(calls.filter((call) => call.path.endsWith('/archive') && call.method === 'PATCH').length).toBe(2));
 }, 20000);
 
-it('creates an ordinary chat explicitly and lists source-linked shared memory for a KB chat', async () => {
+it('creates an ordinary chat with one click and lists source-linked shared memory for a KB chat', async () => {
   const { api, calls } = fixture();
   render(<CiteRagApp api={api} />);
   fireEvent.click(await screen.findByRole('button', { name: '新建聊天' }));
-  fireEvent.click(await screen.findByRole('menuitem', { name: /普通聊天 · 不检索知识库/ }));
   await waitFor(() => expect(calls.some((call) => call.path === '/api/conversations' &&
     call.method === 'POST' && JSON.parse(String(call.body)).kb_id === null)).toBe(true));
   expect((await screen.findAllByText('普通聊天 · 不检索知识库')).length).toBeGreaterThan(0);

@@ -14,6 +14,42 @@ import { ToolInvocation, WeatherResult, toolFailure } from './ToolControls';
 import logo from '../../../assets/brand/mark.svg';
 
 const messageTime = (value: string) => new Date(value).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
+const toolRequestStorageKey = 'citerag.workbench.tool-requests';
+const maxStoredToolRequests = 100;
+type ToolRequestMemo = { key: string; id: string; finishedAt: number | null; persistent: boolean };
+
+async function toolRequestKey(chatId: string, toolId: string, arguments_: Record<string, unknown>) {
+  const value = JSON.stringify([chatId, toolId, arguments_]);
+  if (!crypto.subtle) return { key: value, persistent: false };
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
+  return { key: Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join(''), persistent: true };
+}
+
+function storedToolRequests(): ToolRequestMemo[] {
+  try {
+    const values = JSON.parse(sessionStorage.getItem(toolRequestStorageKey) || '[]');
+    return Array.isArray(values) ? values.filter((value): value is ToolRequestMemo =>
+      value && typeof value.key === 'string' && /^[0-9a-f]{64}$/.test(value.key) &&
+      typeof value.id === 'string' && /^[0-9a-f-]{36}$/i.test(value.id) &&
+      value.persistent === true &&
+      (value.finishedAt === null || typeof value.finishedAt === 'number' && Number.isFinite(value.finishedAt))) : [];
+  } catch { return []; }
+}
+
+function saveToolRequest(key: string, value: ToolRequestMemo | null, persistent: boolean): boolean {
+  if (!persistent) return true;
+  const values = storedToolRequests().filter((memo) => memo.key !== key);
+  if (value) values.push(value);
+  while (values.length > maxStoredToolRequests) {
+    const settledIndex = values.findIndex((memo) => memo.finishedAt !== null);
+    if (settledIndex < 0) return false;
+    values.splice(settledIndex, 1);
+  }
+  try {
+    sessionStorage.setItem(toolRequestStorageKey, JSON.stringify(values));
+    return true;
+  } catch { return false; }
+}
 
 function ToolResult({ call }: { call: ToolCallRecord }) {
   const result = call.result;
@@ -56,6 +92,8 @@ export function Workbench({ view, api }: { view: AppView; api: ApiClient }) {
   const [toolCalls, setToolCalls] = useState<ToolCallRecord[]>([]);
   const [toolError, setToolError] = useState('');
   const [toolBusy, setToolBusy] = useState(false);
+  const toolBusyRef = useRef(false);
+  const recentToolRequests = useRef(new Map<string, ToolRequestMemo>());
   const [loadedToolChatId, setLoadedToolChatId] = useState<string | null>(null);
   const visibleTools = loadedToolChatId === s.selectedChatId ? tools : [];
   const visibleToolCalls = loadedToolChatId === s.selectedChatId ? toolCalls : [];
@@ -77,24 +115,60 @@ export function Workbench({ view, api }: { view: AppView; api: ApiClient }) {
     return () => { active = false; };
   }, [toolOpen, s.selectedChatId, api]);
   async function runTool(toolId: string, arguments_: Record<string, unknown>) {
-    if (!s.selectedChatId || toolBusy) return;
+    if (!s.selectedChatId || toolBusyRef.current) return;
+    toolBusyRef.current = true;
     const chatId = s.selectedChatId;
     setToolBusy(true); setToolError('');
     try {
-      await api.invokeTool(chatId, toolId, crypto.randomUUID(), arguments_);
+      const { key, persistent } = await toolRequestKey(chatId, toolId, arguments_);
+      const previous = recentToolRequests.current.get(key) ??
+        (persistent ? storedToolRequests().find((memo) => memo.key === key) : undefined);
+      const replay = previous &&
+        (previous.finishedAt === null || Date.now() - previous.finishedAt < 1000);
+      const requestId = replay ? previous.id : crypto.randomUUID();
+      const memo = { key, id: requestId, finishedAt: null, persistent };
+      if (!saveToolRequest(key, memo, persistent)) {
+        setToolError('无法保存工具请求标识，本次调用未发出。请检查浏览器会话存储后重试。');
+        return;
+      }
+      recentToolRequests.current.set(key, memo);
+      const call = await api.invokeTool(chatId, toolId, requestId, arguments_);
+      if (recentToolRequests.current.get(key)?.id === requestId) {
+        if (['failed', 'rejected', 'interrupted'].includes(call.status)) {
+          recentToolRequests.current.delete(key);
+          saveToolRequest(key, null, persistent);
+        } else {
+          const settled = { ...memo, finishedAt: call.status === 'succeeded' ? Date.now() : null };
+          recentToolRequests.current.set(key, settled);
+          saveToolRequest(key, settled, persistent);
+        }
+      }
       setToolCalls(await api.toolCalls(chatId)); setLoadedToolChatId(chatId);
     } catch { setToolError('工具调用未确认成功，请检查聊天状态与服务后刷新记录。'); }
-    finally { setToolBusy(false); }
+    finally { toolBusyRef.current = false; setToolBusy(false); }
   }
   async function decideTool(callId: string, approve: boolean) {
-    if (!s.selectedChatId || toolBusy) return;
+    if (!s.selectedChatId || toolBusyRef.current) return;
+    toolBusyRef.current = true;
     const chatId = s.selectedChatId;
     setToolBusy(true); setToolError('');
     try {
-      await api.decideTool(chatId, callId, approve);
+      const call = await api.decideTool(chatId, callId, approve);
+      const memo = [...recentToolRequests.current.values(), ...storedToolRequests()]
+        .find((value) => value.id === call.request_id);
+      if (memo) {
+        if (['failed', 'interrupted'].includes(call.status)) {
+          recentToolRequests.current.delete(memo.key);
+          saveToolRequest(memo.key, null, memo.persistent);
+        } else {
+          const settled = { ...memo, finishedAt: ['succeeded', 'rejected'].includes(call.status) ? Date.now() : null };
+          recentToolRequests.current.set(memo.key, settled);
+          saveToolRequest(memo.key, settled, memo.persistent);
+        }
+      }
       setToolCalls(await api.toolCalls(chatId)); setLoadedToolChatId(chatId);
     } catch { setToolError('审批未确认成功，请刷新记录并核对状态。'); }
-    finally { setToolBusy(false); }
+    finally { toolBusyRef.current = false; setToolBusy(false); }
   }
   async function saveMemory() {
     if (!base || !memorySourceEligible || !memoryText.trim() || memoryBusy) return;

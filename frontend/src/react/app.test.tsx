@@ -1,4 +1,5 @@
 import { StrictMode } from 'react';
+import { webcrypto } from 'node:crypto';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createApi } from '../api/client';
@@ -51,7 +52,8 @@ it('downloads a voice source without navigating the active call document', async
   expect(within(drawer).getByRole('link', { name: '下载原文' }).getAttribute('download')).toBe(citation.filename);
   expect(actions.hangup).not.toHaveBeenCalled();
 });
-function fixture(messages = sampleMessages[sampleChats[0].id], chats = sampleChats, weather = false) {
+function fixture(messages = sampleMessages[sampleChats[0].id], chats = sampleChats, weather = false,
+  toolResponse: { status?: 'failed'; loseFirstResponse?: boolean; beforeResponse?: () => void } = {}) {
   const calls: { path: string; method: string; body: unknown }[] = [];
   let archived = false;
   let toolRecords: unknown[] = [];
@@ -81,15 +83,21 @@ function fixture(messages = sampleMessages[sampleChats[0].id], chats = sampleCha
     if (path.endsWith('/tools/calls') && method === 'GET') return json({ items: toolRecords });
     if (path.endsWith('/tools/calls') && method === 'POST') {
       const body = JSON.parse(String(init?.body));
-      const record = { id: 'synthetic-tool-call', conversation_id: sampleChats[0].id,
+      const existing = (toolRecords as { request_id: string }[]).find((item) => item.request_id === body.request_id);
+      if (existing) return json(existing);
+      const record = { id: toolRecords.length ? `synthetic-tool-call-${toolRecords.length}` : 'synthetic-tool-call', conversation_id: sampleChats[0].id,
         request_id: body.request_id, kb_id: sampleBases[0].id, tool_id: body.tool_id,
         arguments: body.arguments, impact: body.tool_id.startsWith('weather.') ?
           '合成天气测试：将坐标发送和风天气，可能按量计费。' : '读取本机当前 UTC 时间；不访问知识库或外部服务。',
-        status: body.tool_id.startsWith('weather.') ? 'pending_approval' : 'succeeded',
-        result: body.tool_id.startsWith('weather.') ? null : { time: '2026-09-30T00:00:00Z' }, error_code: null,
+        status: body.tool_id.startsWith('weather.') ? 'pending_approval' : toolResponse.status ?? 'succeeded',
+        result: body.tool_id.startsWith('weather.') || toolResponse.status === 'failed' ? null : { time: '2026-09-30T00:00:00Z' },
+        error_code: toolResponse.status === 'failed' ? 'mcp_tool_failed' : null,
         created_at: '2026-09-30T00:00:00Z', approved_at: null,
         finished_at: '2026-09-30T00:00:00Z', source_type: 'tool' };
-      toolRecords = [record]; return json(record);
+      toolRecords = [record, ...toolRecords];
+      toolResponse.beforeResponse?.();
+      if (toolResponse.loseFirstResponse && toolRecords.length === 1) throw new TypeError('synthetic response lost');
+      return json(record);
     }
     if (path.endsWith('/synthetic-tool-call/decision') && method === 'POST') {
       const approved = JSON.parse(String(init?.body)).approve;
@@ -120,7 +128,7 @@ function fixture(messages = sampleMessages[sampleChats[0].id], chats = sampleCha
     if (path.endsWith(`/conversations/${sampleChats[0].id}`)) return json(sampleChats[0]);
     return json({ items: chats });
   };
-  return { api: createApi(fetcher), calls };
+  return { api: createApi(fetcher), calls, recordCount: () => toolRecords.length };
 }
 
 it('groups chats by knowledge base and archives and restores through the API', async () => {
@@ -163,6 +171,132 @@ it('runs a registered tool through the API and displays the separate durable res
   expect(await within(drawer).findByText(/本机时间：/)).toBeTruthy();
   expect(calls.some((call) => call.path.endsWith('/tools/calls') && call.method === 'POST')).toBe(true);
   expect(within(drawer).getByText(/不作为知识库引用/)).toBeTruthy();
+}, 20000);
+
+it('reuses one request id when a completed tool call is clicked again immediately', async () => {
+  const { api, calls, recordCount } = fixture();
+  render(<CiteRagApp api={api} />);
+  fireEvent.click(await screen.findByRole('button', { name: '工具与调用记录' }));
+  const drawer = await screen.findByRole('dialog');
+  const button = within(drawer).getByRole<HTMLButtonElement>('button', { name: '调用工具：本机当前时间' });
+  fireEvent.click(button);
+  await waitFor(() => expect(calls.filter((call) => call.path.endsWith('/tools/calls') && call.method === 'POST').length).toBe(1));
+  await waitFor(() => expect(button.disabled).toBe(false));
+  fireEvent.click(button);
+  await waitFor(() => expect(calls.filter((call) => call.path.endsWith('/tools/calls') && call.method === 'POST').length).toBe(2));
+  const requests = calls.filter((call) => call.path.endsWith('/tools/calls') && call.method === 'POST');
+  expect(JSON.parse(String(requests[1].body)).request_id).toBe(JSON.parse(String(requests[0].body)).request_id);
+  expect(recordCount()).toBe(1);
+}, 20000);
+
+it('keeps the request id for a repeat immediately after a slow success', async () => {
+  let now = 1000;
+  vi.spyOn(Date, 'now').mockImplementation(() => now);
+  const { api, calls, recordCount } = fixture(undefined, undefined, false, { beforeResponse: () => { now = 12000; } });
+  render(<CiteRagApp api={api} />);
+  fireEvent.click(await screen.findByRole('button', { name: '工具与调用记录' }));
+  const button = within(await screen.findByRole('dialog')).getByRole<HTMLButtonElement>('button', { name: '调用工具：本机当前时间' });
+  fireEvent.click(button);
+  await waitFor(() => expect(button.disabled).toBe(false));
+  now = 12001;
+  fireEvent.click(button);
+  await waitFor(() => expect(calls.filter((call) => call.path.endsWith('/tools/calls') && call.method === 'POST').length).toBe(2));
+  const requests = calls.filter((call) => call.path.endsWith('/tools/calls') && call.method === 'POST');
+  expect(JSON.parse(String(requests[1].body)).request_id).toBe(JSON.parse(String(requests[0].body)).request_id);
+  expect(recordCount()).toBe(1);
+}, 20000);
+
+it('uses a new request id after a durable failed tool call', async () => {
+  const { api, calls, recordCount } = fixture(undefined, undefined, false, { status: 'failed' });
+  render(<CiteRagApp api={api} />);
+  fireEvent.click(await screen.findByRole('button', { name: '工具与调用记录' }));
+  const button = within(await screen.findByRole('dialog')).getByRole<HTMLButtonElement>('button', { name: '调用工具：本机当前时间' });
+  fireEvent.click(button);
+  await waitFor(() => expect(button.disabled).toBe(false));
+  fireEvent.click(button);
+  await waitFor(() => expect(calls.filter((call) => call.path.endsWith('/tools/calls') && call.method === 'POST').length).toBe(2));
+  const requests = calls.filter((call) => call.path.endsWith('/tools/calls') && call.method === 'POST');
+  expect(JSON.parse(String(requests[1].body)).request_id).not.toBe(JSON.parse(String(requests[0].body)).request_id);
+  expect(recordCount()).toBe(2);
+}, 20000);
+
+it('reuses an uncertain tool request id after timeout and browser remount', async () => {
+  vi.stubGlobal('crypto', webcrypto);
+  let now = 1000;
+  vi.spyOn(Date, 'now').mockImplementation(() => now);
+  const { api, calls, recordCount } = fixture(undefined, undefined, false,
+    { loseFirstResponse: true, beforeResponse: () => { now = 12000; } });
+  render(<CiteRagApp api={api} />);
+  fireEvent.click(await screen.findByRole('button', { name: '工具与调用记录' }));
+  fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: '调用工具：本机当前时间' }));
+  await waitFor(() => expect(calls.filter((call) => call.path.endsWith('/tools/calls') && call.method === 'POST').length).toBe(1));
+  cleanup();
+  render(<CiteRagApp api={api} />);
+  fireEvent.click(await screen.findByRole('button', { name: '工具与调用记录' }));
+  const button = within(await screen.findByRole('dialog')).getByRole<HTMLButtonElement>('button', { name: '调用工具：本机当前时间' });
+  now = 12001;
+  fireEvent.click(button);
+  await waitFor(() => expect(calls.filter((call) => call.path.endsWith('/tools/calls') && call.method === 'POST').length).toBe(2));
+  const requests = calls.filter((call) => call.path.endsWith('/tools/calls') && call.method === 'POST');
+  expect(JSON.parse(String(requests[1].body)).request_id).toBe(JSON.parse(String(requests[0].body)).request_id);
+  expect(recordCount()).toBe(1);
+}, 20000);
+
+it('keeps an uncertain request id when another tool is called before a remount', async () => {
+  vi.stubGlobal('crypto', webcrypto);
+  let now = 1000;
+  vi.spyOn(Date, 'now').mockImplementation(() => now);
+  const { api, calls, recordCount } = fixture(undefined, undefined, false,
+    { loseFirstResponse: true, beforeResponse: () => { now = 12000; } });
+  render(<CiteRagApp api={api} />);
+  fireEvent.click(await screen.findByRole('button', { name: '工具与调用记录' }));
+  const drawer = await screen.findByRole('dialog');
+  fireEvent.click(within(drawer).getByRole('button', { name: '调用工具：本机当前时间' }));
+  await waitFor(() => expect(calls.filter((call) => call.path.endsWith('/tools/calls') && call.method === 'POST').length).toBe(1));
+  fireEvent.click(within(drawer).getByRole('button', { name: '调用工具：当前知识库资料目录' }));
+  await waitFor(() => expect(calls.filter((call) => call.path.endsWith('/tools/calls') && call.method === 'POST').length).toBe(2));
+  cleanup();
+  render(<CiteRagApp api={api} />);
+  fireEvent.click(await screen.findByRole('button', { name: '工具与调用记录' }));
+  now = 12001;
+  fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: '调用工具：本机当前时间' }));
+  await waitFor(() => expect(calls.filter((call) => call.path.endsWith('/tools/calls') && call.method === 'POST').length).toBe(3));
+  const requests = calls.filter((call) => call.path.endsWith('/tools/calls') && call.method === 'POST');
+  expect(JSON.parse(String(requests[2].body)).request_id).toBe(JSON.parse(String(requests[0].body)).request_id);
+  expect(recordCount()).toBe(2);
+}, 20000);
+
+it('settles a pending request id when approval happens after a remount', async () => {
+  vi.stubGlobal('crypto', webcrypto);
+  let now = 1000;
+  vi.spyOn(Date, 'now').mockImplementation(() => now);
+  const { api, calls, recordCount } = fixture(undefined, undefined, true);
+  render(<CiteRagApp api={api} />);
+  fireEvent.click(await screen.findByRole('button', { name: '工具与调用记录' }));
+  let drawer = await screen.findByRole('dialog');
+  fireEvent.change(within(drawer).getByLabelText('纬度'), { target: { value: '0' } });
+  fireEvent.change(within(drawer).getByLabelText('经度'), { target: { value: '0' } });
+  fireEvent.click(within(drawer).getByRole('button', { name: '调用工具：和风实时天气' }));
+  await within(drawer).findByText('待确认');
+  await waitFor(() => expect(within(drawer).getByRole<HTMLButtonElement>('button', { name: '确认执行' }).disabled).toBe(false));
+  cleanup();
+  render(<CiteRagApp api={api} />);
+  fireEvent.click(await screen.findByRole('button', { name: '工具与调用记录' }));
+  drawer = await screen.findByRole('dialog');
+  await within(drawer).findByText('待确认');
+  now = 12000;
+  fireEvent.click(within(drawer).getByRole('button', { name: '确认执行' }));
+  fireEvent.click(await screen.findByRole('button', { name: '确定' }));
+  await waitFor(() => expect(calls.filter((item) => item.path.endsWith('/decision')).length).toBe(1));
+  fireEvent.change(within(drawer).getByLabelText('纬度'), { target: { value: '0' } });
+  fireEvent.change(within(drawer).getByLabelText('经度'), { target: { value: '0' } });
+  await waitFor(() => expect(within(drawer).getByRole<HTMLButtonElement>('button', { name: '调用工具：和风实时天气' }).disabled).toBe(false));
+  now = 14000;
+  fireEvent.click(within(drawer).getByRole('button', { name: '调用工具：和风实时天气' }));
+  await waitFor(() => expect(calls.filter((call) => call.path.endsWith('/tools/calls') && call.method === 'POST').length).toBe(2));
+  const requests = calls.filter((call) => call.path.endsWith('/tools/calls') && call.method === 'POST');
+  expect(JSON.parse(String(requests[1].body)).request_id).not.toBe(JSON.parse(String(requests[0].body)).request_id);
+  expect(recordCount()).toBe(2);
 }, 20000);
 
 it('submits explicit weather coordinates and only shows an attributed result after approval', async () => {

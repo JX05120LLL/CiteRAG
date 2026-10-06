@@ -248,8 +248,8 @@ class ToolGateway:
         if conversation.archived_at is not None:
             raise ServiceError(409, "conversation_archived", "聊天已归档")
         spec = self.registry.get(call.tool_id)
-        if (spec is None or call.tool_version not in {None, spec.version}
-            or call.arguments_hash not in {None, arguments_fingerprint(call.arguments)}
+        if (spec is None or call.tool_version != spec.version
+            or call.arguments_hash != arguments_fingerprint(call.arguments)
             or call.kb_id != conversation.kb_id or (kb is not None and
             (kb.status != "ready" and spec.scope == "knowledge" or
              (call.kb_revision, call.workspace) != (kb.revision, kb.active_workspace)))):

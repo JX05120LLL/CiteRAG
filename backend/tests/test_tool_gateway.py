@@ -1,6 +1,6 @@
 """Tool calls use the chat binding, persist outcomes, and never become citations."""
 
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import select, text
@@ -100,6 +100,47 @@ async def test_pending_mcp_approval_rejects_changed_destination(environment):  #
     assert decision.json()["status"] == "failed"
     assert decision.json()["error_code"] == "tool_scope_changed"
     assert decision.json()["result"] is None
+
+
+async def test_legacy_pending_approval_without_policy_binding_fails_closed(environment):  # noqa: F811
+    """Schema 0012 leaves older pending calls without version or argument hashes."""
+    from dataclasses import replace
+
+    api, database = environment
+    chat = (await api.post("/api/conversations", json={"kb_id": None})).json()["id"]
+    path = f"/api/conversations/{chat}/tools/calls"
+    executed = []
+
+    async def unexpected_run(_session, _context, _arguments):
+        executed.append(True)
+        return {"unexpected": True}
+
+    original = ToolDefinition(
+        "mcp.synthetic.legacy", "Legacy reviewed MCP", "any", True,
+        "Synthetic read-only MCP", lambda args: args if args == {} else None,
+        unexpected_run, version="reviewed-old", backend="mcp",
+        destination="http://127.0.0.1:17651/mcp",
+    )
+    registry = api._transport.app.state.tool_registry
+    registry[original.id] = original
+    pending = (await api.post(path, json={
+        "request_id": str(uuid4()), "tool_id": original.id, "arguments": {},
+    })).json()
+    assert pending["status"] == "pending_approval"
+    async with database.sessions() as session:
+        call = await session.get(ToolCall, UUID(pending["id"]))
+        call.tool_version = None
+        call.arguments_hash = None
+        await session.commit()
+
+    registry[original.id] = replace(
+        original, version="reviewed-new", destination="http://127.0.0.1:17652/mcp"
+    )
+    decision = await api.post(f"{path}/{pending['id']}/decision", json={"approve": True})
+    assert decision.status_code == 200
+    assert decision.json()["status"] == "failed"
+    assert decision.json()["error_code"] == "tool_scope_changed"
+    assert executed == []
 
 
 async def test_ordinary_chat_catalog_call_idempotency_and_scope(environment):  # noqa: F811

@@ -261,3 +261,23 @@ describe('local same-origin API boundary', () => {
     }
   });
 });
+
+it('requests a bounded local check explicitly and validates its result', async () => {
+  const checked_at = '2026-10-07T07:00:00Z';
+  const names = ['business_database', 'model_configuration', 'rag_database',
+    'voice_transport', 'model_provider', 'speech_providers', 'knowledge_engine'];
+  const response = { checked_at, checks: Object.fromEntries(names.map((name) => [name, {
+    state: name === 'business_database' ? 'available' : 'not_checked',
+    reason: 'Synthetic local result', checked_at,
+  }])) };
+  const calls: string[] = [];
+  const api = createApi(async (input, init) => {
+    calls.push(`${init?.method}:${input}`);
+    return json(response);
+  });
+  expect(await api.checkSystem()).toEqual(response);
+  expect(calls).toEqual(['POST:/api/status/check']);
+  await expect(createApi(async () => json({ ...response, checks: {
+    ...response.checks, business_database: { state: 'ready', reason: 'invalid', checked_at },
+  } })).checkSystem()).rejects.toMatchObject({ kind: 'invalid-response' });
+});

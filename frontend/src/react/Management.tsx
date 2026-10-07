@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Alert, Button, Card, Checkbox, Collapse, Descriptions, Drawer, Dropdown, Empty, Form, Input, Modal, Pagination, Skeleton, Space, Tag, Upload } from 'antd';
 import { BookOutlined, DatabaseOutlined, FileTextOutlined, MoreOutlined, PlusOutlined, ReloadOutlined, UploadOutlined } from '@ant-design/icons';
-import type { ApiClient, IngestionJob, ManagedDocument } from '../api/client';
+import type { ApiClient, IngestionJob, ManagedDocument, SystemCheckReport } from '../api/client';
 import type { AppView } from '../app';
 import { isKnowledgePending, knowledgeLimit } from '../state';
 import { errorText, failureReason, locatorLabel, stoppedStage } from '../pages/documents';
@@ -174,8 +174,23 @@ export function Tasks({ view }: { view: AppView }) {
     </section></div></div>;
 }
 
-export function Status({ view }: { view: AppView }) {
+export function Status({ view, api }: { view: AppView; api: ApiClient }) {
   const s = view.state; const h = s.health;
+  const [report, setReport] = useState<SystemCheckReport | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [checkError, setCheckError] = useState<string | null>(null);
+  const checkLabels: Record<string, string> = {
+    business_database: '业务数据库', model_configuration: '模型配置', rag_database: '知识引擎本地数据库',
+    voice_transport: '本地媒体端口', model_provider: '模型服务实测',
+    speech_providers: '语音识别与合成实测', knowledge_engine: '知识检索端到端实测',
+  };
+  async function runLocalCheck() {
+    setChecking(true);
+    setCheckError(null);
+    try { setReport(await api.checkSystem()); }
+    catch { setCheckError('本地检测未完成，请重试。'); }
+    finally { setChecking(false); }
+  }
   const capabilities = [
     { name: '业务数据库', value: h?.database ?? 'unverified', icon: <DatabaseOutlined />, note: '聊天、知识库与任务记录的本地存储。' },
     { name: '模型服务', value: h?.models ?? 'unverified', icon: <BookOutlined />, note: '配置状态与真实调用验证分别记录。' },
@@ -183,7 +198,15 @@ export function Status({ view }: { view: AppView }) {
     { name: '语音与媒体', value: view.voice.actions.capability?.assistant ?? 'unverified', icon: <UploadOutlined />, note: '通话条件须在语音页实际验证。' },
   ];
   return <div className="status-layout"><div className="status-actions"><Button type="primary" icon={<ReloadOutlined />} loading={s.healthLoading} onClick={() => { void view.actions.loadHealth(); void view.voice.actions.refresh(); }}>刷新系统状态</Button>
+    <Button loading={checking} onClick={() => void runLocalCheck()}>运行本地检测</Button>
     {s.healthCheckedAt && <span>本次读取 {new Date(s.healthCheckedAt).toLocaleTimeString('zh-CN')}</span>}</div>
+    {!report && !checking && !checkError && <p>尚未检测</p>}
+    {checking && <p>检测中</p>}
+    {checkError && <Alert type="error" title={checkError} />}
+    {report && <section aria-label="本地检测结果"><h2>本地检测结果</h2><p>检测时间：{dateLabel(report.checked_at)}</p>
+      {Object.entries(report.checks).map(([name, result]) => <div key={name}>
+        <strong>{checkLabels[name] ?? name}</strong> <StateTag value={result.state} /> <span>{result.reason}</span>
+      </div>)}</section>}
     <Alert type="info" showIcon title="以下显示接口报告的状态；配置存在不代表实际供应商调用或真人设备验收通过。" />
     <div className="section-heading"><h2>服务能力</h2><span className="muted">本地服务与组件的当前配置和可用性</span></div>
     {s.healthLoading && <Skeleton active />}{s.healthError && <Alert showIcon type="error" title={s.healthError.message} />}

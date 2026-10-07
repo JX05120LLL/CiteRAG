@@ -70,6 +70,9 @@ class RunHooks:
                 value = json.loads(value)
             except ValueError:
                 raise AgentError("agent_decision_invalid") from None
+        if (prepared["general"] and isinstance(value, dict)
+            and set(value) == {"text"} and isinstance(value["text"], str)):
+            value = {"action": "finish", "answer": value}
         value = checked_decision(value)
         if len(json.dumps(value, ensure_ascii=False, allow_nan=False)) > 16000:
             raise AgentError("agent_decision_invalid")
@@ -105,7 +108,10 @@ class RunHooks:
                         if key in spec.input_schema.get("required", [])
                         and key not in decision["arguments"]
                     }
-                    return {"kind": "input", "prompt": "请补充工具所需参数。", "fields": missing}
+                    return {"kind": "input", "prompt": "请补充工具所需参数。", "fields": missing,
+                            "tool_id": spec.id, "tool_version": spec.version,
+                            "policy_hash": spec.policy_hash,
+                            "arguments": decision["arguments"]}
                 raise ServiceError(422, "tool_arguments_invalid", "工具参数不符合登记格式")
             key = state["call_key"]
             step = await session.scalar(

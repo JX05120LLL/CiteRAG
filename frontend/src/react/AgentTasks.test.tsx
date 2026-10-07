@@ -12,6 +12,31 @@ const waiting: AgentRun = { id: 'run', conversation_id: 'chat', message_id: 'mes
     arguments: { target: 'public synthetic' }, destination: 'local', impact: '合成操作' } };
 
 describe('durable task controls', () => {
+  it('reports the text continuation task from the current chat', async () => {
+    const onWaitingInput = vi.fn();
+    const run = { ...waiting, status: 'waiting_input' as const,
+      waiting: { kind: 'input' as const, prompt: 'Location?', fields: { location: 'string' } } };
+    render(<AgentTasks chatId="chat" api={{ agentRuns: async () => [run] } as unknown as ApiClient}
+      onWaitingInput={onWaitingInput} />);
+    await waitFor(() => expect(onWaitingInput).toHaveBeenCalledWith(run));
+  });
+  it('clears waiting input and reloads messages when the same task completes', async () => {
+    vi.useFakeTimers();
+    const onWaitingInput = vi.fn();
+    const changed = vi.fn(async () => {});
+    const run = { ...waiting, status: 'waiting_input' as const,
+      waiting: { kind: 'input' as const, prompt: 'Location?', fields: { location: 'string' } } };
+    let result: AgentRun = run;
+    const page = render(<AgentTasks chatId="chat" api={{ agentRuns: async () => [result] } as unknown as ApiClient}
+      changed={changed} onWaitingInput={onWaitingInput} />);
+    await act(async () => { await Promise.resolve(); });
+    expect(onWaitingInput).toHaveBeenLastCalledWith(run);
+    result = { ...run, seq: run.seq + 1, status: 'completed', waiting: null };
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    expect(onWaitingInput).toHaveBeenLastCalledWith(null);
+    expect(changed).toHaveBeenCalledTimes(2);
+    page.unmount();
+  });
   it('shows the exact operation and only approves after an explicit click', async () => {
     const resume = vi.fn().mockResolvedValue(undefined);
     render(<AgentTaskCard run={waiting} resume={resume} cancel={vi.fn()} />);
@@ -20,16 +45,23 @@ describe('durable task controls', () => {
     fireEvent.click(screen.getByRole('button', { name: '批准所示操作' }));
     await waitFor(() => expect(resume).toHaveBeenCalledWith({ approve: true }));
   });
-  it('validates typed missing parameters and does not send a new question', async () => {
+  it('asks for missing parameters without a separate top form', () => {
     const resume = vi.fn().mockResolvedValue(undefined);
     render(<AgentTaskCard run={{ ...waiting, status: 'waiting_input', waiting: {
-      kind: 'input', prompt: '补充分钟', fields: { minutes: 'integer' } } }} resume={resume} cancel={vi.fn()} />);
-    fireEvent.change(screen.getByLabelText('minutes'), { target: { value: '12.5' } });
-    fireEvent.click(screen.getByRole('button', { name: '补充并继续' }));
+      kind: 'input', prompt: 'Missing detail', fields: { minutes: 'integer' } } }} resume={resume} cancel={vi.fn()} />);
+    expect(screen.queryByLabelText('minutes')).toBeNull();
+    expect(screen.queryByRole('button', { name: '补充并继续' })).toBeNull();
+    expect(screen.getByText(/下方聊天框/)).toBeTruthy();
     expect(resume).not.toHaveBeenCalled();
-    fireEvent.change(screen.getByLabelText('minutes'), { target: { value: '30' } });
+  });
+  it('keeps a typed fallback for voice tasks without a chat composer', async () => {
+    const resume = vi.fn().mockResolvedValue(undefined);
+    render(<AgentTaskCard run={{ ...waiting, voice_session_id: 'voice', status: 'waiting_input',
+      waiting: { kind: 'input', prompt: 'Location?', fields: { location: 'string' } } }}
+    voiceControl resume={resume} cancel={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText('location'), { target: { value: 'Hanzhong' } });
     fireEvent.click(screen.getByRole('button', { name: '补充并继续' }));
-    await waitFor(() => expect(resume).toHaveBeenCalledWith({ minutes: 30 }));
+    await waitFor(() => expect(resume).toHaveBeenCalledWith({ location: 'Hanzhong' }));
   });
   it('keeps voice tasks controlled by the current voice page', () => {
     render(<AgentTaskCard run={{ ...waiting, voice_session_id: 'voice' }} resume={vi.fn()} cancel={vi.fn()} />);

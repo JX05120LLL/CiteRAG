@@ -59,6 +59,104 @@ async def settled(api, path, run):
     pytest.fail("Synthetic Agent did not settle")
 
 
+async def test_missing_tool_location_accepts_chat_text_and_keeps_one_task(environment):  # noqa: F811
+    from app.tools.gateway import ToolDefinition
+
+    api, _ = environment
+    app, chat, path = await ready(api, [
+        {"action": "call_tool", "tool_id": "synthetic.location", "arguments": {}},
+        {"action": "finish", "answer": {"text": "Synthetic location accepted."}},
+    ])
+    executions = []
+
+    async def run(_session, _context, arguments):
+        executions.append(arguments)
+        return {"synthetic": True}
+
+    app.state.tool_registry["synthetic.location"] = ToolDefinition(
+        "synthetic.location", "Synthetic location", "any", False, "Local synthetic read",
+        lambda arguments: arguments, run,
+        input_schema={"type": "object", "properties": {"location": {"type": "string"}},
+                      "required": ["location"], "additionalProperties": False},
+    )
+    try:
+        accepted = await api.post(path, json={"client_message_id": str(uuid4()),
+                                              "text": "Synthetic location task"})
+        assert accepted.status_code == 202
+        waiting = await settled(api, path, accepted.json()["id"])
+        assert waiting["status"] == "waiting_input" and waiting["tool_attempts"] == 0
+        key = str(uuid4())
+        body = {"request_id": key, "generation": waiting["generation"],
+                "input": {"detail": "Hanzhong"}}
+        resumed = await api.post(f"{path}/{waiting['id']}/resume", json=body)
+        assert resumed.status_code == 202, resumed.text
+        done = await settled(api, path, waiting["id"])
+        assert done["status"] == "completed" and done["tool_attempts"] == 1
+        assert done["model_rounds"] == 2 and executions == [{"location": "Hanzhong"}]
+        assert (await api.post(f"{path}/{waiting['id']}/resume", json=body)).status_code == 202
+        assert executions == [{"location": "Hanzhong"}]
+        assert len((await api.get(path)).json()["items"]) == 1
+    finally:
+        await app.state.agent_runtime.close()
+
+
+async def test_missing_tool_input_rejects_changed_tool_contract(environment):  # noqa: F811
+    from dataclasses import replace
+
+    from app.tools.gateway import ToolDefinition
+
+    api, _ = environment
+    app, _, path = await ready(api, [
+        {"action": "call_tool", "tool_id": "synthetic.location", "arguments": {}},
+    ])
+    executions = []
+
+    async def run(_session, _context, arguments):
+        executions.append(arguments)
+        return {"synthetic": True}
+
+    app.state.tool_registry["synthetic.location"] = ToolDefinition(
+        "synthetic.location", "Synthetic location", "any", False, "Local synthetic read",
+        lambda arguments: arguments, run,
+        input_schema={"type": "object", "properties": {"location": {"type": "string"}},
+                      "required": ["location"], "additionalProperties": False},
+    )
+    try:
+        response = await api.post(path, json={"client_message_id": str(uuid4()),
+                                              "text": "Synthetic location task"})
+        waiting = await settled(api, path, response.json()["id"])
+        assert waiting["status"] == "waiting_input"
+        app.state.tool_registry["synthetic.location"] = replace(
+            app.state.tool_registry["synthetic.location"], version="2",
+        )
+        rejected = await api.post(f"{path}/{waiting['id']}/resume", json={
+            "request_id": str(uuid4()), "generation": waiting["generation"],
+            "input": {"detail": "Hanzhong"},
+        })
+        assert rejected.status_code == 409
+        assert rejected.json()["detail"]["code"] == "tool_scope_changed"
+        assert executions == []
+    finally:
+        await app.state.agent_runtime.close()
+
+
+async def test_ordinary_agent_accepts_direct_answer_json_without_tool_or_retry(environment):  # noqa: F811
+    api, _ = environment
+    app, chat, path = await ready(api, ['{"text":"Synthetic self introduction."}'])
+    try:
+        accepted = await api.post(path, json={"client_message_id": str(uuid4()),
+                                              "text": "Introduce yourself"})
+        assert accepted.status_code == 202
+        run = await settled(api, path, accepted.json()["id"])
+        assert run["status"] == "completed" and run["model_rounds"] == 1
+        assert run["tool_attempts"] == 0
+        messages = (await api.get(f"/api/conversations/{chat}/messages")).json()["items"]
+        assert messages[0]["status"] == "answered"
+        assert messages[0]["text"] == "Synthetic self introduction."
+    finally:
+        await app.state.agent_runtime.close()
+
+
 async def test_real_mcp_approval_result_returns_to_agent_without_knowledge_access(environment):  # noqa: F811
     import json
 

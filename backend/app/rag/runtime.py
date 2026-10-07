@@ -363,7 +363,8 @@ class RagRuntime:
             "allowed_tools": tools, "tool_results": results,
         }, GENERAL_INPUT_TOKENS if general else ANSWER_INPUT_TOKENS)
         client = await self._get_client()
-        result = await client.complete("qwen-flash", messages, max_tokens=2048)
+        result = await client.complete("qwen-flash", messages, max_tokens=2048,
+                                       response_format="json_object")
         return result.content
 
     async def stream_general(self, question: str, context: dict) -> AsyncIterator[str]:

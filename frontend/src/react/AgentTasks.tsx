@@ -23,11 +23,11 @@ export function AgentTaskCard({ run, resume, cancel, voiceControl = false }: {
     catch (reason) { setError(reason instanceof Error ? reason.message : '任务操作未确认，请刷新状态后重试。'); }
     finally { setBusy(false); }
   }
-  function submit() {
+  function submitVoiceInput() {
     const input: Record<string, unknown> = {};
     for (const [key, kind] of Object.entries(fields)) {
-      const value = values[key] ?? '';
-      if (!value.trim()) { setError(`请填写 ${key}`); return; }
+      const value = values[key]?.trim() ?? '';
+      if (!value) { setError(`请填写 ${key}`); return; }
       if (kind === 'integer' || kind === 'number') {
         const number = Number(value);
         if (!Number.isFinite(number) || kind === 'integer' && !Number.isSafeInteger(number)) {
@@ -53,15 +53,16 @@ export function AgentTaskCard({ run, resume, cancel, voiceControl = false }: {
         <Button disabled={disabled} onClick={() => void perform(() => resume({ approve: false }))}>拒绝操作</Button></Space>
     </>}
     {run.waiting?.kind === 'input' && <div className="agent-inputs"><p>{run.waiting.prompt}</p>
-      {Object.entries(fields).map(([key, kind]) => <label key={key}>{key}
+      {run.voice_session_id ? <>{Object.entries(fields).map(([key, kind]) => <label key={key}>{key}
         {kind === 'boolean' ? <Select aria-label={key} value={values[key]} disabled={disabled}
           options={[{ value: 'true', label: '是' }, { value: 'false', label: '否' }]}
           onChange={(value: string) => setValues({ ...values, [key]: value })} /> :
           <Input aria-label={key} value={values[key] ?? ''} disabled={disabled} maxLength={1000}
             onChange={(event) => setValues({ ...values, [key]: event.target.value })} />}</label>)}
-      {!Object.keys(fields).length && <Input.TextArea aria-label="补充说明" value={values.detail ?? ''}
-        disabled={disabled} maxLength={1000} onChange={(event) => setValues({ detail: event.target.value })} />}
-      <Button disabled={disabled} type="primary" onClick={submit}>补充并继续</Button>
+        {!Object.keys(fields).length && <Input.TextArea aria-label="补充说明" value={values.detail ?? ''}
+          disabled={disabled} maxLength={1000} onChange={(event) => setValues({ detail: event.target.value })} />}
+        <Button disabled={disabled} type="primary" onClick={submitVoiceInput}>补充并继续</Button></> :
+        <p className="muted">请在下方聊天框用自然语言补充，继续当前任务。</p>}
     </div>}
     {resumable && <Button disabled={disabled} onClick={() => void perform(() => resume({}))}>恢复中断任务</Button>}
     {active.has(run.status) && <Button danger disabled={disabled} onClick={() => void perform(cancel)}>取消任务</Button>}
@@ -71,12 +72,14 @@ export function AgentTaskCard({ run, resume, cancel, voiceControl = false }: {
   </section>;
 }
 
-export function AgentTasks({ chatId, api, changed }: {
+export function AgentTasks({ chatId, api, changed, onWaitingInput }: {
   chatId: string; api: ApiClient; changed?: (chatId: string) => Promise<void>;
+  onWaitingInput?: (run: AgentRun | null) => void;
 }) {
   const [runs, setRuns] = useState<AgentRun[]>([]);
   const [error, setError] = useState('');
   const callback = useRef(changed); callback.current = changed;
+  const waitingCallback = useRef(onWaitingInput); waitingCallback.current = onWaitingInput;
   const resumeKeys = useRef(new Map<string, string>());
   const latest = useRef(new Map<string, AgentRun>());
   function merge(next: AgentRun[]) {
@@ -98,6 +101,7 @@ export function AgentTasks({ chatId, api, changed }: {
         const response = await api.agentRuns(chatId);
         if (disposed) return;
         const next = merge(response);
+        waitingCallback.current?.(next.find((run) => run.status === 'waiting_input' && !run.voice_session_id) ?? null);
         failures = 0;
         delay = next.some((run) => run.status === 'running') ? 1000 : 5000;
         setRuns(next); setError('');

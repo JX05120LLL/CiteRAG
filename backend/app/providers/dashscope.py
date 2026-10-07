@@ -90,7 +90,8 @@ class DashScopeClient:
         )
 
     async def complete(
-        self, model: str, messages: list[Message], *, max_tokens: int
+        self, model: str, messages: list[Message], *, max_tokens: int,
+        response_format: str | None = None,
     ) -> Completion:
         if model not in {
             self._config.models["answer"],
@@ -103,6 +104,8 @@ class DashScopeClient:
         output_limit = 2048 if model == self._config.models["answer"] else 512
         if max_tokens < 1 or max_tokens > output_limit:
             raise ValueError(f"completion max_tokens must be between 1 and {output_limit}")
+        if response_format not in {None, "json_object"}:
+            raise ValueError("unsupported response format")
         response = await self._post(
             "/compatible-mode/v1/chat/completions",
             {
@@ -111,6 +114,8 @@ class DashScopeClient:
                     {"role": message.role, "content": message.content} for message in messages
                 ],
                 "max_tokens": max_tokens,
+                **({"response_format": {"type": "json_object"}}
+                   if response_format == "json_object" else {}),
                 **({"temperature": 0} if model == self._config.models["answer"] else {}),
             },
             model,

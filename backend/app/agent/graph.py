@@ -24,6 +24,7 @@ class AgentState(TypedDict, total=False):
     call_key: str
     fingerprints: list[str]
     supplements: list[dict]
+    retry_prepare: bool
 
 
 class AgentHooks(Protocol):
@@ -87,6 +88,7 @@ def build_graph(hooks: AgentHooks, checkpointer=None):
             "model_rounds": state["model_rounds"] + 1,
             "response": {},
             "waiting": None,
+            "retry_prepare": False,
         }
 
     async def prepare(state: AgentState):
@@ -120,7 +122,23 @@ def build_graph(hooks: AgentHooks, checkpointer=None):
         await hooks.guard(state)
         waiting = state.get("waiting") or {}
         if waiting.get("kind") == "input":
-            return {"supplements": state["supplements"] + [state["response"]], "waiting": None}
+            response = state["response"]
+            supplement = {"supplements": state["supplements"] + [response], "waiting": None}
+            fields = waiting.get("fields") or {}
+            decision = state["decision"]
+            if (decision["action"] == "call_tool"
+                and waiting.get("tool_id") == decision["tool_id"]
+                and waiting.get("arguments") == decision["arguments"]):
+                values = response
+                if (set(response) == {"detail"} and len(fields) == 1
+                    and next(iter(fields.values())) == "string"):
+                    values = {next(iter(fields)): response["detail"]}
+                if set(values) == set(fields):
+                    supplement["decision"] = checked_decision({
+                        **decision, "arguments": {**decision["arguments"], **values},
+                    })
+                    supplement["retry_prepare"] = True
+            return supplement
         if waiting.get("kind") == "approval" and state["response"].get("approve") is not True:
             result = {"status": "rejected", "source_type": "tool", "data": None}
         else:
@@ -137,6 +155,7 @@ def build_graph(hooks: AgentHooks, checkpointer=None):
             "tool_attempts": state["tool_attempts"] + 1,
             "fingerprints": state["fingerprints"] + [key],
             "waiting": None,
+            "retry_prepare": False,
         }
 
     async def finish(state: AgentState):
@@ -158,6 +177,8 @@ def build_graph(hooks: AgentHooks, checkpointer=None):
     )
     graph.add_conditional_edges("prepare", lambda s: "wait" if s["waiting"] else "execute")
     graph.add_edge("wait", "execute")
-    graph.add_edge("execute", "plan")
+    graph.add_conditional_edges(
+        "execute", lambda s: "prepare" if s.get("retry_prepare") else "plan"
+    )
     graph.add_edge("finish", END)
     return graph.compile(checkpointer=checkpointer)

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Drawer, Empty, Input, Popconfirm, Select, Space, Tag, Tooltip } from 'antd';
 import { Bubble, Sender } from '@ant-design/x';
 import { AudioOutlined, BookOutlined, FileTextOutlined, PictureOutlined } from '@ant-design/icons';
-import type { ApiClient, KnowledgeMemory, ToolCallRecord, ToolInfo } from '../api/client';
+import type { AgentRun, ApiClient, KnowledgeMemory, ToolCallRecord, ToolInfo } from '../api/client';
 import type { AppView } from '../app';
 import { answerFailure } from '../pages/workbench';
 import { locationText } from '../pages/sources';
@@ -72,8 +72,16 @@ function ToolResult({ call }: { call: ToolCallRecord }) {
 export function Workbench({ view, api }: { view: AppView; api: ApiClient }) {
   const { state: s, actions: a } = view;
   const base = s.bases?.find((item) => item.id === s.selectedKbId);
+  const [inputRun, setInputRun] = useState<AgentRun | null>(null);
+  const [continuationError, setContinuationError] = useState('');
+  const [continuing, setContinuing] = useState(false);
+  const continuingRef = useRef(false);
+  const resumeKeys = useRef(new Map<string, string>());
+  const waitingInput = inputRun?.conversation_id === s.selectedChatId &&
+    inputRun.status === 'waiting_input' ? inputRun : null;
   const busy = s.chatPending || s.chatMessages.some((item) => item.status === 'running');
-  const enabled = (s.selectedKbId === null || base?.status === 'ready') && !!s.selectedChatId && !busy && !s.loading;
+  const enabled = (s.selectedKbId === null || base?.status === 'ready') && !!s.selectedChatId &&
+    (!busy || !!waitingInput && !s.chatPending) && !s.loading && !continuing;
   const memorySources = s.chatMessages.filter((item) => item.status === 'answered' && !item.stale && !item.images?.length);
   const sourceMessage = base?.status === 'ready' ? s.chatMessages.find((item) => item.message_id === s.selectedCitation?.messageId && displayCitations(item).length > 0) : undefined;
   const citation = sourceMessage?.citations.find((item) => item.evidence_id === s.selectedCitation?.evidenceId);
@@ -98,6 +106,25 @@ export function Workbench({ view, api }: { view: AppView; api: ApiClient }) {
   const visibleTools = loadedToolChatId === s.selectedChatId ? tools : [];
   const visibleToolCalls = loadedToolChatId === s.selectedChatId ? toolCalls : [];
   const memorySourceEligible = memorySources.some((item) => item.message_id === memorySource);
+  async function continueInput() {
+    if (!waitingInput || s.chatPending || s.chatImages.length || !s.selectedChatId || continuingRef.current) return;
+    const detail = s.chatDraft.trim();
+    if (!detail || detail.length > 1000) return;
+    const fingerprint = `${waitingInput.id}:${waitingInput.generation}:${detail}`;
+    const key = resumeKeys.current.get(fingerprint) ?? crypto.randomUUID();
+    resumeKeys.current.set(fingerprint, key);
+    continuingRef.current = true;
+    setContinuing(true);
+    setContinuationError('');
+    try {
+      await api.resumeAgent(waitingInput, key, { detail });
+      a.setDraft('');
+      setInputRun(null);
+      await a.refreshAgentMessages?.(s.selectedChatId);
+    } catch (reason) {
+      setContinuationError(reason instanceof Error ? reason.message : 'Task continuation was not confirmed.');
+    } finally { continuingRef.current = false; setContinuing(false); }
+  }
   useEffect(() => {
     if (!memoryOpen || !base?.id) return;
     let active = true;
@@ -207,7 +234,7 @@ export function Workbench({ view, api }: { view: AppView; api: ApiClient }) {
     </div>}
     {s.chatError && <Alert showIcon type="error" title={s.chatError.message} />}
     {s.agentEnabled && s.selectedChatId && <AgentTasks key={s.selectedChatId} chatId={s.selectedChatId}
-      api={api} changed={a.refreshAgentMessages} />}
+      api={api} changed={a.refreshAgentMessages} onWaitingInput={setInputRun} />}
     <div className="message-scroll" aria-live="polite" aria-busy={busy}>
       {!s.chatMessages.length && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={s.selectedChatId ? s.selectedKbId === null ? '直接提问；本聊天不会检索知识库' : '直接提问，自动区分交流与资料查询' : '新建普通聊天或选择知识库聊天'} />}
       {s.chatMessages.map((m) => {
@@ -254,15 +281,18 @@ export function Workbench({ view, api }: { view: AppView; api: ApiClient }) {
       {!!s.chatImages.length && <div className="selected-images" aria-label="待发送图片">{s.chatImages.map((file, index) =>
         <span key={`${file.name}-${index}`}>{file.name} <Button size="small" disabled={busy}
           onClick={() => a.selectChatImages(s.chatImages.filter((_, item) => item !== index))}>移除</Button></span>)}</div>}
-      <Sender value={s.chatDraft} onChange={(value) => a.setDraft(value.slice(0, 1000))} onSubmit={() => { if (enabled && s.chatDraft.trim()) void a.sendChat(); }}
-      disabled={!enabled} loading={busy} autoSize={{ minRows: 2, maxRows: 6 }}
-      placeholder={enabled ? s.selectedKbId === null ? '输入问题，直接使用普通回答' : '输入问题，自动识别普通交流或知识库查询'
+      {continuationError && <Alert type="error" showIcon title={continuationError} />}
+      <Sender value={s.chatDraft} onChange={(value) => a.setDraft(value.slice(0, 1000))} onSubmit={() => {
+        if (enabled && s.chatDraft.trim()) void (waitingInput ? continueInput() : a.sendChat());
+      }}
+      disabled={!enabled} loading={continuing || busy && !waitingInput} autoSize={{ minRows: 2, maxRows: 6 }}
+      placeholder={waitingInput ? '在此回复补充信息，继续当前任务' : enabled ? s.selectedKbId === null ? '输入问题，直接使用普通回答' : '输入问题，自动识别普通交流或知识库查询'
         : busy && s.selectedChatId ? '当前任务未结束，请先补充、审批或取消' : '先新建或打开聊天'}
       suffix={false} footer={<div className="composer-controls"><Space wrap><Tooltip title="每条问题最多 2 张 PNG/JPEG，每张 10 MiB"><Button icon={<PictureOutlined />}
-        disabled={!enabled} onClick={() => imageInput.current?.click()}>添加图片</Button></Tooltip>
+        disabled={!enabled || !!waitingInput} onClick={() => imageInput.current?.click()}>添加图片</Button></Tooltip>
         <span className="composer-kb"><BookOutlined />{s.selectedKbId === null ? '普通聊天' : base?.name || '未选择知识库'}</span></Space>
         <Space wrap><Button icon={<AudioOutlined />} disabled={busy} onClick={() => a.navigate('voice')}>语音通话</Button>
-          <Button type="primary" loading={busy} disabled={!enabled || !s.chatDraft.trim()} onClick={() => void a.sendChat()}>发送问题 ↑</Button></Space></div>} />
+          <Button type="primary" loading={continuing || busy && !waitingInput} disabled={!enabled || !s.chatDraft.trim()} onClick={() => void (waitingInput ? continueInput() : a.sendChat())}>发送问题 ↑</Button></Space></div>} />
       <p className="composer-note">{s.selectedKbId === null ? 'Enter 发送 · Shift+Enter 换行。本聊天不会检索知识库。' : 'Enter 发送 · Shift+Enter 换行。资料回答只展示已提交且有原文依据的结果。'}</p></div>
     <Drawer title="原文来源" aria-label="原文来源" rootClassName="formal-source-drawer" focusable={{ focusTriggerAfterClose: false }} open={!!citation} onClose={a.closeCitation} size={460} destroyOnHidden
       footer={citation && <div className="source-drawer-actions"><Button aria-label="下载原文" href={api.originalUrl(citation.document_id)} icon={<FileTextOutlined />}>下载原文</Button><Button type="primary" onClick={a.closeCitation}>关闭来源</Button></div>}>

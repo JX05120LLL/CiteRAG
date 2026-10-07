@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { Alert, Button, Empty, Skeleton, Tag, Tooltip } from 'antd';
 const labels: Record<string, string> = {
-  available: '可用', unverified: '未验证', not_configured: '未配置', disabled: '未启用', unavailable: '不可用',
+  available: '可用', unverified: '未验证', not_checked: '未检测', not_configured: '未配置', disabled: '未启用', unavailable: '不可用',
   configured: '已配置 · 未验证连接', connected: '媒体已连接', empty: '暂无可问答资料', ready: '资料就绪', maintaining: '维护中', blocked: '待修复',
   pending: '已受理，等待处理', parsing: '正在解析', parsed: '解析完成', indexing: '正在建立索引',
   failed: '处理失败', deleting: '正在删除', replacing: '正在替换', deleted: '已删除', queued: '等待处理',

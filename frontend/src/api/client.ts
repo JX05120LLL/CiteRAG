@@ -262,6 +262,17 @@ export interface SystemHealth {
   rag_info?: RagInfo;
 }
 
+export type LocalCheckState = 'available' | 'unavailable' | 'not_checked';
+export type LocalCheckName = 'business_database' | 'model_configuration' | 'rag_database' |
+  'voice_transport' | 'model_provider' | 'speech_providers' | 'knowledge_engine';
+export interface SystemCheckReport {
+  checked_at: string;
+  checks: Record<LocalCheckName, { state: LocalCheckState; reason: string; checked_at: string }>;
+}
+
+const localCheckNames: LocalCheckName[] = ['business_database', 'model_configuration', 'rag_database',
+  'voice_transport', 'model_provider', 'speech_providers', 'knowledge_engine'];
+
 export type CapabilityState = 'not_configured' | 'unverified' | 'available' | 'unavailable';
 
 export interface ModelsInfo {
@@ -843,6 +854,18 @@ export function createApi(fetcher: typeof fetch = globalThis.fetch) {
           }
         }
       } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
+    },
+    checkSystem: async (): Promise<SystemCheckReport> => {
+      const value = await request('/api/status/check', 'POST');
+      const checks = isRecord(value) ? value.checks : null;
+      if (!isRecord(value) || !isVerificationTime(value.checked_at) || !isRecord(checks) ||
+          !localCheckNames.every((name) => {
+            const check = checks[name];
+            return isRecord(check) && ['available', 'unavailable', 'not_checked'].includes(String(check.state)) &&
+              typeof check.reason === 'string' && check.reason.length > 0 && check.reason.length <= 240 &&
+              isVerificationTime(check.checked_at);
+          })) throw new ApiError('invalid-response');
+      return value as unknown as SystemCheckReport;
     },
     health: async (): Promise<SystemHealth> => {
       const value = await request('/api/status');

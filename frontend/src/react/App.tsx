@@ -142,7 +142,7 @@ export function CiteRagApp({ api: suppliedApi, factory }: { api?: ApiClient; fac
           </div>
         {!view || !api ? <Skeleton active /> : <PageBoundary key={s?.page}><Suspense fallback={<Skeleton active />}>{s?.basesError && <Alert showIcon type="error" title={s.basesError.message} />}
           {s?.page === 'workbench' && <Workbench view={view} api={api} />}{s?.page === 'knowledge' && <Knowledge view={view} api={api} />}
-          {s?.page === 'tasks' && <Tasks view={view} />}{s?.page === 'status' && <Status view={view} />}{s?.page === 'voice' && <Voice {...view.voice} />}</Suspense></PageBoundary>}
+          {s?.page === 'tasks' && <Tasks view={view} />}{s?.page === 'status' && <Status view={view} api={api} />}{s?.page === 'voice' && <Voice {...view.voice} />}</Suspense></PageBoundary>}
       </main></div>
     <Drawer title={brand} open={navigation} onClose={() => setNavigation(false)} placement="left" size={280}>{menu}<Button block onClick={() => { setNavigation(false); setHistory(true); }}>打开聊天记录</Button></Drawer>
     <Drawer title="我的聊天" open={history} onClose={() => setHistory(false)} placement="left" size={340}>{chatList}</Drawer>

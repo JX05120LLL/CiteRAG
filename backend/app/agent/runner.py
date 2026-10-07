@@ -409,8 +409,18 @@ class AgentRunner:
                     "required": list(fields),
                     "additionalProperties": not fields,
                 }
-                if list(Draft202012Validator(schema).iter_errors(payload)):
+                natural = (set(payload) == {"detail"}
+                           and isinstance(payload["detail"], str)
+                           and 1 <= len(payload["detail"].strip()) <= 1000)
+                if not natural and list(Draft202012Validator(schema).iter_errors(payload)):
                     raise ServiceError(422, "agent_input_invalid", "请按等待字段补充参数")
+                if waiting.get("tool_id"):
+                    spec = self.registry.get(waiting["tool_id"])
+                    if (spec is None or spec.version != waiting.get("tool_version")
+                        or spec.policy_hash != waiting.get("policy_hash")):
+                        raise ServiceError(
+                            409, "tool_scope_changed", "Tool scope changed; refresh task",
+                        )
             elif waiting.get("kind") == "approval":
                 if set(payload) != {"approve"} or not isinstance(payload["approve"], bool):
                     raise ServiceError(422, "agent_input_invalid", "需要明确批准或拒绝")

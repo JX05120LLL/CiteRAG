@@ -18,6 +18,49 @@ from app.rag.runtime import RagRuntime
 from app.services.answers import AnswerService, matching_candidates
 
 
+async def test_agent_requests_provider_json_mode_without_a_second_model_call(monkeypatch):
+    calls = []
+
+    class Client:
+        async def complete(self, model, messages, **options):
+            calls.append((model, options))
+            return SimpleNamespace(content='{"action":"finish","answer":{"text":"hello"}}')
+
+    async def client(_self):
+        return Client()
+
+    monkeypatch.setattr(RagRuntime, "_get_client", client)
+    runtime = object.__new__(RagRuntime)
+    result = await runtime.complete_agent("hello", [], {}, [], [], True)
+    assert json.loads(result)["action"] == "finish"
+    assert calls == [("qwen-flash", {"max_tokens": 2048,
+                                     "response_format": "json_object"})]
+
+
+async def test_provider_json_mode_sets_response_format_only_when_requested():
+    config = DashScopeConfig(
+        region="cn-beijing", workspace_id="disposable-workspace",
+        models={"answer": "qwen-flash", "engine": "qwen-plus", "summary": "qwen-max",
+                "embedding": "text-embedding-v4", "rerank": "qwen3-vl-rerank"},
+        embedding_dimension=1024, api_key=SecretStr("synthetic-secret"),
+        credential_ciphertext_sha256="1" * 64,
+    )
+    payloads = []
+
+    def handler(request):
+        payloads.append(json.loads(request.content))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "{}"},
+                                                     "finish_reason": "stop"}]})
+
+    async with DashScopeClient(config, transport=httpx.MockTransport(handler)) as client:
+        await client.complete("qwen-flash", [Message("user", "synthetic")],
+                              max_tokens=2048, response_format="json_object")
+        await client.complete("qwen-flash", [Message("user", "synthetic")],
+                              max_tokens=2048)
+    assert payloads[0]["response_format"] == {"type": "json_object"}
+    assert "response_format" not in payloads[1]
+
+
 def test_context_route_resolves_followup_and_accepts_general_without_fake_filters():
     context = {"turns": [{"user": "介绍 Nimbus 项目", "assistant": "旧回答不是证据"}]}
     assert checked_route('{"mode":"general"}', [], "什么是 RAG？") == {"mode": "general"}

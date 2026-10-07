@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from typing import Annotated
 from uuid import UUID
 
@@ -17,6 +18,7 @@ from app.api.schemas import (
     KnowledgeBaseView,
     KnowledgeMemoryCreate,
 )
+from app.api.status_checks import local_check, probe_loopback
 from app.models import KnowledgeBase, LocalProfile
 from app.services.conversations import ConversationService
 from app.services.knowledge import KnowledgeService
@@ -57,6 +59,59 @@ async def status(request: Request):
     result["retention"] = ("disabled" if retention is None else
                            "available" if retention.available else "unavailable")
     return result
+
+
+@router.post("/status/check")
+async def check_status(request: Request):
+    """Check local dependencies once on explicit action, without provider calls."""
+    from app.voice.transport import transport_status
+
+    base = await status(request)
+    checked_at = datetime.now(UTC).isoformat()
+    database_ok = base["database"] == "available"
+    model_ok = base["models"] in {"available", "unverified"}
+    rag_ok = base["rag"] in {"available", "unverified"}
+    transport = transport_status(request.app.state.settings)["transport"]
+    voice_ok = (transport == "configured"
+                and await probe_loopback(request.app.state.settings.livekit_url))
+    checks = {
+        "business_database": local_check(
+            "available" if database_ok else "unavailable",
+            "Business database query succeeded" if database_ok
+            else "Business database query failed or is not configured",
+            checked_at,
+        ),
+        "model_configuration": local_check(
+            "available" if model_ok else "unavailable",
+            "Local model configuration is readable; provider function was not tested" if model_ok
+            else "Local model configuration is missing or unreadable", checked_at,
+        ),
+        "rag_database": local_check(
+            "available" if rag_ok else "unavailable",
+            "Local RAG database probe succeeded; retrieval was not tested" if rag_ok
+            else "Local RAG database probe failed or is not configured", checked_at,
+        ),
+        "voice_transport": local_check(
+            "available" if voice_ok else "unavailable",
+            "Local media TCP port accepted a connection; voice function was not tested" if voice_ok
+            else "Local media transport is unconfigured or its port is unreachable", checked_at,
+        ),
+        "model_provider": local_check(
+            "not_checked",
+            "A functional model request may incur charges and needs a bounded authorization",
+            checked_at,
+        ),
+        "speech_providers": local_check(
+            "not_checked",
+            "ASR and TTS functional requests may incur charges and need a bounded authorization",
+            checked_at,
+        ),
+        "knowledge_engine": local_check(
+            "not_checked", "End-to-end retrieval can invoke paid embedding or model services",
+            checked_at,
+        ),
+    }
+    return {"checked_at": checked_at, "checks": checks}
 
 
 @router.get("/knowledge-bases")

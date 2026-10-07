@@ -165,3 +165,29 @@ async def test_input_resume_cannot_reset_model_round_budget():
     with pytest.raises(graph.AgentError, match="agent_model_budget"):
         await compiled.ainvoke(Command(resume={"detail": "合成"}), config)
     assert len(hooks.seen) == 6
+
+
+async def test_single_missing_tool_text_continues_same_decision_without_replanning():
+    from langgraph.checkpoint.memory import InMemorySaver
+    from langgraph.types import Command
+
+    class MissingToolHooks(Hooks):
+        async def prepare(self, state):
+            if "location" not in state["decision"]["arguments"]:
+                return {"kind": "input", "fields": {"location": "string"},
+                        "tool_id": "test.read", "arguments": {}}
+            return None
+
+    hooks = MissingToolHooks([
+        {"action": "call_tool", "tool_id": "test.read", "arguments": {}},
+        {"action": "finish", "answer": {"text": "done"}},
+    ])
+    task_id = str(uuid4())
+    config = {"configurable": {"thread_id": task_id}}
+    compiled = engine().build_graph(hooks, InMemorySaver())
+    waiting = await compiled.ainvoke(engine().initial_state(task_id), config)
+    assert waiting["__interrupt__"] and len(hooks.seen) == 1
+    result = await compiled.ainvoke(Command(resume={"detail": "Hanzhong"}), config)
+    assert result["model_rounds"] == 2
+    assert hooks.executed == ["test.read"]
+    assert len(hooks.seen) == 2

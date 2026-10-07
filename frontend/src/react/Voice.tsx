@@ -64,7 +64,7 @@ export function Voice({ context, actions, levels = [], readOnly = false }: {
   const active = ['connecting', 'connected', 'reconnecting', 'ending'].includes(media.phase);
   const answers = media.answers ?? [];
   const answerCard = (answer: typeof answers[number]) => <article className="voice-exchange" key={answer.message_id}>
-    <div className="voice-user-row"><span className="voice-user-avatar"><UserOutlined /></span><div className="voice-user-card"><strong><AudioOutlined /> 用户（语音输入）</strong>
+    <div className="voice-user-row"><span className="voice-user-avatar"><UserOutlined /></span><div className="voice-user-card"><strong><UserOutlined /> 用户</strong>
       {answer.question.length > 160 ? <details className="voice-question"><summary>{answer.question.slice(0, 80)}…（展开全文）</summary><p>{answer.question}</p></details> : <p>{answer.question}</p>}</div></div>
     <div className="voice-assistant-row"><span className="voice-assistant-avatar"><img src={logo} alt="" /></span><div className="voice-assistant-card"><Space wrap><strong>{answerRouteLabel(answer.route).split(' · ')[0]}</strong><StateTag value={answer.status} />{!answer.saved && <Tag>未保存</Tag>}</Space>
     <p className="voice-answer">{answer.hidden || answer.stale ? '资料已变化，旧回答与来源暂停展示。'

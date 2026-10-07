@@ -105,7 +105,7 @@ export interface ChatMessage {
   client_message_id: string;
   question: string;
   mode: 'semantic' | 'exact' | 'auto';
-  route?: 'semantic' | 'exact' | 'literal' | 'general' | 'chat' | 'needs_clarification' | 'unsupported';
+  route?: 'semantic' | 'exact' | 'literal' | 'general' | 'chat' | 'needs_clarification' | 'unsupported' | null;
   status: 'running' | 'answered' | 'insufficient_evidence' | 'needs_clarification' |
     'conflicting_evidence' | 'failed' | 'interrupted' | 'partial';
   text: string;
@@ -433,7 +433,8 @@ function chatMessage(value: unknown): ChatMessage {
       (value.error_code !== null && typeof value.error_code !== 'string') ||
       !isVerificationTime(value.created_at) || typeof value.saved !== 'boolean' ||
       (value.stale !== undefined && typeof value.stale !== 'boolean') ||
-      (value.route !== undefined && !['semantic', 'exact', 'literal', 'general', 'chat', 'needs_clarification', 'unsupported'].includes(String(value.route))) ||
+      (value.route !== undefined && value.route !== null &&
+        !['semantic', 'exact', 'literal', 'general', 'chat', 'needs_clarification', 'unsupported'].includes(String(value.route))) ||
       (['general', 'chat'].includes(String(value.route)) && value.citations.length !== 0) ||
       (value.hidden !== undefined && typeof value.hidden !== 'boolean') ||
       (value.images !== undefined && (!Array.isArray(value.images) || !value.images.every(isChatImage)))) throw new ApiError('invalid-response');

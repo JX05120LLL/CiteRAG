@@ -371,6 +371,30 @@ it('shows the same ordinary and precise knowledge route labels in text and voice
   expect(screen.getByText('知识库回答 · 精确检索')).toBeTruthy();
 });
 
+it('does not label an unrouted failed image as a knowledge answer or voice input', async () => {
+  const failed = { ...sampleMessages[sampleChats[0].id][0], message_id: 'failed-image',
+    question: '这是什么?', text: '', status: 'failed' as const, route: null,
+    error_code: 'answer_unavailable', citations: [], images: [{ id: 'pending-image',
+      filename: 'synthetic.png', mime_type: 'image/png' as const, width: 32, height: 32,
+      size: 512, observation: null, observation_status: 'pending' as const,
+      needs_confirmation: false, confirmed_identifier: null,
+      expires_at: '2026-10-08T00:00:00Z' }] };
+  const { api } = fixture([failed]);
+  const mounted = render(<CiteRagApp api={api} />);
+  expect((await screen.findAllByText('回答方式未确定')).length).toBeGreaterThan(0);
+  expect(screen.getByText('synthetic.png')).toBeTruthy();
+  expect(screen.queryByText('知识库回答')).toBeNull();
+  mounted.unmount();
+
+  const actions = assistantActions();
+  actions.media.answers = [failed];
+  render(<Voice context={{ chatId: sampleChats[0].id, chatTitle: '普通聊天', kbName: '',
+    kbReady: true, chatPending: false }} actions={actions} />);
+  expect(screen.getAllByText('回答方式未确定').length).toBeGreaterThan(0);
+  expect(screen.getByText('用户')).toBeTruthy();
+  expect(screen.queryByText('用户（语音输入）')).toBeNull();
+});
+
 it('shows a knowledge evidence miss clearly without publishing a general answer or source', async () => {
   const missing = { ...sampleMessages[sampleChats[0].id][0], status: 'insufficient_evidence' as const,
     route: 'semantic' as const, text: '', citations: [] };

@@ -6,5 +6,5 @@ export function answerRouteLabel(route: ChatMessage['route']): string {
   if (route === 'semantic') return '知识库回答 · 语义检索';
   if (route === 'needs_clarification') return '需要澄清';
   if (route === 'unsupported') return '当前查询受限';
-  return '知识库回答';
+  return '回答方式未确定';
 }

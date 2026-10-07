@@ -377,10 +377,17 @@ class RagRuntime:
             "用户已明确该城市；使用其坐标查询所需天气，不要追问该城市下辖区县。"
             "若 requires_selection=true 且没有唯一匹配，才用聊天追问上级行政区。"
         )
-        # Agent decisions include the full validated tool catalog on general turns too.
+        # The gateway retains the full descriptor for validation and approval.
+        # Planning only needs identity, purpose, and the input contract; sending
+        # policy and provenance fields for every tool can exhaust this budget
+        # after successful tool calls.
+        planning_tools = [
+            {key: tool[key] for key in ("id", "title", "impact", "input_schema")}
+            for tool in tools
+        ]
         messages = fit_chat_messages(system, {
             "question": question, "evidence": evidence, "conversation_context": context,
-            "allowed_tools": tools, "tool_results": results,
+            "allowed_tools": planning_tools, "tool_results": results,
         }, ANSWER_INPUT_TOKENS)
         client = await self._get_client()
         result = await client.complete("qwen-flash", messages, max_tokens=2048,

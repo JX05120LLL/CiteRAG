@@ -34,7 +34,7 @@ async def test_agent_prompt_uses_supplied_parameters_and_available_catalog(monke
     assert "没有匹配工具" in captured["system"]
 
 
-async def test_general_agent_six_tool_catalog_fits_bounded_input_and_prunes_history(
+async def test_general_agent_six_tools_and_two_weather_results_fit_bounded_input(
     monkeypatch,
 ):
     from app.config import Settings
@@ -57,6 +57,14 @@ async def test_general_agent_six_tool_catalog_fits_bounded_input_and_prunes_hist
          "destination": spec.destination}
         for spec in registry.values()
     ]
+    # The real Hanzhong failure happened after city_search and current
+    # succeeded. This fixture keeps the same shape without storing user data.
+    results = [
+        {"call_id": f"synthetic-{index}", "tool_id": tool_id,
+         "status": "succeeded", "source_type": "tool",
+         "data": {"public_weather_sample": "synthetic weather data " * 48}}
+        for index, tool_id in enumerate(("weather.city_search", "weather.current"))
+    ]
     captured = {}
 
     class FakeClient:
@@ -71,7 +79,7 @@ async def test_general_agent_six_tool_catalog_fits_bounded_input_and_prunes_hist
     runtime = object.__new__(RagRuntime)
     await runtime.complete_agent(
         "你好，能听到吗？", [], {"turns": [{"role": "user", "text": "x" * 3000}]},
-        tools, [], True,
+        tools, results, True,
     )
     messages = captured["messages"]
     assert estimate_messages(messages) <= ANSWER_INPUT_TOKENS
@@ -79,6 +87,11 @@ async def test_general_agent_six_tool_catalog_fits_bounded_input_and_prunes_hist
     assert payload["question"] == "你好，能听到吗？"
     assert payload["conversation_context"]["turns"] == []
     assert len(payload["allowed_tools"]) == 6
+    assert {tool["id"] for tool in payload["allowed_tools"]} == {
+        tool["id"] for tool in tools
+    }
+    assert all("input_schema" in tool for tool in payload["allowed_tools"])
+    assert len(payload["tool_results"]) == 2
 
 
 async def test_agent_still_rejects_oversized_current_question(monkeypatch):

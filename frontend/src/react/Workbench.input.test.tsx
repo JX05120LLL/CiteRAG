@@ -98,3 +98,27 @@ it('restores image and voice actions promptly after cancelling a waiting task', 
   await waitFor(() => expect(screen.getByRole<HTMLButtonElement>('button', { name: /添加图片/ }).disabled).toBe(false));
   expect(screen.getByRole<HTMLButtonElement>('button', { name: /语音通话/ }).disabled).toBe(false);
 });
+
+it('keeps successful and failed terminal answers in the chat messages', () => {
+  const created_at = '2026-10-07T00:00:00Z';
+  const messages = [
+    { message_id: 'success', attempt_id: 'success-attempt', client_message_id: 'success-client',
+      question: 'Weather?', mode: 'auto', route: 'general', status: 'answered', phase: 'complete',
+      text: 'Synthetic weather complete.', citations: [], kb_revision: 0,
+      error_code: null, created_at, saved: true },
+    { message_id: 'failure', attempt_id: 'failure-attempt', client_message_id: 'failure-client',
+      question: 'Weather again?', mode: 'auto', route: 'general', status: 'failed', phase: 'complete',
+      text: '', citations: [], kb_revision: 0,
+      error_code: 'weather_auth_failed', created_at, saved: true },
+  ];
+  const view = { state: { agentEnabled: false, selectedChatId: 'chat', selectedKbId: null,
+    bases: [], chats: [], chatMessages: messages, chatDraft: '', chatPending: false,
+    loading: false, chatImages: [], chatUploadedImages: [], chatError: null,
+    selectedCitation: null }, actions: {} } as unknown as AppView;
+  render(<Workbench view={view} api={{} as ApiClient} />);
+  const answers = Array.from(document.querySelectorAll<HTMLElement>('.answer-card .answer-text'));
+  expect(answers.map((item) => item.textContent)).toEqual([
+    'Synthetic weather complete.', expect.stringMatching(/.+/),
+  ]);
+  expect(screen.getByText(/weather_auth_failed/)).toBeTruthy();
+});

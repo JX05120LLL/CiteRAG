@@ -47,6 +47,67 @@ async def test_manual_check_is_idempotent_and_never_starts_on_read(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_auto_batch_deduplicates_concurrent_entries_and_reuses_fresh_results(tmp_path):
+    from app.api.functional_checks import FunctionalChecks
+
+    release = asyncio.Event()
+    calls = []
+
+    async def probe(kind):
+        calls.append(kind)
+        await release.wait()
+
+    checks = FunctionalChecks(
+        tmp_path, lambda kind: None if kind == "knowledge" else "a" * 64,
+        {kind: probe for kind in ("model", "asr", "tts")},
+        secure_path=lambda _path: None,
+    )
+    first, second = await asyncio.gather(checks.ensure_all(), checks.ensure_all())
+    assert sorted(calls) == ["asr", "model", "tts"]
+    assert all(first["checks"][kind]["state"] == "running"
+               for kind in ("model", "asr", "tts"))
+    assert first["checks"]["knowledge"]["state"] == "not_checked"
+    assert second["checks"]["model"]["request_id"] == first["checks"]["model"]["request_id"]
+    release.set()
+    await asyncio.gather(*(checks.wait(kind) for kind in ("model", "asr", "tts")))
+    cached = (await checks.ensure_all())["checks"]
+    assert all(cached[kind]["state"] == "available" for kind in ("model", "asr", "tts"))
+    assert sorted(calls) == ["asr", "model", "tts"]
+    await checks.ensure_all(force=True)
+    await asyncio.gather(*(checks.wait(kind) for kind in ("model", "asr", "tts")))
+    assert sorted(calls) == ["asr", "asr", "model", "model", "tts", "tts"]
+
+
+@pytest.mark.asyncio
+async def test_auto_batch_skips_missing_configuration_and_rechecks_changed_fingerprint(tmp_path):
+    from app.api.functional_checks import FunctionalChecks
+
+    fingerprints = {"model": None, "asr": None, "tts": None}
+    calls = []
+
+    async def probe(kind):
+        calls.append(kind)
+
+    checks = FunctionalChecks(tmp_path, fingerprints.get,
+                              {kind: probe for kind in fingerprints},
+                              secure_path=lambda _path: None)
+    empty = await checks.ensure_all()
+    assert calls == []
+    assert all(empty["checks"][kind]["reason"] == "configuration_unavailable"
+               for kind in fingerprints)
+    fingerprints["model"] = "a" * 64
+    await checks.ensure_all()
+    await checks.wait("model")
+    assert calls == ["model"]
+    fingerprints["model"] = "b" * 64
+    assert checks.read("model")["reason"] == "configuration_changed"
+    await checks.ensure_all()
+    await checks.wait("model")
+    assert calls == ["model", "model"]
+    assert checks.read("model")["fingerprint"] == "b" * 64
+
+
+@pytest.mark.asyncio
 async def test_rejection_timeout_cancellation_and_expiry_are_distinct(tmp_path):
     from app.api.functional_checks import FunctionalChecks, ProbeFailure
 
@@ -129,6 +190,43 @@ async def test_api_requires_explicit_cost_acceptance_and_cancel_is_idempotent(tm
         assert cancelled.status_code == 200
         assert cancelled.json()["state"] == "not_checked"
         assert calls == ["model"]
+
+
+@pytest.mark.asyncio
+async def test_auto_api_starts_one_bounded_batch_and_requires_cost_authorization(tmp_path):
+    from app.api.functional_checks import FunctionalChecks
+
+    calls = []
+
+    async def probe(kind):
+        calls.append(kind)
+
+    app = create_app(Settings())
+    checks = FunctionalChecks(
+        tmp_path, lambda kind: None if kind == "knowledge" else "a" * 64,
+        {kind: probe for kind in ("model", "asr", "tts")},
+        secure_path=lambda _path: None,
+    )
+    app.state.functional_checks = checks
+    async with AsyncClient(transport=ASGITransport(app),
+                           base_url="http://127.0.0.1:5173",
+                           headers={"Origin": "http://127.0.0.1:5173"}) as api:
+        url = "/api/status/functional/auto"
+        assert (await api.get("/api/status/functional")).status_code == 200
+        assert calls == []
+        assert (await api.post(url, json={})).status_code == 422
+        first = await api.post(url, json={"accept_cost": True})
+        assert first.status_code == 202
+        assert first.json()["checks"]["knowledge"]["state"] == "not_checked"
+        await asyncio.gather(*(checks.wait(kind) for kind in ("model", "asr", "tts")))
+        cached = await api.post(url, json={"accept_cost": True})
+        assert cached.status_code == 202
+        assert cached.json()["checks"]["model"]["state"] == "available"
+        assert sorted(calls) == ["asr", "model", "tts"]
+        refreshed = await api.post(url, json={"accept_cost": True, "force": True})
+        assert refreshed.status_code == 202
+        await asyncio.gather(*(checks.wait(kind) for kind in ("model", "asr", "tts")))
+        assert sorted(calls) == ["asr", "asr", "model", "model", "tts", "tts"]
 
 
 @pytest.mark.asyncio

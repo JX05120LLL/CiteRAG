@@ -249,7 +249,7 @@
 .citerag-app .library-summary .ant-btn { min-height: 43px; }
 .citerag-app .upload-strip { min-height: 86px; display: flex; align-items: center; gap: 26px; padding: 16px 22px; border: 1px solid #dce5ef; border-radius: 10px; }
 .citerag-app .upload-strip .ant-btn { min-height: 46px; padding-inline: 20px; }
-.citerag-app .upload-strip span { padding-left: 25px; border-left: 1px solid var(--line); color: #526582; font-size: 15px; }
+.citerag-app .upload-strip > span { padding-left: 25px; border-left: 1px solid var(--line); color: #526582; font-size: 15px; }
 .citerag-app .upload-strip small { margin-left: auto; color: #846524; font-size: 12px; }
 .citerag-app .upload-section { padding: 18px 22px; margin: 10px 0 26px; border: 1px solid var(--line); border-radius: 10px; }
 .citerag-app .management-main > .section-heading { margin: 28px 0 14px; }
@@ -290,21 +290,25 @@
 .citerag-app .task-detail .ant-descriptions-item-content { color: #22324b; }
 .citerag-app .task-detail .ant-alert { margin-block: 18px; }
 .citerag-app .status-actions { display: flex; justify-content: flex-end; align-items: center; gap: 15px; margin: -92px 0 42px; }
-.citerag-app .status-actions .ant-btn { min-height: 46px; }.citerag-app .status-actions span { color: #657891; font-size: 12px; }
+.citerag-app .status-actions .ant-btn { min-height: 46px; }
+.citerag-app .status-actions > span { color: #657891; font-size: 12px; }
+.citerag-app .upload-add-button.ant-btn-primary,
+.citerag-app .status-refresh-button.ant-btn-primary {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  color: #fff; background: #176b51; border-color: #176b51; font-size: 14px; font-weight: 600;
+}
+.citerag-app .upload-add-button.ant-btn-primary:not(:disabled):hover,
+.citerag-app .status-refresh-button.ant-btn-primary:not(:disabled):hover {
+  color: #fff; background: #11583f; border-color: #11583f;
+}
+.citerag-app .upload-add-button.ant-btn-primary:disabled,
+.citerag-app .status-refresh-button.ant-btn-primary:disabled {
+  color: #52645a; background: #e5ebe7; border-color: #d3ddd7;
+}
 .citerag-app .status-layout { max-width: none; }
 .citerag-app .status-layout > .ant-alert { margin: 0 0 26px; padding: 18px 20px; }
 .citerag-app .status-layout .section-heading { display: block; margin: 26px 0 17px; }
 .citerag-app .status-layout .section-heading h2 { font-size: 22px; }
-.citerag-app .functional-checks { margin: 24px 0; padding: 24px; background: #fff; border: 1px solid var(--line); border-radius: 16px; }
-.citerag-app .functional-checks h2 { margin: 0 0 16px; font-size: 21px; }
-.citerag-app .functional-checks > .ant-alert { margin-bottom: 16px; }
-.citerag-app .functional-checks > .ant-checkbox-wrapper { margin-bottom: 14px; }
-.citerag-app .functional-check-row { display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: 16px 0; border-top: 1px solid var(--line); }
-.citerag-app .functional-check-content { min-width: 0; }
-.citerag-app .functional-check-title, .citerag-app .functional-check-meta, .citerag-app .functional-check-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
-.citerag-app .functional-check-title { margin-bottom: 5px; }
-.citerag-app .functional-check-meta { color: #657891; font-size: 12px; margin-top: 6px; }
-.citerag-app .functional-check-actions { flex: 0 0 auto; }
 .citerag-app .status-capabilities { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 12px; }
 .citerag-app .status-capability { min-height: 235px; border-color: var(--line); }
 .citerag-app .status-capability .ant-card-body { padding: 22px; }
@@ -319,7 +323,6 @@
 .citerag-app .status-diagnostics { margin-top: 24px; border-top: 1px solid var(--line); }
 .citerag-app .status-diagnostics > summary { cursor: pointer; padding: 16px 0; font-weight: 600; }
 .citerag-app .status-diagnostics-body { padding: 4px 0 24px; }
-.citerag-app .status-diagnostics .functional-checks { margin: 20px 0; padding: 0; border: 0; background: transparent; }
 .citerag-app .status-panels { margin-top: 24px; gap: 15px; }
 .citerag-app .status-panels .ant-card-head-title { font-size: 20px; }
 .citerag-app .status-panels .ant-card-body { min-height: 200px; }
@@ -410,7 +413,6 @@
   .citerag-app .voice-user-card, .citerag-app .voice-assistant-card { padding: 14px; }
 }
 @media (max-width: 1200px) {
-  .citerag-app .functional-check-row { align-items: flex-start; flex-direction: column; gap: 10px; }
   .citerag-app .task-summary { margin: 0 0 22px; max-width: none; }
   .citerag-app .task-columns { grid-template-columns: 1fr; }
   .citerag-app .status-capabilities { grid-template-columns: repeat(2, minmax(0, 1fr)); }

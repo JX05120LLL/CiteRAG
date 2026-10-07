@@ -8,6 +8,7 @@ import { errorText, failureReason, locatorLabel, stoppedStage } from '../pages/d
 import { matchesPendingFiles } from '../document-draft';
 import { backupErrors } from '../pages/status';
 import { StateTag, dateLabel, sizeLabel } from '../preview/shared';
+import { ApiError } from '../api/client';
 
 export function Knowledge({ view, api }: { view: AppView; api: ApiClient }) {
   const { state: s, actions: a } = view;
@@ -87,7 +88,7 @@ export function Documents({ view, api }: { view: AppView; api: ApiClient }) {
     {['maintaining', 'blocked'].includes(d.base.status) && <Alert showIcon type="warning" title={d.base.status === 'blocked' ? '此库待修复，问答与新上传暂停。' : '此库维护中，请等待任务核验。'} />}
     {d.readError && <Alert showIcon type="error" title={errorText(d.readError)} />}{d.error && <Alert showIcon type="error" title={errorText(d.error)} />}
     {d.notice && <Alert showIcon type="info" title={d.notice} />}
-    <div className="upload-strip"><Button type="primary" icon={<PlusOutlined />} aria-expanded={uploadOpen || d.uncertain}
+    <div className="upload-strip"><Button className="upload-add-button" type="primary" icon={<PlusOutlined />} aria-expanded={uploadOpen || d.uncertain}
       disabled={uploadDisabled && !d.uncertain} onClick={() => setUploadOpen(!uploadOpen)}>添加资料</Button><span>支持格式：TXT / MD / 文字 PDF / DOCX</span>
       {uploadDisabled && <small>读取未完成、维护中或已有任务，暂不接收新资料。</small>}</div>
     {(uploadOpen || d.uncertain) && <div className="upload-section">
@@ -181,100 +182,110 @@ export function Status({ view, api }: { view: AppView; api: ApiClient }) {
   const [checkError, setCheckError] = useState<string | null>(null);
   const [functional, setFunctional] = useState<FunctionalReport | null>(null);
   const [functionalError, setFunctionalError] = useState<string | null>(null);
-  const [costAccepted, setCostAccepted] = useState(false);
-  const [submitting, setSubmitting] = useState<FunctionalKind | null>(null);
-  const submittingRef = useRef(false);
-  const functionalKinds: FunctionalKind[] = ['model', 'asr', 'tts', 'knowledge'];
-  const functionalLabels: Record<FunctionalKind, string> = {
-    model: '模型服务', asr: '语音识别', tts: '语音合成', knowledge: '知识检索端到端',
-  };
+  const [starting, setStarting] = useState(true);
+  const autoPromiseRef = useRef<Promise<FunctionalReport> | null>(null);
+  function startError(error: unknown) {
+    if (error instanceof ApiError && error.kind === 'not-found')
+      return '自动检测接口未加载：本地 API 与当前页面版本不一致，请更新本地 API 后刷新页面。';
+    if (error instanceof ApiError && error.kind === 'network')
+      return '无法连接本地 API，请确认服务运行后刷新页面。';
+    if (error instanceof ApiError && error.kind === 'invalid-response')
+      return '自动检测响应格式不匹配，请更新本地 API 后刷新页面。';
+    return '自动检测未能启动，请刷新后重试。';
+  }
   const reasonLabels: Record<string, string> = {
-    never_checked: '尚未检测', check_running: '检测中', check_succeeded: '实际请求成功',
-    check_expired: '结果已过期，需重新检测', configuration_changed: '配置已变化，需重新检测',
-    configuration_unavailable: '检测所需配置不可用', interrupted: '上次检测中断，需重新检测',
-    cancelled: '检测已取消，需重新检测', authentication_rejected: '供应商拒绝认证',
-    quota_rejected: '供应商拒绝配额或限流', provider_timeout: '供应商请求超时',
-    provider_unavailable: '供应商请求失败', response_invalid: '供应商结果不符合检测要求',
-    acceptance_kb_readonly_probe_unavailable: '当前没有可证明只读的验收知识库检索路径，尚未检查',
+    never_checked: '尚未检测', check_running: '检测中', check_succeeded: '实际调用成功',
+    check_expired: '结果已过期，请刷新状态', configuration_changed: '配置已变化，请刷新状态',
+    configuration_unavailable: '缺少必要配置', interrupted: '上次检测中断，请刷新状态',
+    cancelled: '检测已取消，请刷新状态', authentication_rejected: '供应商拒绝认证',
+    quota_rejected: '供应商拒绝请求或额度不足', provider_timeout: '供应商请求超时',
+    provider_unavailable: '供应商连接失败', response_invalid: '供应商结果不符合检测要求',
+    acceptance_kb_readonly_probe_unavailable: '当前没有可验证的只读完整知识库检索路径，保持未检测',
   };
   useEffect(() => {
-    if (!api.functionalStatus) return;
-    let mounted = true;
-    void api.functionalStatus().then((value) => { if (mounted) { setFunctional(value); setFunctionalError(null); } })
-      .catch(() => { if (mounted) setFunctionalError('功能检测记录读取失败'); });
-    return () => { mounted = false; };
+    let active = true;
+    if (!api.autoFunctionalChecks) { setStarting(false); setFunctionalError(startError(new ApiError('not-found'))); return; }
+    const promise = autoPromiseRef.current ?? api.autoFunctionalChecks(false);
+    autoPromiseRef.current = promise;
+    void promise.then((value) => { if (active) { setFunctional(value); setFunctionalError(null); } })
+      .catch((error) => { if (active) setFunctionalError(startError(error)); })
+      .finally(() => { if (active) setStarting(false); });
+    return () => { active = false; };
   }, [api]);
-  const anyRunning = functionalKinds.some((kind) => functional?.checks[kind].state === 'running');
+  const anyRunning = !functionalError && (['model', 'asr', 'tts'] as FunctionalKind[])
+    .some((kind) => functional?.checks[kind].state === 'running');
   useEffect(() => {
-    if (!anyRunning) return;
+    if (!anyRunning || !api.functionalStatus) return;
+    let active = true; let pending = false;
     const timer = window.setInterval(() => {
-      void api.functionalStatus().then((value) => { setFunctional(value); setFunctionalError(null); })
-        .catch(() => setFunctionalError('功能检测记录读取失败'));
+      if (pending) return;
+      pending = true;
+      void api.functionalStatus().then((value) => {
+        if (active) { setFunctional(value); setFunctionalError(null); }
+      }).catch(() => { if (active) setFunctionalError('检测记录读取失败，请刷新后重试。'); })
+        .finally(() => { pending = false; });
     }, 1000);
-    return () => window.clearInterval(timer);
+    return () => { active = false; window.clearInterval(timer); };
   }, [api, anyRunning]);
-  async function startFunctional(kind: FunctionalKind) {
-    if (!costAccepted || submittingRef.current || submitting || anyRunning || kind === 'knowledge') return;
-    const requestId = crypto.randomUUID();
-    submittingRef.current = true;
-    setSubmitting(kind); setFunctionalError(null);
-    try {
-      const result = await api.startFunctionalCheck(kind, requestId);
-      setFunctional((previous) => previous && {
-        checks: { ...previous.checks, [kind]: result },
-      });
-    } catch { setFunctionalError(`${functionalLabels[kind]}检测未启动，请先刷新记录`); }
-    finally { submittingRef.current = false; setSubmitting(null); }
-  }
-  async function cancelFunctional(kind: FunctionalKind) {
-    const requestId = functional?.checks[kind].request_id;
-    if (!requestId) return;
-    try {
-      const result = await api.cancelFunctionalCheck(kind, requestId);
-      setFunctional((previous) => previous && {
-        checks: { ...previous.checks, [kind]: result },
-      });
-    } catch { setFunctionalError(`${functionalLabels[kind]}取消未确认，请刷新记录`); }
-  }
   const checkLabels: Record<string, string> = {
-    business_database: '业务数据库', model_configuration: '模型配置', rag_database: '知识引擎本地数据库',
-    voice_transport: '本地媒体端口', model_provider: '模型服务实测',
-    speech_providers: '语音识别与合成实测', knowledge_engine: '知识检索端到端实测',
+    business_database: '业务数据库', model_configuration: '模型配置', rag_database: '知识库版本及数据库',
+    voice_transport: '语音媒体端口', model_provider: '模型服务实际调用',
+    speech_providers: '语音识别与合成实际调用', knowledge_engine: '知识库检索实际调用',
   };
   async function runLocalCheck() {
     setChecking(true);
     setCheckError(null);
     try { setReport(await api.checkSystem()); }
-    catch { setCheckError('本地检测未完成，请重试。'); }
+    catch { setCheckError('本地检查未完成，请重试。'); }
     finally { setChecking(false); }
   }
   function observed(kind: FunctionalKind) {
-    return functional?.checks[kind].state ?? (functionalError ? 'unverified' : 'not_checked');
+    const item = functional?.checks[kind];
+    if (kind === 'knowledge') return item?.state ?? 'not_checked';
+    if (functionalError && item?.state === 'running') return 'unverified';
+    if (!item) return functionalError ? 'unverified' : 'running';
+    return item.reason === 'configuration_unavailable' ? 'unavailable' : item.state;
   }
-  function refreshStatus() {
+  function note(kind: FunctionalKind) {
+    const item = functional?.checks[kind];
+    if (kind === 'knowledge' && !item) return reasonLabels.acceptance_kb_readonly_probe_unavailable;
+    if (functionalError && item?.state === 'running') return functionalError;
+    if (!item) return functionalError ?? '自动检测中';
+    const reason = reasonLabels[item.reason] ?? '检测状态未知';
+    return item.checked_at ? `${reason} · ${dateLabel(item.checked_at)}` : reason;
+  }
+  const asrState = observed('asr'); const ttsState = observed('tts');
+  const voiceState = asrState === 'available' && ttsState === 'available' ? 'available'
+    : asrState === 'unavailable' || ttsState === 'unavailable' ? 'unavailable'
+      : asrState === 'running' || ttsState === 'running' ? 'running' : 'unverified';
+  async function refreshStatus() {
     void view.actions.loadHealth(); void view.voice.actions.refresh();
-    if (api.functionalStatus) void api.functionalStatus()
-      .then((value) => { setFunctional(value); setFunctionalError(null); })
-      .catch(() => setFunctionalError('功能检测记录读取失败'));
+    if (!api.autoFunctionalChecks || starting || anyRunning) return;
+    setStarting(true); setFunctionalError(null);
+    const promise = api.autoFunctionalChecks(true);
+    autoPromiseRef.current = promise;
+    try { setFunctional(await promise); }
+    catch (error) { setFunctionalError(startError(error)); }
+    finally { setStarting(false); }
   }
   const capabilities = [
     { name: '业务数据库', value: h?.database ?? 'unverified', icon: <DatabaseOutlined />,
-      note: '本地数据查询状态', parts: [] },
+      note: '轻量数据查询状态', parts: [] },
     { name: '模型服务', value: observed('model'), icon: <BookOutlined />,
-      note: functional?.checks.model.checked_at ? `上次检测：${dateLabel(functional.checks.model.checked_at)}` : '尚无实际请求记录', parts: [] },
+      note: note('model'), parts: [] },
     { name: '知识检索', value: observed('knowledge'), icon: <FileTextOutlined />,
-      note: observed('knowledge') === 'available' ? '端到端检索已验收' : '端到端检索尚未验收', parts: [] },
-    { name: '语音与媒体', value: 'not_checked', icon: <UploadOutlined />,
-      note: '通话未验收', parts: [
-        { name: 'ASR', value: observed('asr') },
-        { name: 'TTS', value: observed('tts') },
+      note: note('knowledge'), parts: [] },
+    { name: '语音与媒体', value: voiceState, icon: <UploadOutlined />,
+      note: `ASR：${note('asr')}；TTS：${note('tts')}`, parts: [
+        { name: 'ASR', value: asrState },
+        { name: 'TTS', value: ttsState },
       ] },
   ];
   return <div className="status-layout">
-    <div className="status-actions"><Button type="primary" icon={<ReloadOutlined />} loading={s.healthLoading}
-      onClick={refreshStatus}>刷新系统状态</Button>
+    <div className="status-actions"><Button className="status-refresh-button" type="primary" icon={<ReloadOutlined />}
+      loading={s.healthLoading || starting} disabled={anyRunning} onClick={() => void refreshStatus()}>刷新系统状态</Button>
       {s.healthCheckedAt && <span>最近读取 {new Date(s.healthCheckedAt).toLocaleTimeString('zh-CN')}</span>}</div>
-    <div className="section-heading"><h2>服务能力</h2><span className="muted">最近一次实际检测结果</span></div>
+    <div className="section-heading"><h2>服务能力</h2><span className="muted">进入页面自动检测；结果有效一小时，刷新可重新检测</span></div>
     {s.healthLoading && <Skeleton active />}{s.healthError && <Alert showIcon type="error" title={s.healthError.message} />}
     {functionalError && <Alert showIcon type="error" title={functionalError} />}
     <div className="status-capabilities">{capabilities.map((item) => <Card key={item.name}
@@ -284,50 +295,28 @@ export function Status({ view, api }: { view: AppView; api: ApiClient }) {
       {item.parts.length > 0 && <div className="status-capability-parts">{item.parts.map((part) =>
         <span key={part.name}><strong>{part.name}</strong><StateTag value={part.value} /></span>)}</div>}
       <p>{item.note}</p></Card>)}</div>
-    <details className="status-diagnostics"><summary>检测与诊断</summary><div className="status-diagnostics-body">
-      <Button loading={checking} onClick={() => void runLocalCheck()}>运行本地检测</Button>
+    <details className="status-diagnostics"><summary>运行诊断</summary><div className="status-diagnostics-body">
+      <Button loading={checking} onClick={() => void runLocalCheck()}>运行本地检查</Button>
       {!report && !checking && !checkError && <p>尚未检测</p>}
       {checking && <p>检测中</p>}
       {checkError && <Alert type="error" title={checkError} />}
-      {report && <section aria-label="本地检测结果"><h2>本地检测结果</h2><p>检测时间：{dateLabel(report.checked_at)}</p>
+      {report && <section aria-label="本地检查结果"><h2>本地检查结果</h2><p>检查时间：{dateLabel(report.checked_at)}</p>
         {Object.entries(report.checks).map(([name, result]) => <div key={name}>
           <strong>{checkLabels[name] ?? name}</strong> <StateTag value={result.state} /> <span>{result.reason}</span>
         </div>)}</section>}
-    <section className="functional-checks" aria-label="实际功能检测"><h2>实际功能检测</h2>
-      <Alert type="warning" showIcon title="功能检测可能产生供应商费用：模型最多 1 次，语音合成最多 1 次，语音识别最多 1 次合成和 1 次识别。只在手动确认后发起，不自动重试。知识库检索尚无可证明只读的同库验收路径，因此保持未检查。" />
-      <Checkbox checked={costAccepted} onChange={(event) => setCostAccepted(event.target.checked)}>我已了解费用和检测范围</Checkbox>
-      {!functional && <p>尚未检测</p>}
-      {functional && functionalKinds.map((kind) => {
-        const item = functional.checks[kind];
-        return <div className="functional-check-row" key={kind}><div className="functional-check-content">
-          <div className="functional-check-title"><strong>{functionalLabels[kind]}</strong>
-            <span className="muted">{item.service}</span><StateTag value={item.state} /></div>
-          <div>{reasonLabels[item.reason] ?? '检测状态未知'}</div>
-          <div className="functional-check-meta">
-            {item.checked_at && <span>检测时间：{dateLabel(item.checked_at)}</span>}
-            {item.expires_at && <span>有效至：{dateLabel(item.expires_at)}</span>}
-            {item.fingerprint && <span>配置指纹：{item.fingerprint.slice(0, 12)}</span>}
-          </div></div><div className="functional-check-actions">
-          {kind !== 'knowledge' && <Button disabled={!costAccepted || anyRunning || submitting !== null}
-            onClick={() => void startFunctional(kind)}>检测{functionalLabels[kind]}</Button>}
-          {item.state === 'running' && item.request_id && <Button onClick={() => void cancelFunctional(kind)}>取消检测</Button>}
-          </div>
-        </div>;
-      })}</section>
-      <Alert type="info" showIcon title="服务状态来自最近一次实际检测；刷新页面只读取记录，不调用供应商。" />
-    <div className="status-panels"><Card title="模型与引擎"><Descriptions column={1} items={[
+    <div className="status-panels"><Card title="模型与数据库"><Descriptions column={1} items={[
       { key: 'names', label: '模型名称', children: h?.models_info?.model_names.join(' / ') || '未提供' },
-      { key: 'region', label: '地区', children: h?.models_info?.region || '未提供' },
-      { key: 'modelsverified', label: '模型验证时间', children: h?.models_info?.last_verified_at ? dateLabel(h.models_info.last_verified_at) : '尚无记录' },
-      { key: 'ragverified', label: '引擎验证时间', children: h?.rag_info?.last_verified_at ? dateLabel(h.rag_info.last_verified_at) : '尚无记录' },
+      { key: 'region', label: '区域', children: h?.models_info?.region || '未提供' },
+      { key: 'modelsverified', label: '模型验证时间', children: h?.models_info?.last_verified_at ? dateLabel(h.models_info.last_verified_at) : '暂无记录' },
+      { key: 'ragverified', label: '检索验证时间', children: h?.rag_info?.last_verified_at ? dateLabel(h.rag_info.last_verified_at) : '暂无记录' },
       { key: 'commit', label: 'LightRAG 版本', children: h?.rag_info?.lightrag_commit.slice(0, 8) || '未提供' },
       { key: 'pg', label: 'PostgreSQL / pgvector', children: `${h?.rag_info?.postgresql_major ?? '未提供'} / ${h?.rag_info?.vector_version ?? '未提供'}` },
-    ]} /></Card><Card title="备份与保留"><div className="status-backup"><StateTag value={h?.backup ?? 'unverified'} /><p>最近完成：{h?.last_backup_at ? dateLabel(h.last_backup_at) : '尚无记录'}</p>
-      {h?.backup_error_code && <Alert type="error" title={backupErrors[h.backup_error_code] ?? '备份状态待核查。'} />}
-      <p>保留清理：<StateTag value={h?.retention ?? 'unverified'} /></p>
+    ]} /></Card><Card title="备份与保留"><div className="status-backup"><StateTag value={h?.backup ?? 'unverified'} /><p>最近备份：{h?.last_backup_at ? dateLabel(h.last_backup_at) : '暂无记录'}</p>
+      {h?.backup_error_code && <Alert type="error" title={backupErrors[h.backup_error_code] ?? '备份状态待复查。'} />}
+      <p>保留策略：<StateTag value={h?.retention ?? 'unverified'} /></p>
       <p>语音媒体：<StateTag value={view.voice.actions.capability?.transport ?? 'unverified'} /></p>
       {view.voice.actions.capabilityError && <Alert type="error" title="媒体状态读取失败，请刷新后重试。" />}
-      <Button onClick={() => view.actions.navigate('voice')}>查看通话条件</Button></div></Card></div>
+      <Button onClick={() => view.actions.navigate('voice')}>查看通话能力</Button></div></Card></div>
       {s.healthCheckedAt && <p className="muted">状态读取时间：{new Date(s.healthCheckedAt).toLocaleString('zh-CN')}</p>}
     </div></details>
   </div>;

@@ -902,6 +902,9 @@ export function createApi(fetcher: typeof fetch = globalThis.fetch) {
     },
     functionalStatus: async (): Promise<FunctionalReport> =>
       functionalReport(await request('/api/status/functional')),
+    autoFunctionalChecks: async (force = false): Promise<FunctionalReport> =>
+      functionalReport(await request('/api/status/functional/auto', 'POST',
+        { accept_cost: true, force })),
     startFunctionalCheck: async (kind: FunctionalKind, requestId: string): Promise<FunctionalResult> =>
       functionalResult(await request(`/api/status/functional/${kind}`, 'POST',
         { request_id: requestId, accept_cost: true })),

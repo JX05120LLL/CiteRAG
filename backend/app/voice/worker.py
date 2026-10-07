@@ -22,6 +22,7 @@ class LiveKitWorker:
         self.vad = SileroVAD(self.settings.voice_vad_model)
         self.endpoint = Endpoint()
         self.room = rtc.Room()
+        self.connect_task = None
         self.stream = None
         self.input_task = None
         self.asr_task = None
@@ -90,8 +91,11 @@ class LiveKitWorker:
 
         terminal_reason = "worker_disconnected"
         try:
-            await self.room.connect(self.settings.livekit_url,
-                                    self.runtime.token(self.call, worker=True))
+            # LiveKit's FFI requires room.connect() to finish its ready handshake.
+            # Cancelling it mid-join can terminate the entire Python process.
+            self.connect_task = asyncio.create_task(self.room.connect(
+                self.settings.livekit_url, self.runtime.token(self.call, worker=True)))
+            await asyncio.shield(self.connect_task)
             await self.runtime.check(self.call)
             self.call.phase = "listening"
             self.registry.emit(self.call, "ready", phase="listening")
@@ -282,6 +286,15 @@ class LiveKitWorker:
         from livekit.api.twirp_client import TwirpError
 
         self.closed = True
+        # A cancelled worker.run() must not cancel the SDK join. Wait for the
+        # ready handshake before disconnecting or deleting its local room.
+        if self.connect_task is not None:
+            try:
+                await asyncio.wait_for(asyncio.shield(self.connect_task), timeout=15)
+            except TimeoutError:
+                raise SpeechError("voice_cleanup_failed") from None
+            except Exception:
+                pass  # A failed join has no connected room to disconnect.
         self.flush_audio()
         tasks = [task for task in (self.input_task, self.asr_task) if task]
         for task in tasks:

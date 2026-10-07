@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -12,8 +13,79 @@ from test_m13_answer_api import m13_environment, no_provider_access  # noqa: F40
 from app.models import KnowledgeBase, LocalProfile
 from app.voice.providers import SpeechError
 from app.voice.sessions import Binding, VoiceSessions
+from app.voice.worker import LiveKitWorker
 
 pytest_plugins = ["test_postgres_local"]
+
+
+@pytest.mark.asyncio
+async def test_cancelling_worker_keeps_inflight_livekit_connect_alive_until_ready():
+    """The native FFI panics if connect is cancelled before its ready request."""
+    class Room:
+        def __init__(self):
+            self.started = asyncio.Event()
+            self.finish = asyncio.Event()
+            self.connect_cancelled = False
+            self.disconnected = False
+
+        def on(self, _event):
+            return lambda callback: callback
+
+        async def connect(self, _url, _token):
+            self.started.set()
+            try:
+                await self.finish.wait()
+            except asyncio.CancelledError:
+                self.connect_cancelled = True
+                raise
+
+        def off(self, _event, _callback):
+            return None
+
+        async def disconnect(self):
+            assert self.finish.is_set()
+            self.disconnected = True
+
+    async def check(_call):
+        return None
+
+    async def delete_room(_request):
+        return None
+
+    room = Room()
+    worker = object.__new__(LiveKitWorker)
+    worker.room = room
+    worker.settings = SimpleNamespace(livekit_url="ws://127.0.0.1:17880")
+    worker.runtime = SimpleNamespace(
+        token=lambda *_args, **_kwargs: "synthetic", check=check,
+        api=SimpleNamespace(room=SimpleNamespace(delete_room=delete_room)),
+    )
+    worker.call = SimpleNamespace(phase="starting", closed=False, closing=True,
+                                  room="synthetic-room")
+    worker.registry = SimpleNamespace(emit=lambda *_args, **_kwargs: None)
+    worker.listeners = []
+    worker.done = asyncio.Event()
+    worker.source = worker.publication = None
+    worker.input_task = worker.asr_task = None
+    worker.revocations = set()
+    worker.closed = False
+
+    running = asyncio.create_task(worker.run())
+    await asyncio.wait_for(room.started.wait(), 1)
+    running.cancel()
+    await asyncio.sleep(0)
+    try:
+        assert not room.connect_cancelled
+        closing = asyncio.create_task(worker.close())
+        await asyncio.sleep(0)
+        assert not closing.done() and not room.disconnected
+        room.finish.set()
+        await asyncio.wait_for(closing, 1)
+        assert room.disconnected
+    finally:
+        room.finish.set()
+        with pytest.raises(asyncio.CancelledError):
+            await running
 
 
 @pytest.mark.asyncio

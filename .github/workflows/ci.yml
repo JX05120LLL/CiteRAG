@@ -55,9 +55,13 @@ jobs:
               "backend/tests/test_local_calculator.py",
               "backend/tests/test_qweather_tools.py",
               "backend/tests/test_qweather_api.py",
+              "backend/tests/test_qweather_local_config.py",
+              "backend/tests/test_status_checks.py",
+              "backend/tests/test_functional_checks.py",
               "backend/tests/test_agent_contracts.py",
               "backend/tests/test_agent_graph.py",
               "backend/tests/test_agent_api.py",
+              "backend/tests/test_agent_semantic_prompt.py",
               "backend/tests/test_agent_boundaries.py",
               "backend/tests/test_agent_knowledge.py",
               "backend/tests/test_agent_mcp.py",
@@ -75,6 +79,8 @@ jobs:
               "frontend/src/react/controller.test.ts",
               "frontend/src/react/app.test.tsx",
               "frontend/src/react/AgentTasks.test.tsx",
+              "frontend/src/react/Status.check.test.tsx",
+              "frontend/src/react/Workbench.input.test.tsx",
           }
           private_names = (
               ".env", ".env.*", "*.pem", "*.key", "*.p12", "*.pfx",

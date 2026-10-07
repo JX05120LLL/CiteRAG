@@ -364,6 +364,14 @@ class RagRuntime:
             "只从明确相关的内容提取字段值；不要把整句、无关回复或猜测值直接作为工具参数。"
             "若补充仍不足或含糊，再次请求具体信息。工具参数仍须符合已登记 schema。"
         )
+        system += (
+            "\n先从当前问题及 task_supplements 提取用户已经提供的地点、时间和其他参数；"
+            "已经提供且能满足工具 schema 的参数不要再次询问，也不要因缺少更细的地址而反复追问。"
+            "只从 allowed_tools 选择能完成请求的工具；没有匹配工具时以 finish 如实说明能力不可用，"
+            "不要把工具缺失伪装成用户参数缺失。"
+            "工具结果出现确实无法消除的歧义时，才用 request_input 请求具体的缺失信息；"
+            "不得猜测候选地点，也不得把提问当作工具调用成功。"
+        )
         messages = fit_chat_messages(system, {
             "question": question, "evidence": evidence, "conversation_context": context,
             "allowed_tools": tools, "tool_results": results,

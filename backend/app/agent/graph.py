@@ -124,6 +124,10 @@ def build_graph(hooks: AgentHooks, checkpointer=None):
         if waiting.get("kind") == "input":
             response = state["response"]
             fields = waiting.get("fields") or {}
+            if response == {"replan": True}:
+                # An explicit user action reuses persisted question and supplements.
+                # It does not approve or execute a tool; plan runs again normally.
+                return {"waiting": None, "retry_prepare": False}
             if set(response) == {"detail"}:
                 clarification = {
                     "reply_text": response["detail"],

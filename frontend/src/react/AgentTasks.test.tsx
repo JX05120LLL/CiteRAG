@@ -63,6 +63,15 @@ describe('durable task controls', () => {
     fireEvent.click(screen.getByRole('button', { name: '补充并继续' }));
     await waitFor(() => expect(resume).toHaveBeenCalledWith({ location: 'Hanzhong' }));
   });
+  it('offers explicit replanning of a model clarification without retyping it', async () => {
+    const resume = vi.fn().mockResolvedValue(undefined);
+    render(<AgentTaskCard run={{ ...waiting, status: 'waiting_input', model_rounds: 2,
+      waiting: { kind: 'input', prompt: 'Location?', fields: {} } }}
+    resume={resume} cancel={vi.fn()} />);
+    expect(resume).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: '重新规划' }));
+    await waitFor(() => expect(resume).toHaveBeenCalledWith({ replan: true }));
+  });
   it('keeps voice tasks controlled by the current voice page', () => {
     render(<AgentTaskCard run={{ ...waiting, voice_session_id: 'voice' }} resume={vi.fn()} cancel={vi.fn()} />);
     expect(screen.getByRole('button', { name: '批准所示操作' }).hasAttribute('disabled')).toBe(true);

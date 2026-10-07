@@ -1,7 +1,8 @@
-"""Explicit environment configuration with opt-in protected voice records; no dotenv."""
+"""Explicit environment configuration and narrowly scoped local records."""
 
 import os
 import re
+import stat
 from ipaddress import ip_address
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -20,6 +21,59 @@ from sqlalchemy.exc import ArgumentError
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 LOCAL_RUNTIME_ROOT = (PROJECT_ROOT / ".local" / "runtime").resolve()
+QWEATHER_LOCAL_CONFIG = PROJECT_ROOT / "backend" / ".env.weather"
+QWEATHER_LOCAL_NAMES = frozenset({
+    "CITERAG_QWEATHER_API_HOST", "CITERAG_QWEATHER_API_KEY",
+})
+
+
+def load_qweather_inputs() -> tuple[str | None, str | None, bool]:
+    """Resolve a complete environment pair first, then an explicit ignored file.
+
+    The third value is true only for a complete local file. No general dotenv
+    loading, variable expansion, or credential logging is permitted.
+    """
+    host_name, key_name = "CITERAG_QWEATHER_API_HOST", "CITERAG_QWEATHER_API_KEY"
+    if host_name in os.environ or key_name in os.environ:
+        return os.environ.get(host_name) or None, os.environ.get(key_name) or None, False
+
+    path = QWEATHER_LOCAL_CONFIG
+    try:
+        before = path.lstat()
+    except FileNotFoundError:
+        return None, None, False
+    except OSError:
+        raise ValueError("QWeather local config could not be inspected") from None
+    if (not stat.S_ISREG(before.st_mode) or before.st_size > 4096
+        or getattr(before, "st_file_attributes", 0) & 0x400):
+        raise ValueError("QWeather local config must be a regular small file")
+    try:
+        with path.open("rb") as handle:
+            if not os.path.samestat(before, os.fstat(handle.fileno())):
+                raise ValueError("QWeather local config changed while loading")
+            data = handle.read(4097)
+        if len(data) > 4096:
+            raise ValueError("QWeather local config is too large")
+        lines = data.decode("utf-8-sig").splitlines()
+    except (OSError, UnicodeError):
+        raise ValueError("QWeather local config could not be read as UTF-8") from None
+
+    values: dict[str, str] = {}
+    for line in lines:
+        if not line.strip() or line.startswith("#"):
+            continue
+        name, separator, value = line.partition("=")
+        if (not separator or name not in QWEATHER_LOCAL_NAMES or name in values
+            or value != value.strip() or value.startswith(("'", '"'))):
+            raise ValueError("QWeather local config has an unsupported or duplicate entry")
+        values[name] = value
+    if set(values) != QWEATHER_LOCAL_NAMES or bool(values[host_name]) != bool(values[key_name]):
+        raise ValueError(
+            "QWeather local config needs both CITERAG_QWEATHER_API_HOST and "
+            "CITERAG_QWEATHER_API_KEY"
+        )
+    host, key = values[host_name] or None, values[key_name] or None
+    return host, key, bool(host and key)
 
 
 def is_loopback_ip(value: str) -> bool:
@@ -194,8 +248,6 @@ class Settings(BaseModel):
             "CITERAG_AGENT_ENABLED": "agent_enabled",
             "CITERAG_MCP_ENABLED": "mcp_enabled",
             "CITERAG_QWEATHER_ENABLED": "qweather_enabled",
-            "CITERAG_QWEATHER_API_HOST": "qweather_api_host",
-            "CITERAG_QWEATHER_API_KEY": "qweather_api_key",
             "CITERAG_BACKUP_ENABLED": "backup_enabled",
             "CITERAG_VOICE_TRANSPORT_ENABLED": "voice_transport_enabled",
             "CITERAG_VOICE_ASSISTANT_ENABLED": "voice_assistant_enabled",
@@ -215,6 +267,13 @@ class Settings(BaseModel):
         for env_name, field_name in names.items():
             if os.environ.get(env_name):
                 values[field_name] = os.environ[env_name]
+        weather_host, weather_key, file_enabled = load_qweather_inputs()
+        if weather_host:
+            values["qweather_api_host"] = weather_host
+        if weather_key:
+            values["qweather_api_key"] = weather_key
+        if file_enabled and "CITERAG_QWEATHER_ENABLED" not in os.environ:
+            values["qweather_enabled"] = True
         if os.environ.get("CITERAG_ALLOWED_ORIGINS"):
             values["allowed_origins"] = tuple(
                 value.strip() for value in os.environ["CITERAG_ALLOWED_ORIGINS"].split(",")

@@ -412,7 +412,11 @@ class AgentRunner:
                 natural = (set(payload) == {"detail"}
                            and isinstance(payload["detail"], str)
                            and 1 <= len(payload["detail"].strip()) <= 1000)
-                if not natural and list(Draft202012Validator(schema).iter_errors(payload)):
+                replan = (payload == {"replan": True} and not waiting.get("tool_id")
+                          and run.model_rounds < 6)
+                if not natural and not replan and list(
+                    Draft202012Validator(schema).iter_errors(payload)
+                ):
                     raise ServiceError(422, "agent_input_invalid", "请按等待字段补充参数")
                 if waiting.get("tool_id"):
                     spec = self.registry.get(waiting["tool_id"])

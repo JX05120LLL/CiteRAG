@@ -53,6 +53,10 @@ export function AgentTaskCard({ run, resume, cancel, voiceControl = false }: {
         <Button disabled={disabled} onClick={() => void perform(() => resume({ approve: false }))}>拒绝操作</Button></Space>
     </>}
     {run.waiting?.kind === 'input' && <div className="agent-inputs"><p>{run.waiting.prompt}</p>
+      {!run.waiting.tool_id && run.model_rounds < 6 && <div>
+        <Button disabled={disabled} onClick={() => void perform(() => resume({ replan: true }))}>重新规划</Button>
+        <p className="muted">使用已有问题和补充内容重新调用模型；工具仍按原规则审批。</p>
+      </div>}
       {run.voice_session_id ? <>{Object.entries(fields).map(([key, kind]) => <label key={key}>{key}
         {kind === 'boolean' ? <Select aria-label={key} value={values[key]} disabled={disabled}
           options={[{ value: 'true', label: '是' }, { value: 'false', label: '否' }]}

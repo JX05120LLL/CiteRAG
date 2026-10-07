@@ -12,7 +12,7 @@
 | `CITERAG_QWEATHER_API_HOST` | 控制台「设置」中的专属主机名，不含协议/端口/路径 | 未配置 |
 | `CITERAG_QWEATHER_API_KEY` | 受控后端 API Key，以 SecretStr 保存 | 未配置 |
 
-在**启动后端的同一 PowerShell 会话**中设置。不要把真实 Key 粘贴到聊天、代码、命令参数、Git 或前端；本项目不会自动读取 `.env`。
+可按 [本地天气配置](QWEATHER-LOCAL-CONFIG.md) 使用已存在的受忽略 `backend/.env.weather`，启动时自动加载。也可在**启动后端的同一 PowerShell 会话**中设置环境变量。不要把真实 Key 粘贴到聊天、代码、命令参数、Git 或前端；本项目不会读取通用 `.env`。
 
 ```powershell
 $env:CITERAG_QWEATHER_ENABLED = 'true'

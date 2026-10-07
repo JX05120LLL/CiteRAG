@@ -133,6 +133,11 @@ async def test_missing_tool_input_rejects_changed_tool_contract(environment):  #
                                               "text": "Synthetic location task"})
         waiting = await settled(api, path, response.json()["id"])
         assert waiting["status"] == "waiting_input"
+        replan = await api.post(f"{path}/{waiting['id']}/resume", json={
+            "request_id": str(uuid4()), "generation": waiting["generation"],
+            "input": {"replan": True},
+        })
+        assert replan.status_code == 422 and executions == []
         app.state.tool_registry["synthetic.location"] = replace(
             app.state.tool_registry["synthetic.location"], version="2",
         )
@@ -232,6 +237,64 @@ async def test_irrelevant_reply_remains_waiting_then_cancel_unlocks_chat(environ
                                                "text": "A new task"})
         assert next_task.status_code == 202
         assert (await settled(api, path, next_task.json()["id"]))["status"] == "completed"
+    finally:
+        await app.state.agent_runtime.close()
+
+
+async def test_explicit_replan_uses_saved_detail_then_still_requires_tool_approval(environment):  # noqa: F811
+    from app.tools.gateway import ToolDefinition
+
+    api, _ = environment
+    app, _, path = await ready(api, [
+        {"action": "request_input", "prompt": "Which place?", "fields": {}},
+        {"action": "request_input", "prompt": "Which place exactly?", "fields": {}},
+        {"action": "call_tool", "tool_id": "synthetic.weather",
+         "arguments": {"location": "Hanzhong"}},
+        {"action": "finish", "answer": {"text": "Synthetic answer."}},
+    ])
+    executions = []
+
+    async def run(_session, _context, arguments):
+        executions.append(arguments)
+        return {"synthetic": True}
+
+    app.state.tool_registry["synthetic.weather"] = ToolDefinition(
+        "synthetic.weather", "Synthetic weather", "any", True, "Local synthetic read",
+        lambda arguments: arguments, run,
+        input_schema={"type": "object", "properties": {"location": {"type": "string"}},
+                      "required": ["location"], "additionalProperties": False},
+    )
+    try:
+        response = await api.post(path, json={"client_message_id": str(uuid4()),
+                                              "text": "Check Hanzhong weather"})
+        first = await settled(api, path, response.json()["id"])
+        assert first["status"] == "waiting_input"
+        response = await api.post(f"{path}/{first['id']}/resume", json={
+            "request_id": str(uuid4()), "generation": first["generation"],
+            "input": {"detail": "Hanzhong City, Hantai District"},
+        })
+        assert response.status_code == 202
+        waiting = await settled(api, path, first["id"])
+        assert waiting["status"] == "waiting_input" and waiting["tool_attempts"] == 0
+        assert executions == []
+
+        replan = {"request_id": str(uuid4()), "generation": waiting["generation"],
+                  "input": {"replan": True}}
+        response = await api.post(f"{path}/{waiting['id']}/resume", json=replan)
+        assert response.status_code == 202, response.text
+        approval = await settled(api, path, waiting["id"])
+        assert approval["status"] == "waiting_approval" and executions == []
+        assert app.state.answer_adapter.inputs[2]["context"]["task_supplements"][0][
+            "reply_text"] == "Hanzhong City, Hantai District"
+        assert (await api.post(f"{path}/{waiting['id']}/resume", json=replan)).status_code == 202
+        assert executions == []
+        response = await api.post(f"{path}/{waiting['id']}/resume", json={
+            "request_id": str(uuid4()), "generation": approval["generation"],
+            "input": {"approve": True},
+        })
+        assert response.status_code == 202
+        done = await settled(api, path, waiting["id"])
+        assert done["status"] == "completed" and executions == [{"location": "Hanzhong"}]
     finally:
         await app.state.agent_runtime.close()
 

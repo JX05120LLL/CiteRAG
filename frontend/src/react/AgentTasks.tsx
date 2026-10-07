@@ -126,11 +126,14 @@ export function AgentTasks({ chatId, api, changed, onWaitingInput }: {
       const result = await api.resumeAgent(run, key, input);
       const current = merge([result])[0];
       setRuns((old) => old.map((item) => item.id === run.id ? current : item));
+      waitingCallback.current?.(current.status === 'waiting_input' && !current.voice_session_id
+        ? current : null);
       await callback.current?.(chatId);
     }} cancel={async () => {
       const result = await api.cancelAgent(run);
       const current = merge([result])[0];
       setRuns((old) => old.map((item) => item.id === run.id ? current : item));
+      waitingCallback.current?.(null);
       await callback.current?.(chatId);
     }} />;
   const pending = runs.filter((run) => active.has(run.status) || run.status === 'interrupted');

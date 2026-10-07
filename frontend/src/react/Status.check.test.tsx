@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { ApiClient } from '../api/client';
 import type { AppView } from '../app';
@@ -11,6 +11,46 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
+it('shows cached functional evidence on the original cards without a supplier request', async () => {
+  const successful = (service: string) => ({ service, state: 'available', reason: 'check_succeeded',
+    checked_at: '2026-10-07T07:00:00+00:00', expires_at: '2026-10-07T08:00:00+00:00',
+    fingerprint: 'a'.repeat(64) });
+  const functionalStatus = vi.fn(async () => ({ checks: {
+    model: successful('DashScope qwen-flash'), asr: successful('VolcEngine ASR'),
+    tts: successful('MiniMax TTS'),
+    knowledge: { service: 'LightRAG', state: 'not_checked',
+      reason: 'acceptance_kb_readonly_probe_unavailable', checked_at: null,
+      expires_at: null, fingerprint: null },
+  } }));
+  const startFunctionalCheck = vi.fn();
+  const view = { state: { health: sampleHealth, healthLoading: false },
+    voice: { actions: { capability: null, capabilityError: false, refresh: vi.fn() } },
+    actions: { loadHealth: vi.fn(), navigate: vi.fn() } } as unknown as AppView;
+  render(<Status view={view} api={{ functionalStatus, startFunctionalCheck } as unknown as ApiClient} />);
+  const cards = document.querySelectorAll('.status-capability');
+  await waitFor(() => expect(within(cards[1] as HTMLElement).getByText('可用')).toBeTruthy());
+  expect(within(cards[2] as HTMLElement).getByText('未检测')).toBeTruthy();
+  expect(within(cards[3] as HTMLElement).getByText('ASR')).toBeTruthy();
+  expect(within(cards[3] as HTMLElement).getByText('TTS')).toBeTruthy();
+  expect(within(cards[3] as HTMLElement).getByText('通话未验收')).toBeTruthy();
+  expect(screen.getByText('检测与诊断').closest('details')?.open).toBe(false);
+  expect(startFunctionalCheck).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: /刷新系统状态/ }));
+  await waitFor(() => expect(functionalStatus).toHaveBeenCalledTimes(2));
+  expect(startFunctionalCheck).not.toHaveBeenCalled();
+});
+
+it('shows a read error instead of implying provider checks were never run', async () => {
+  const view = { state: { health: sampleHealth, healthLoading: false },
+    voice: { actions: { capability: null, capabilityError: false, refresh: vi.fn() } },
+    actions: { loadHealth: vi.fn(), navigate: vi.fn() } } as unknown as AppView;
+  const functionalStatus = vi.fn(async () => { throw new Error('offline'); });
+  render(<Status view={view} api={{ functionalStatus } as unknown as ApiClient} />);
+  await waitFor(() => expect(screen.getByText('功能检测记录读取失败')).toBeTruthy());
+  const cards = document.querySelectorAll('.status-capability');
+  expect(within(cards[1] as HTMLElement).getByText('未验证')).toBeTruthy();
+});
+
 it('shows not checked, checking and the explicit local result with reason and time', async () => {
   let finish!: (value: unknown) => void;
   const checkSystem = vi.fn(() => new Promise((resolve) => { finish = resolve; }));
@@ -18,6 +58,7 @@ it('shows not checked, checking and the explicit local result with reason and ti
     voice: { actions: { capability: null, capabilityError: false, refresh: vi.fn() } },
     actions: { loadHealth: vi.fn(), navigate: vi.fn() } } as unknown as AppView;
   render(<Status view={view} api={{ checkSystem } as unknown as ApiClient} />);
+  fireEvent.click(screen.getByText('检测与诊断'));
   expect(screen.getAllByText('尚未检测').length).toBeGreaterThan(0);
   fireEvent.click(screen.getByRole('button', { name: '运行本地检测' }));
   expect(checkSystem).toHaveBeenCalledTimes(1);
@@ -44,6 +85,7 @@ it('requires an explicit cost acknowledgement before one supplier check', async 
     actions: { loadHealth: vi.fn(), navigate: vi.fn() } } as unknown as AppView;
   render(<Status view={view} api={{ functionalStatus, startFunctionalCheck } as unknown as ApiClient} />);
   await waitFor(() => expect(functionalStatus).toHaveBeenCalledTimes(1));
+  fireEvent.click(screen.getByText('检测与诊断'));
   expect(startFunctionalCheck).not.toHaveBeenCalled();
   expect(screen.getAllByText(/可能产生供应商费用/).length).toBeGreaterThan(0);
   expect(screen.getByRole('button', { name: '检测模型服务' }).hasAttribute('disabled')).toBe(true);

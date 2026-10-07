@@ -3,6 +3,7 @@ import { webcrypto } from 'node:crypto';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createApi } from '../api/client';
+import type { AgentRun } from '../api/client';
 import { CiteRagApp, StandaloneVoice } from './App';
 import { Voice } from './Voice';
 import type { VoiceActions } from '../pages/voice';
@@ -131,11 +132,48 @@ function fixture(messages = sampleMessages[sampleChats[0].id], chats = sampleCha
   return { api: createApi(fetcher), calls, recordCount: () => toolRecords.length };
 }
 
-it('groups chats by knowledge base and archives and restores through the API', async () => {
+it('lets a waiting task stay in its chat while another chat is opened', async () => {
+  const pendingMessages = [{ ...sampleMessages[sampleChats[0].id][0],
+    status: 'running' as const, phase: 'waiting_input' as const }];
+  const pendingRun: AgentRun = {
+    id: 'pending-run', conversation_id: sampleChats[0].id,
+    message_id: pendingMessages[0].message_id, attempt_id: pendingMessages[0].attempt_id,
+    status: 'waiting_input', generation: 1, seq: 2, model_rounds: 4, tool_attempts: 0,
+    active_ms: 20, error_code: null, voice_session_id: null,
+    created_at: '2026-10-07T00:00:00Z', finished_at: null,
+    waiting: { kind: 'input', prompt: 'Which location?', fields: { location: 'string' } },
+  };
+  const { api, calls } = fixture(pendingMessages);
+  const cancelAgent = vi.fn();
+  const resumeAgent = vi.fn();
+  render(<CiteRagApp api={{ ...api,
+    agentRuns: async (chatId) => chatId === sampleChats[0].id ? [pendingRun] : [],
+    cancelAgent, resumeAgent,
+  }} />);
+  await waitFor(() => expect(document.querySelector('.message-pair')).toBeTruthy());
+  const newChat = screen.getByRole<HTMLButtonElement>('button', { name: '新建聊天' });
+  const otherChat = screen.getByRole<HTMLButtonElement>('button', { name: sampleChats[1].title });
+  expect(newChat.disabled).toBe(false);
+  expect(otherChat.disabled).toBe(false);
+  fireEvent.click(otherChat);
+  await waitFor(() => expect(JSON.parse(sessionStorage.getItem('citerag.workbench.selection') || '{}').chatId)
+    .toBe(sampleChats[1].id));
+  expect(cancelAgent).not.toHaveBeenCalled();
+  expect(resumeAgent).not.toHaveBeenCalled();
+  fireEvent.click(newChat);
+  await waitFor(() => expect(calls.some((call) => call.path === '/api/conversations' &&
+    call.method === 'POST' && JSON.parse(String(call.body)).kb_id === null)).toBe(true));
+  expect(cancelAgent).not.toHaveBeenCalled();
+  expect(resumeAgent).not.toHaveBeenCalled();
+}, 20000);
+
+it('lists chat titles without knowledge-base groups and restores archived chats', async () => {
   const { api, calls } = fixture();
   render(<CiteRagApp api={api} />);
   const rowMenu = await screen.findByRole('button', { name: `${sampleChats[0].title}的更多操作` });
-  expect(screen.getByLabelText('按知识库分组的聊天').textContent).toContain(sampleBases[0].name);
+  const list = screen.getByLabelText('对话列表');
+  expect(within(list).getAllByRole('button', { name: sampleChats[0].title })).toHaveLength(1);
+  expect(list.textContent).not.toContain(sampleBases[0].name);
   fireEvent.click(rowMenu);
   fireEvent.click(await screen.findByRole('menuitem', { name: '归档对话' }));
   await waitFor(() => expect(calls.some((call) => call.path.endsWith('/archive') && call.method === 'PATCH')).toBe(true));

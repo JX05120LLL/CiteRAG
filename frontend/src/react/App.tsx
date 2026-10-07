@@ -58,7 +58,8 @@ export function CiteRagApp({ api: suppliedApi, factory }: { api?: ApiClient; fac
   const base = s?.bases?.find((item) => item.id === s.selectedKbId);
   const headerBase = (s?.page === 'knowledge' && view?.documents.isOpen || s?.page === 'tasks') ? view?.documents.snapshot.base : base;
   const chatHeader = !!s?.selectedChatId && (s.page === 'workbench' || s.page === 'voice');
-  const busy = !!s?.chatPending || !!s?.chatMessages.some((item) => item.status === 'running');
+  // An answer may wait in one chat while the user works in another.
+  const busy = !!s?.chatPending;
   const mediaActive = !!view && !['idle', 'failed'].includes(view.voice.actions.media.phase);
   const managementBusy = !!view?.documents.snapshot.busy;
   const navigate = (page: Page) => {
@@ -78,36 +79,22 @@ export function CiteRagApp({ api: suppliedApi, factory }: { api?: ApiClient; fac
     void view?.actions.createChat(key); } }}><Button className="sidebar-new-chat" type="text" icon={<DownOutlined />} aria-label="新建知识库聊天" title="新建知识库聊天"
     disabled={busy || mediaActive || s?.loading} /></Dropdown></div>
     {s?.chatsError && <Alert type="error" title={s.chatsError.message} />}
-    <div className="sidebar-chat-groups" aria-label="按知识库分组的聊天">
-      {(s?.chats ?? []).some((item) => item.kb_id === null) && <section className="sidebar-chat-group"><h2><MessageOutlined /><span className="sidebar-kb-name">普通聊天</span></h2>
-        {(s?.chats ?? []).filter((item) => item.kb_id === null).map((item) => <div className={`sidebar-chat-row${s?.selectedChatId === item.id ? ' selected' : ''}`} key={item.id}>
-          <MessageOutlined className="sidebar-chat-icon" /><Button className="sidebar-chat-title" type="text" disabled={busy || mediaActive} title={item.title}
-            onClick={() => { setHistory(false); view?.actions.navigate('workbench'); void view?.actions.selectChat(item.id); }}>{item.title}</Button>
-          <Dropdown trigger={['click']} menu={{ items: [
-            { key: 'rename', label: '重命名对话' }, { key: 'archive', label: '归档对话' },
-            { key: 'delete', label: '删除对话', danger: true },
-          ], onClick: ({ key }) => { if (key === 'rename') void view?.actions.renameChat(item.id);
-            if (key === 'archive') void view?.actions.setChatArchived(item.id, true);
-            if (key === 'delete') void view?.actions.deleteChat(item.id); } }}>
-            <Button type="text" size="small" icon={<MoreOutlined />} aria-label={`${item.title}的更多操作`} disabled={busy || mediaActive} />
-          </Dropdown></div>)}</section>}
-      {(s?.bases ?? []).map((kb) => { const chats = (s?.chats ?? []).filter((item) => item.kb_id === kb.id);
-        if (!chats.length) return null;
-        return <section className="sidebar-chat-group" key={kb.id}><h2><BookOutlined /><span className="sidebar-kb-name" title={kb.name}>{kb.name}</span><span className="sidebar-chat-count">{chats.length}</span></h2>
-          {chats.map((item) => <div className={`sidebar-chat-row${s?.selectedChatId === item.id ? ' selected' : ''}`} key={item.id}>
-            <MessageOutlined className="sidebar-chat-icon" /><Button className="sidebar-chat-title" type="text" disabled={busy || mediaActive} title={item.title}
-              onClick={() => { setHistory(false); view?.actions.navigate('workbench'); void view?.actions.selectChat(item.id); }}>{item.title}</Button>
-            <Dropdown trigger={['click']} menu={{ items: [
-              { key: 'rename', label: '重命名对话', disabled: busy || mediaActive },
-              { key: 'archive', label: '归档对话', disabled: busy || mediaActive },
-              { key: 'delete', label: '删除对话', danger: true, disabled: busy || mediaActive },
-            ], onClick: ({ key }) => { if (key === 'rename') void view?.actions.renameChat(item.id);
-              if (key === 'archive') void view?.actions.setChatArchived(item.id, true);
-              if (key === 'delete') void view?.actions.deleteChat(item.id); } }}>
-              <Button type="text" size="small" icon={<MoreOutlined />} aria-label={`${item.title}的更多操作`} disabled={busy || mediaActive} />
-            </Dropdown></div>)}</section>; })}
-      {(s?.chats ?? []).filter((item) => item.kb_id !== null && !s?.bases?.some((kb) => kb.id === item.kb_id)).length > 0 &&
-        <p className="muted">部分聊天所属知识库尚未读取，请刷新后查看。</p>}
+    <div className="sidebar-chat-list" aria-label="对话列表">
+      {(s?.chats ?? []).map((item) => <div className={`sidebar-chat-row${s?.selectedChatId === item.id ? ' selected' : ''}`} key={item.id}>
+        {item.kb_id === null ? <MessageOutlined className="sidebar-chat-icon" /> : <BookOutlined className="sidebar-chat-icon" />}
+        <Button className="sidebar-chat-title" type="text" disabled={busy || mediaActive}
+          title={busy ? '请等待当前提交完成' : mediaActive ? '请先挂断当前通话' : item.title}
+          onClick={() => { setHistory(false); view?.actions.navigate('workbench'); void view?.actions.selectChat(item.id); }}>{item.title}</Button>
+        <Dropdown trigger={['click']} menu={{ items: [
+          { key: 'rename', label: '重命名对话', disabled: busy || mediaActive },
+          { key: 'archive', label: '归档对话', disabled: busy || mediaActive },
+          { key: 'delete', label: '删除对话', danger: true, disabled: busy || mediaActive },
+        ], onClick: ({ key }) => { if (key === 'rename') void view?.actions.renameChat(item.id);
+          if (key === 'archive') void view?.actions.setChatArchived(item.id, true);
+          if (key === 'delete') void view?.actions.deleteChat(item.id); } }}>
+          <Button type="text" size="small" icon={<MoreOutlined />} aria-label={`${item.title}的更多操作`}
+            disabled={busy || mediaActive} title={busy ? '请等待当前提交完成' : mediaActive ? '请先挂断当前通话' : undefined} />
+        </Dropdown></div>)}
     </div>
     {view?.archivedChatError && <Alert type="error" title={view.archivedChatError.message} />}
     <div className="sidebar-archive"><Button type="text" block aria-expanded={archiveOpen} icon={archiveOpen ? <DownOutlined /> : <RightOutlined />} onClick={() => { setArchiveOpen(!archiveOpen);

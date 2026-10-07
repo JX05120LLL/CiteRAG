@@ -80,9 +80,11 @@ export function Workbench({ view, api }: { view: AppView; api: ApiClient }) {
   const waitingInput = inputRun?.conversation_id === s.selectedChatId &&
     inputRun.status === 'waiting_input' ? inputRun : null;
   const busy = s.chatPending || s.chatMessages.some((item) => item.status === 'running');
+  const taskConflict = !s.chatPending && s.chatMessages.some((item) => item.status === 'running');
   const enabled = (s.selectedKbId === null || base?.status === 'ready') && !!s.selectedChatId &&
     (!busy || !!waitingInput && !s.chatPending) && !s.loading && !continuing;
   const memorySources = s.chatMessages.filter((item) => item.status === 'answered' && !item.stale && !item.images?.length);
+  useEffect(() => { setInputRun(null); setContinuationError(''); }, [s.selectedChatId]);
   const sourceMessage = base?.status === 'ready' ? s.chatMessages.find((item) => item.message_id === s.selectedCitation?.messageId && displayCitations(item).length > 0) : undefined;
   const citation = sourceMessage?.citations.find((item) => item.evidence_id === s.selectedCitation?.evidenceId);
   const root = useRef<HTMLDivElement>(null);
@@ -282,6 +284,7 @@ export function Workbench({ view, api }: { view: AppView; api: ApiClient }) {
         <span key={`${file.name}-${index}`}>{file.name} <Button size="small" disabled={busy}
           onClick={() => a.selectChatImages(s.chatImages.filter((_, item) => item !== index))}>移除</Button></span>)}</div>}
       {continuationError && <Alert type="error" showIcon title={continuationError} />}
+      {taskConflict && <Alert type="info" showIcon title="此聊天有未完成任务。请补充信息或点击上方“取消任务”后再使用图片、语音；也可以从左栏新建聊天。" />}
       <Sender value={s.chatDraft} onChange={(value) => a.setDraft(value.slice(0, 1000))} onSubmit={() => {
         if (enabled && s.chatDraft.trim()) void (waitingInput ? continueInput() : a.sendChat());
       }}
@@ -291,8 +294,8 @@ export function Workbench({ view, api }: { view: AppView; api: ApiClient }) {
       suffix={false} footer={<div className="composer-controls"><Space wrap><Tooltip title="每条问题最多 2 张 PNG/JPEG，每张 10 MiB"><Button icon={<PictureOutlined />}
         disabled={!enabled || !!waitingInput} onClick={() => imageInput.current?.click()}>添加图片</Button></Tooltip>
         <span className="composer-kb"><BookOutlined />{s.selectedKbId === null ? '普通聊天' : base?.name || '未选择知识库'}</span></Space>
-        <Space wrap><Button icon={<AudioOutlined />} disabled={busy} onClick={() => a.navigate('voice')}>语音通话</Button>
-          <Button type="primary" loading={continuing || busy && !waitingInput} disabled={!enabled || !s.chatDraft.trim()} onClick={() => void (waitingInput ? continueInput() : a.sendChat())}>发送问题 ↑</Button></Space></div>} />
+        <Space wrap><Tooltip title={taskConflict ? '先补充或取消当前任务，也可新建聊天' : undefined}><Button icon={<AudioOutlined />} disabled={busy} onClick={() => a.navigate('voice')}>语音通话</Button></Tooltip>
+          <Button type="primary" loading={continuing || busy && !waitingInput} disabled={!enabled || !s.chatDraft.trim()} onClick={() => void (waitingInput ? continueInput() : a.sendChat())}>{waitingInput ? '补充并继续' : '发送问题 ↑'}</Button></Space></div>} />
       <p className="composer-note">{s.selectedKbId === null ? 'Enter 发送 · Shift+Enter 换行。本聊天不会检索知识库。' : 'Enter 发送 · Shift+Enter 换行。资料回答只展示已提交且有原文依据的结果。'}</p></div>
     <Drawer title="原文来源" aria-label="原文来源" rootClassName="formal-source-drawer" focusable={{ focusTriggerAfterClose: false }} open={!!citation} onClose={a.closeCitation} size={460} destroyOnHidden
       footer={citation && <div className="source-drawer-actions"><Button aria-label="下载原文" href={api.originalUrl(citation.document_id)} icon={<FileTextOutlined />}>下载原文</Button><Button type="primary" onClick={a.closeCitation}>关闭来源</Button></div>}>

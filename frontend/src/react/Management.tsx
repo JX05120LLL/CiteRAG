@@ -200,7 +200,7 @@ export function Status({ view, api }: { view: AppView; api: ApiClient }) {
   useEffect(() => {
     if (!api.functionalStatus) return;
     let mounted = true;
-    void api.functionalStatus().then((value) => { if (mounted) setFunctional(value); })
+    void api.functionalStatus().then((value) => { if (mounted) { setFunctional(value); setFunctionalError(null); } })
       .catch(() => { if (mounted) setFunctionalError('功能检测记录读取失败'); });
     return () => { mounted = false; };
   }, [api]);
@@ -208,7 +208,7 @@ export function Status({ view, api }: { view: AppView; api: ApiClient }) {
   useEffect(() => {
     if (!anyRunning) return;
     const timer = window.setInterval(() => {
-      void api.functionalStatus().then(setFunctional)
+      void api.functionalStatus().then((value) => { setFunctional(value); setFunctionalError(null); })
         .catch(() => setFunctionalError('功能检测记录读取失败'));
     }, 1000);
     return () => window.clearInterval(timer);
@@ -248,26 +248,54 @@ export function Status({ view, api }: { view: AppView; api: ApiClient }) {
     catch { setCheckError('本地检测未完成，请重试。'); }
     finally { setChecking(false); }
   }
+  function observed(kind: FunctionalKind) {
+    return functional?.checks[kind].state ?? (functionalError ? 'unverified' : 'not_checked');
+  }
+  function refreshStatus() {
+    void view.actions.loadHealth(); void view.voice.actions.refresh();
+    if (api.functionalStatus) void api.functionalStatus()
+      .then((value) => { setFunctional(value); setFunctionalError(null); })
+      .catch(() => setFunctionalError('功能检测记录读取失败'));
+  }
   const capabilities = [
-    { name: '业务数据库', value: h?.database ?? 'unverified', icon: <DatabaseOutlined />, note: '聊天、知识库与任务记录的本地存储。' },
-    { name: '模型服务', value: h?.models ?? 'unverified', icon: <BookOutlined />, note: '配置状态与真实调用验证分别记录。' },
-    { name: '知识引擎', value: h?.rag ?? 'unverified', icon: <FileTextOutlined />, note: '检索与问答引擎的当前状态。' },
-    { name: '语音与媒体', value: view.voice.actions.capability?.assistant ?? 'unverified', icon: <UploadOutlined />, note: '通话条件须在语音页实际验证。' },
+    { name: '业务数据库', value: h?.database ?? 'unverified', icon: <DatabaseOutlined />,
+      note: '本地数据查询状态', parts: [] },
+    { name: '模型服务', value: observed('model'), icon: <BookOutlined />,
+      note: functional?.checks.model.checked_at ? `上次检测：${dateLabel(functional.checks.model.checked_at)}` : '尚无实际请求记录', parts: [] },
+    { name: '知识检索', value: observed('knowledge'), icon: <FileTextOutlined />,
+      note: observed('knowledge') === 'available' ? '端到端检索已验收' : '端到端检索尚未验收', parts: [] },
+    { name: '语音与媒体', value: 'not_checked', icon: <UploadOutlined />,
+      note: '通话未验收', parts: [
+        { name: 'ASR', value: observed('asr') },
+        { name: 'TTS', value: observed('tts') },
+      ] },
   ];
-  return <div className="status-layout"><div className="status-actions"><Button type="primary" icon={<ReloadOutlined />} loading={s.healthLoading} onClick={() => { void view.actions.loadHealth(); void view.voice.actions.refresh(); }}>刷新系统状态</Button>
-    <Button loading={checking} onClick={() => void runLocalCheck()}>运行本地检测</Button>
-    {s.healthCheckedAt && <span>本次读取 {new Date(s.healthCheckedAt).toLocaleTimeString('zh-CN')}</span>}</div>
-    {!report && !checking && !checkError && <p>尚未检测</p>}
-    {checking && <p>检测中</p>}
-    {checkError && <Alert type="error" title={checkError} />}
-    {report && <section aria-label="本地检测结果"><h2>本地检测结果</h2><p>检测时间：{dateLabel(report.checked_at)}</p>
-      {Object.entries(report.checks).map(([name, result]) => <div key={name}>
-        <strong>{checkLabels[name] ?? name}</strong> <StateTag value={result.state} /> <span>{result.reason}</span>
-      </div>)}</section>}
+  return <div className="status-layout">
+    <div className="status-actions"><Button type="primary" icon={<ReloadOutlined />} loading={s.healthLoading}
+      onClick={refreshStatus}>刷新系统状态</Button>
+      {s.healthCheckedAt && <span>最近读取 {new Date(s.healthCheckedAt).toLocaleTimeString('zh-CN')}</span>}</div>
+    <div className="section-heading"><h2>服务能力</h2><span className="muted">最近一次实际检测结果</span></div>
+    {s.healthLoading && <Skeleton active />}{s.healthError && <Alert showIcon type="error" title={s.healthError.message} />}
+    {functionalError && <Alert showIcon type="error" title={functionalError} />}
+    <div className="status-capabilities">{capabilities.map((item) => <Card key={item.name}
+      className={`status-capability tone-${['available', 'ready', 'succeeded'].includes(item.value) ? 'ok' : ['unavailable', 'failed', 'blocked', 'not_configured'].includes(item.value) ? 'off' : 'caution'}`}>
+      <div className="status-capability-head"><span className="status-capability-icon">{item.icon}</span>
+        <div><h3>{item.name}</h3><StateTag value={item.value} /></div></div>
+      {item.parts.length > 0 && <div className="status-capability-parts">{item.parts.map((part) =>
+        <span key={part.name}><strong>{part.name}</strong><StateTag value={part.value} /></span>)}</div>}
+      <p>{item.note}</p></Card>)}</div>
+    <details className="status-diagnostics"><summary>检测与诊断</summary><div className="status-diagnostics-body">
+      <Button loading={checking} onClick={() => void runLocalCheck()}>运行本地检测</Button>
+      {!report && !checking && !checkError && <p>尚未检测</p>}
+      {checking && <p>检测中</p>}
+      {checkError && <Alert type="error" title={checkError} />}
+      {report && <section aria-label="本地检测结果"><h2>本地检测结果</h2><p>检测时间：{dateLabel(report.checked_at)}</p>
+        {Object.entries(report.checks).map(([name, result]) => <div key={name}>
+          <strong>{checkLabels[name] ?? name}</strong> <StateTag value={result.state} /> <span>{result.reason}</span>
+        </div>)}</section>}
     <section className="functional-checks" aria-label="实际功能检测"><h2>实际功能检测</h2>
       <Alert type="warning" showIcon title="功能检测可能产生供应商费用：模型最多 1 次，语音合成最多 1 次，语音识别最多 1 次合成和 1 次识别。只在手动确认后发起，不自动重试。知识库检索尚无可证明只读的同库验收路径，因此保持未检查。" />
       <Checkbox checked={costAccepted} onChange={(event) => setCostAccepted(event.target.checked)}>我已了解费用和检测范围</Checkbox>
-      {functionalError && <Alert type="error" title={functionalError} />}
       {!functional && <p>尚未检测</p>}
       {functional && functionalKinds.map((kind) => {
         const item = functional.checks[kind];
@@ -286,10 +314,7 @@ export function Status({ view, api }: { view: AppView; api: ApiClient }) {
           </div>
         </div>;
       })}</section>
-    <Alert type="info" showIcon title="以下显示接口报告的状态；配置存在不代表实际供应商调用或真人设备验收通过。" />
-    <div className="section-heading"><h2>服务能力</h2><span className="muted">本地服务与组件的当前配置和可用性</span></div>
-    {s.healthLoading && <Skeleton active />}{s.healthError && <Alert showIcon type="error" title={s.healthError.message} />}
-    <div className="status-capabilities">{capabilities.map((item) => <Card key={item.name} className={`status-capability tone-${['available', 'ready', 'succeeded'].includes(item.value) ? 'ok' : ['unavailable', 'failed', 'blocked', 'not_configured'].includes(item.value) ? 'off' : 'caution'}`}><div className="status-capability-head"><span className="status-capability-icon">{item.icon}</span><div><h3>{item.name}</h3><StateTag value={item.value} /></div></div><p>{item.note}</p></Card>)}</div>
+      <Alert type="info" showIcon title="服务状态来自最近一次实际检测；刷新页面只读取记录，不调用供应商。" />
     <div className="status-panels"><Card title="模型与引擎"><Descriptions column={1} items={[
       { key: 'names', label: '模型名称', children: h?.models_info?.model_names.join(' / ') || '未提供' },
       { key: 'region', label: '地区', children: h?.models_info?.region || '未提供' },
@@ -303,5 +328,7 @@ export function Status({ view, api }: { view: AppView; api: ApiClient }) {
       <p>语音媒体：<StateTag value={view.voice.actions.capability?.transport ?? 'unverified'} /></p>
       {view.voice.actions.capabilityError && <Alert type="error" title="媒体状态读取失败，请刷新后重试。" />}
       <Button onClick={() => view.actions.navigate('voice')}>查看通话条件</Button></div></Card></div>
-    {s.healthCheckedAt && <p className="muted">状态读取时间：{new Date(s.healthCheckedAt).toLocaleString('zh-CN')}。本次刷新不调用供应商或探测实际模型。</p>}</div>;
+      {s.healthCheckedAt && <p className="muted">状态读取时间：{new Date(s.healthCheckedAt).toLocaleString('zh-CN')}</p>}
+    </div></details>
+  </div>;
 }

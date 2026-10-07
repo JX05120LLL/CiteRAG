@@ -62,10 +62,6 @@
 .citerag-app.design-b .primary-sidebar .ant-menu-item-selected { background: #e1eee8; color: #145a43; }
 .citerag-app .sidebar-divider { border-top: 1px solid var(--line); margin: 20px 4px; }
 .citerag-app .sidebar-new-chat { height: 40px; margin-bottom: 20px; box-shadow: none; }
-.citerag-app .sidebar-chat-groups { display: grid; gap: 20px; }
-.citerag-app .sidebar-chat-group { min-width: 0; }
-.citerag-app .sidebar-chat-group h2 { display: flex; align-items: center; gap: 9px; color: #5b6a62; font-size: 12px; font-weight: 600; margin: 0 6px 7px; overflow-wrap: anywhere; }
-.citerag-app .sidebar-chat-group h2 .anticon { font-size: 14px; }
 .citerag-app .sidebar-chat-row { display: flex; align-items: center; min-width: 0; border-radius: 8px; padding: 2px 3px; }
 .citerag-app .sidebar-chat-row:hover, .citerag-app .sidebar-chat-row.selected { background: #e7f0ea; }
 .citerag-app .sidebar-chat-row.selected .sidebar-chat-title { color: #145a43; font-weight: 600; }
@@ -188,10 +184,7 @@
 .citerag-app .sidebar-divider { margin: 18px 4px 20px; }
 .citerag-app .sidebar-chat-heading { display: flex; align-items: center; justify-content: space-between; padding: 0 8px 11px; font-size: 14px; font-weight: 650; }
 .citerag-app .sidebar-chat-heading .sidebar-new-chat { width: 32px; height: 32px; margin: 0; color: var(--accent); }
-.citerag-app .sidebar-chat-groups { gap: 24px; }
-.citerag-app .sidebar-chat-group h2 { margin: 0 8px 8px; color: #26374c; font-size: 14px; }
-.citerag-app .sidebar-chat-group h2 .sidebar-kb-name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.citerag-app .sidebar-chat-group h2 .sidebar-chat-count { margin-left: auto; font-size: 12px; color: #8190a4; }
+.citerag-app .sidebar-chat-list { display: grid; gap: 3px; min-width: 0; }
 .citerag-app .sidebar-chat-row { min-height: 43px; padding: 2px 6px 2px 12px; gap: 6px; }
 .citerag-app .sidebar-chat-row .sidebar-chat-icon { font-size: 17px; color: var(--accent); }
 .citerag-app .sidebar-chat-title { justify-content: flex-start; font-size: 14px; padding-inline: 6px; }
@@ -321,6 +314,12 @@
 .citerag-app .status-capability.tone-off .status-capability-icon { background: #fbe8e9; color: #b43e47; }
 .citerag-app .status-capability h3 { font-size: 16px; margin: 0 0 5px; }
 .citerag-app .status-capability p { padding-top: 18px; margin-top: 20px; border-top: 1px solid var(--line); color: #526581; font-size: 13px; }
+.citerag-app .status-capability-parts { display: flex; flex-wrap: wrap; gap: 8px 12px; margin-top: 16px; }
+.citerag-app .status-capability-parts > span { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.citerag-app .status-diagnostics { margin-top: 24px; border-top: 1px solid var(--line); }
+.citerag-app .status-diagnostics > summary { cursor: pointer; padding: 16px 0; font-weight: 600; }
+.citerag-app .status-diagnostics-body { padding: 4px 0 24px; }
+.citerag-app .status-diagnostics .functional-checks { margin: 20px 0; padding: 0; border: 0; background: transparent; }
 .citerag-app .status-panels { margin-top: 24px; gap: 15px; }
 .citerag-app .status-panels .ant-card-head-title { font-size: 20px; }
 .citerag-app .status-panels .ant-card-body { min-height: 200px; }

@@ -16,6 +16,7 @@ from app.api.agent import router as agent_router
 from app.api.answers import router as answers_router
 from app.api.boundaries import require_local_request
 from app.api.documents import router as documents_router
+from app.api.functional_probes import build_functional_checks
 from app.api.images import router as images_router
 from app.api.routes import router
 from app.api.tools import router as tools_router
@@ -59,6 +60,7 @@ def create_app(
     async def lifespan(application: FastAPI):
         assert_isolated_configuration(os.environ, Path.cwd())
         async with AsyncExitStack() as stack:
+            stack.push_async_callback(application.state.functional_checks.close)
             db = application.state.database
             if db is not None:
                 stack.push_async_callback(db.engine.dispose)
@@ -147,6 +149,9 @@ def create_app(
 
     application = FastAPI(title="CiteRAG API", version="0.1.0", lifespan=lifespan)
     application.state.settings = settings
+    application.state.functional_checks = build_functional_checks(
+        settings, LOCAL_RUNTIME_ROOT / "validation" / "functional",
+    )
     application.state.database = database or Database.from_settings(settings)
     application.state.owner = None
     application.state.rag_runtime = None

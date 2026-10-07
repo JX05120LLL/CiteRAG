@@ -281,3 +281,22 @@ it('requests a bounded local check explicitly and validates its result', async (
     ...response.checks, business_database: { state: 'ready', reason: 'invalid', checked_at },
   } })).checkSystem()).rejects.toMatchObject({ kind: 'invalid-response' });
 });
+
+it('reads functional evidence without starting a probe and sends one explicit request id', async () => {
+  const checked_at = '2026-10-07T07:00:00Z';
+  const item = { service: 'DashScope qwen-flash', state: 'available', reason: 'check_succeeded', checked_at,
+    expires_at: '2026-10-07T08:00:00Z', fingerprint: 'a'.repeat(64),
+    request_id: '00000000-0000-4000-8000-000000000001' };
+  const checks = Object.fromEntries(['model', 'asr', 'tts', 'knowledge'].map((kind) => [kind, item]));
+  const calls: Array<{ url: string; body: string | undefined }> = [];
+  const api = createApi(async (input, init) => {
+    calls.push({ url: String(input), body: init?.body as string | undefined });
+    return json(String(input).endsWith('/functional') ? { checks } : item);
+  });
+  expect((await api.functionalStatus()).checks.model.state).toBe('available');
+  expect(calls).toEqual([{ url: '/api/status/functional', body: undefined }]);
+  await api.startFunctionalCheck('model', item.request_id);
+  expect(JSON.parse(calls[1].body ?? '{}')).toEqual({ request_id: item.request_id, accept_cost: true });
+  await api.cancelFunctionalCheck('model', item.request_id);
+  expect(calls[2].url).toBe('/api/status/functional/model/cancel');
+});

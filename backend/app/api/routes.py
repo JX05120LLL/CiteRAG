@@ -1,8 +1,9 @@
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -25,6 +26,15 @@ from app.services.knowledge import KnowledgeService
 from app.services.knowledge_memory import KnowledgeMemoryService
 
 router = APIRouter(prefix="/api")
+
+
+class FunctionalCheckRequest(BaseModel):
+    request_id: UUID
+    accept_cost: Literal[True]
+
+
+class FunctionalCancelRequest(BaseModel):
+    request_id: UUID
 
 
 @router.get("/health")
@@ -74,6 +84,18 @@ async def check_status(request: Request):
     transport = transport_status(request.app.state.settings)["transport"]
     voice_ok = (transport == "configured"
                 and await probe_loopback(request.app.state.settings.livekit_url))
+    functional = request.app.state.functional_checks.read_all()["checks"]
+
+    def observed(kind: str) -> dict[str, str]:
+        item = functional[kind]
+        state = item["state"] if item["state"] in {"available", "unavailable"} else "not_checked"
+        return local_check(state, f"Functional check: {item['reason']}",
+                           item["checked_at"] or checked_at)
+
+    asr, tts = functional["asr"], functional["tts"]
+    speech_state = ("available" if asr["state"] == tts["state"] == "available"
+                    else "unavailable" if "unavailable" in {asr["state"], tts["state"]}
+                    else "not_checked")
     checks = {
         "business_database": local_check(
             "available" if database_ok else "unavailable",
@@ -96,22 +118,40 @@ async def check_status(request: Request):
             "Local media TCP port accepted a connection; voice function was not tested" if voice_ok
             else "Local media transport is unconfigured or its port is unreachable", checked_at,
         ),
-        "model_provider": local_check(
-            "not_checked",
-            "A functional model request may incur charges and needs a bounded authorization",
-            checked_at,
-        ),
+        "model_provider": observed("model"),
         "speech_providers": local_check(
-            "not_checked",
-            "ASR and TTS functional requests may incur charges and need a bounded authorization",
-            checked_at,
+            speech_state, f"ASR: {asr['reason']}; TTS: {tts['reason']}",
+            asr["checked_at"] or tts["checked_at"] or checked_at,
         ),
-        "knowledge_engine": local_check(
-            "not_checked", "End-to-end retrieval can invoke paid embedding or model services",
-            checked_at,
-        ),
+        "knowledge_engine": observed("knowledge"),
     }
     return {"checked_at": checked_at, "checks": checks}
+
+
+@router.get("/status/functional")
+async def functional_status(request: Request):
+    """Read local evidence only; never send a supplier request."""
+    return request.app.state.functional_checks.read_all()
+
+
+@router.post("/status/functional/{kind}", status_code=202)
+async def start_functional_check(kind: str, body: FunctionalCheckRequest, request: Request):
+    try:
+        return await request.app.state.functional_checks.start(kind, body.request_id)
+    except ValueError as error:
+        code = str(error)
+        raise HTTPException(status_code=409 if code == "check_in_progress" else 422,
+                            detail={"code": code, "message": "功能检测暂不可执行"}) from None
+
+
+@router.post("/status/functional/{kind}/cancel")
+async def cancel_functional_check(kind: str, body: FunctionalCancelRequest, request: Request):
+    try:
+        return await request.app.state.functional_checks.cancel(kind, body.request_id)
+    except ValueError as error:
+        code = str(error)
+        raise HTTPException(status_code=404 if code == "check_not_found" else 422,
+                            detail={"code": code, "message": "检测请求不存在或无效"}) from None
 
 
 @router.get("/knowledge-bases")

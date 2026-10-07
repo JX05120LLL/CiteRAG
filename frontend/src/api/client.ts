@@ -270,6 +270,39 @@ export interface SystemCheckReport {
   checks: Record<LocalCheckName, { state: LocalCheckState; reason: string; checked_at: string }>;
 }
 
+export type FunctionalKind = 'model' | 'asr' | 'tts' | 'knowledge';
+export interface FunctionalResult {
+  service: string;
+  state: 'not_checked' | 'running' | 'available' | 'unavailable';
+  reason: string;
+  checked_at: string | null;
+  expires_at: string | null;
+  fingerprint: string | null;
+  request_id?: string;
+}
+export interface FunctionalReport { checks: Record<FunctionalKind, FunctionalResult> }
+const functionalKinds: FunctionalKind[] = ['model', 'asr', 'tts', 'knowledge'];
+
+function functionalResult(value: unknown): FunctionalResult {
+  if (!isRecord(value) || typeof value.service !== 'string' || value.service.length < 1 ||
+      value.service.length > 100 || !['not_checked', 'running', 'available', 'unavailable'].includes(String(value.state)) ||
+      typeof value.reason !== 'string' || !/^[a-z_]{1,48}$/.test(value.reason) ||
+      (value.checked_at !== null && !isVerificationTime(value.checked_at)) ||
+      (value.expires_at !== null && !isVerificationTime(value.expires_at)) ||
+      (value.fingerprint !== null && (typeof value.fingerprint !== 'string' || !/^[a-f0-9]{64}$/.test(value.fingerprint))) ||
+      (value.request_id !== undefined && (typeof value.request_id !== 'string' || !/^[a-f0-9-]{36}$/.test(value.request_id))))
+    throw new ApiError('invalid-response');
+  return value as unknown as FunctionalResult;
+}
+
+function functionalReport(value: unknown): FunctionalReport {
+  if (!isRecord(value) || !isRecord(value.checks)) throw new ApiError('invalid-response');
+  const rawChecks = value.checks;
+  if (!functionalKinds.every((kind) => kind in rawChecks)) throw new ApiError('invalid-response');
+  const checks = Object.fromEntries(functionalKinds.map((kind) => [kind, functionalResult(rawChecks[kind])]));
+  return { checks } as FunctionalReport;
+}
+
 const localCheckNames: LocalCheckName[] = ['business_database', 'model_configuration', 'rag_database',
   'voice_transport', 'model_provider', 'speech_providers', 'knowledge_engine'];
 
@@ -867,6 +900,14 @@ export function createApi(fetcher: typeof fetch = globalThis.fetch) {
           })) throw new ApiError('invalid-response');
       return value as unknown as SystemCheckReport;
     },
+    functionalStatus: async (): Promise<FunctionalReport> =>
+      functionalReport(await request('/api/status/functional')),
+    startFunctionalCheck: async (kind: FunctionalKind, requestId: string): Promise<FunctionalResult> =>
+      functionalResult(await request(`/api/status/functional/${kind}`, 'POST',
+        { request_id: requestId, accept_cost: true })),
+    cancelFunctionalCheck: async (kind: FunctionalKind, requestId: string): Promise<FunctionalResult> =>
+      functionalResult(await request(`/api/status/functional/${kind}/cancel`, 'POST',
+        { request_id: requestId })),
     health: async (): Promise<SystemHealth> => {
       const value = await request('/api/status');
       if (!isRecord(value) || value.status !== 'partial' || value.mode !== 'local_single_user' ||

@@ -157,6 +157,10 @@ class MiniMaxTTS:
                      "voice_setting": {"voice_id": self.voice, "speed": 1, "vol": 1, "pitch": 0},
                      "audio_setting": {"sample_rate": 24000, "format": "mp3", "channel": 1},
                      "subtitle_enable": False}) as response:
+                if response.status_code in {401, 403}:
+                    raise SpeechError("tts_auth_rejected")
+                if response.status_code in {402, 429}:
+                    raise SpeechError("tts_quota_rejected")
                 if response.status_code != 200:
                     raise SpeechError("tts_provider_failed")
                 produced = False

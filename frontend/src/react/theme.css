@@ -302,6 +302,16 @@
 .citerag-app .status-layout > .ant-alert { margin: 0 0 26px; padding: 18px 20px; }
 .citerag-app .status-layout .section-heading { display: block; margin: 26px 0 17px; }
 .citerag-app .status-layout .section-heading h2 { font-size: 22px; }
+.citerag-app .functional-checks { margin: 24px 0; padding: 24px; background: #fff; border: 1px solid var(--line); border-radius: 16px; }
+.citerag-app .functional-checks h2 { margin: 0 0 16px; font-size: 21px; }
+.citerag-app .functional-checks > .ant-alert { margin-bottom: 16px; }
+.citerag-app .functional-checks > .ant-checkbox-wrapper { margin-bottom: 14px; }
+.citerag-app .functional-check-row { display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: 16px 0; border-top: 1px solid var(--line); }
+.citerag-app .functional-check-content { min-width: 0; }
+.citerag-app .functional-check-title, .citerag-app .functional-check-meta, .citerag-app .functional-check-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.citerag-app .functional-check-title { margin-bottom: 5px; }
+.citerag-app .functional-check-meta { color: #657891; font-size: 12px; margin-top: 6px; }
+.citerag-app .functional-check-actions { flex: 0 0 auto; }
 .citerag-app .status-capabilities { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 12px; }
 .citerag-app .status-capability { min-height: 235px; border-color: var(--line); }
 .citerag-app .status-capability .ant-card-body { padding: 22px; }
@@ -401,6 +411,7 @@
   .citerag-app .voice-user-card, .citerag-app .voice-assistant-card { padding: 14px; }
 }
 @media (max-width: 1200px) {
+  .citerag-app .functional-check-row { align-items: flex-start; flex-direction: column; gap: 10px; }
   .citerag-app .task-summary { margin: 0 0 22px; max-width: none; }
   .citerag-app .task-columns { grid-template-columns: 1fr; }
   .citerag-app .status-capabilities { grid-template-columns: repeat(2, minmax(0, 1fr)); }

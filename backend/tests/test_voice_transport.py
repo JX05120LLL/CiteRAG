@@ -147,6 +147,22 @@ async def test_minimax_stream_rejects_error_and_returns_only_audio():
             _ = [part async for part in MiniMaxTTS("test", "voice", client=client).stream("text")]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status,code", [(401, "tts_auth_rejected"),
+                                         (429, "tts_quota_rejected")])
+async def test_minimax_http_rejection_uses_safe_category(status, code):
+    import httpx
+
+    from app.voice.providers import MiniMaxTTS, SpeechError
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(
+        lambda _request: httpx.Response(status, text="private supplier response"),
+    )) as client:
+        with pytest.raises(SpeechError, match=code) as caught:
+            _ = [part async for part in MiniMaxTTS("test", "voice", client=client).stream("text")]
+    assert "private" not in str(caught.value)
+
+
 def configured(**values):
     return Settings(voice_transport_enabled=True, livekit_api_key=SecretStr("devkey"),
                     livekit_api_secret=SecretStr("secret"), **values)

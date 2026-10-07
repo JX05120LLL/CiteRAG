@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Card, Checkbox, Collapse, Descriptions, Drawer, Dropdown, Empty, Form, Input, Modal, Pagination, Skeleton, Space, Tag, Upload } from 'antd';
 import { BookOutlined, DatabaseOutlined, FileTextOutlined, MoreOutlined, PlusOutlined, ReloadOutlined, UploadOutlined } from '@ant-design/icons';
-import type { ApiClient, IngestionJob, ManagedDocument, SystemCheckReport } from '../api/client';
+import type { ApiClient, FunctionalKind, FunctionalReport, IngestionJob, ManagedDocument, SystemCheckReport } from '../api/client';
 import type { AppView } from '../app';
 import { isKnowledgePending, knowledgeLimit } from '../state';
 import { errorText, failureReason, locatorLabel, stoppedStage } from '../pages/documents';
@@ -179,6 +179,63 @@ export function Status({ view, api }: { view: AppView; api: ApiClient }) {
   const [report, setReport] = useState<SystemCheckReport | null>(null);
   const [checking, setChecking] = useState(false);
   const [checkError, setCheckError] = useState<string | null>(null);
+  const [functional, setFunctional] = useState<FunctionalReport | null>(null);
+  const [functionalError, setFunctionalError] = useState<string | null>(null);
+  const [costAccepted, setCostAccepted] = useState(false);
+  const [submitting, setSubmitting] = useState<FunctionalKind | null>(null);
+  const submittingRef = useRef(false);
+  const functionalKinds: FunctionalKind[] = ['model', 'asr', 'tts', 'knowledge'];
+  const functionalLabels: Record<FunctionalKind, string> = {
+    model: '模型服务', asr: '语音识别', tts: '语音合成', knowledge: '知识检索端到端',
+  };
+  const reasonLabels: Record<string, string> = {
+    never_checked: '尚未检测', check_running: '检测中', check_succeeded: '实际请求成功',
+    check_expired: '结果已过期，需重新检测', configuration_changed: '配置已变化，需重新检测',
+    configuration_unavailable: '检测所需配置不可用', interrupted: '上次检测中断，需重新检测',
+    cancelled: '检测已取消，需重新检测', authentication_rejected: '供应商拒绝认证',
+    quota_rejected: '供应商拒绝配额或限流', provider_timeout: '供应商请求超时',
+    provider_unavailable: '供应商请求失败', response_invalid: '供应商结果不符合检测要求',
+    acceptance_kb_readonly_probe_unavailable: '当前没有可证明只读的验收知识库检索路径，尚未检查',
+  };
+  useEffect(() => {
+    if (!api.functionalStatus) return;
+    let mounted = true;
+    void api.functionalStatus().then((value) => { if (mounted) setFunctional(value); })
+      .catch(() => { if (mounted) setFunctionalError('功能检测记录读取失败'); });
+    return () => { mounted = false; };
+  }, [api]);
+  const anyRunning = functionalKinds.some((kind) => functional?.checks[kind].state === 'running');
+  useEffect(() => {
+    if (!anyRunning) return;
+    const timer = window.setInterval(() => {
+      void api.functionalStatus().then(setFunctional)
+        .catch(() => setFunctionalError('功能检测记录读取失败'));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [api, anyRunning]);
+  async function startFunctional(kind: FunctionalKind) {
+    if (!costAccepted || submittingRef.current || submitting || anyRunning || kind === 'knowledge') return;
+    const requestId = crypto.randomUUID();
+    submittingRef.current = true;
+    setSubmitting(kind); setFunctionalError(null);
+    try {
+      const result = await api.startFunctionalCheck(kind, requestId);
+      setFunctional((previous) => previous && {
+        checks: { ...previous.checks, [kind]: result },
+      });
+    } catch { setFunctionalError(`${functionalLabels[kind]}检测未启动，请先刷新记录`); }
+    finally { submittingRef.current = false; setSubmitting(null); }
+  }
+  async function cancelFunctional(kind: FunctionalKind) {
+    const requestId = functional?.checks[kind].request_id;
+    if (!requestId) return;
+    try {
+      const result = await api.cancelFunctionalCheck(kind, requestId);
+      setFunctional((previous) => previous && {
+        checks: { ...previous.checks, [kind]: result },
+      });
+    } catch { setFunctionalError(`${functionalLabels[kind]}取消未确认，请刷新记录`); }
+  }
   const checkLabels: Record<string, string> = {
     business_database: '业务数据库', model_configuration: '模型配置', rag_database: '知识引擎本地数据库',
     voice_transport: '本地媒体端口', model_provider: '模型服务实测',
@@ -207,6 +264,28 @@ export function Status({ view, api }: { view: AppView; api: ApiClient }) {
       {Object.entries(report.checks).map(([name, result]) => <div key={name}>
         <strong>{checkLabels[name] ?? name}</strong> <StateTag value={result.state} /> <span>{result.reason}</span>
       </div>)}</section>}
+    <section className="functional-checks" aria-label="实际功能检测"><h2>实际功能检测</h2>
+      <Alert type="warning" showIcon title="功能检测可能产生供应商费用：模型最多 1 次，语音合成最多 1 次，语音识别最多 1 次合成和 1 次识别。只在手动确认后发起，不自动重试。知识库检索尚无可证明只读的同库验收路径，因此保持未检查。" />
+      <Checkbox checked={costAccepted} onChange={(event) => setCostAccepted(event.target.checked)}>我已了解费用和检测范围</Checkbox>
+      {functionalError && <Alert type="error" title={functionalError} />}
+      {!functional && <p>尚未检测</p>}
+      {functional && functionalKinds.map((kind) => {
+        const item = functional.checks[kind];
+        return <div className="functional-check-row" key={kind}><div className="functional-check-content">
+          <div className="functional-check-title"><strong>{functionalLabels[kind]}</strong>
+            <span className="muted">{item.service}</span><StateTag value={item.state} /></div>
+          <div>{reasonLabels[item.reason] ?? '检测状态未知'}</div>
+          <div className="functional-check-meta">
+            {item.checked_at && <span>检测时间：{dateLabel(item.checked_at)}</span>}
+            {item.expires_at && <span>有效至：{dateLabel(item.expires_at)}</span>}
+            {item.fingerprint && <span>配置指纹：{item.fingerprint.slice(0, 12)}</span>}
+          </div></div><div className="functional-check-actions">
+          {kind !== 'knowledge' && <Button disabled={!costAccepted || anyRunning || submitting !== null}
+            onClick={() => void startFunctional(kind)}>检测{functionalLabels[kind]}</Button>}
+          {item.state === 'running' && item.request_id && <Button onClick={() => void cancelFunctional(kind)}>取消检测</Button>}
+          </div>
+        </div>;
+      })}</section>
     <Alert type="info" showIcon title="以下显示接口报告的状态；配置存在不代表实际供应商调用或真人设备验收通过。" />
     <div className="section-heading"><h2>服务能力</h2><span className="muted">本地服务与组件的当前配置和可用性</span></div>
     {s.healthLoading && <Skeleton active />}{s.healthError && <Alert showIcon type="error" title={s.healthError.message} />}

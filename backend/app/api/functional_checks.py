@@ -9,7 +9,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -164,15 +164,42 @@ class FunctionalChecks:
                 raise ValueError("check_in_progress")
             if kind not in self.probes:
                 raise ValueError("check_unavailable")
-            checked_at = self.now()
-            record = FunctionalRecord(
-                kind=kind, service=SERVICES[kind], state="running", reason="check_running",
-                request_id=request_id, fingerprint=current,
-                checked_at=checked_at, expires_at=checked_at + self.ttl,
-            )
-            self._write(record)
-            self.tasks[kind] = asyncio.create_task(self._run(record), name=f"check-{kind}")
-            return record.public()
+            return self._launch(kind, request_id, current)
+
+    def _launch(self, kind: Kind, request_id: UUID, fingerprint: str) -> dict[str, str]:
+        checked_at = self.now()
+        record = FunctionalRecord(
+            kind=kind, service=SERVICES[kind], state="running", reason="check_running",
+            request_id=request_id, fingerprint=fingerprint,
+            checked_at=checked_at, expires_at=checked_at + self.ttl,
+        )
+        self._write(record)
+        self.tasks[kind] = asyncio.create_task(self._run(record), name=f"check-{kind}")
+        return record.public()
+
+    async def ensure(self, kind: Kind, *, force: bool = False) -> dict[str, str | None]:
+        """Start one bounded probe only when current evidence cannot be reused."""
+        self._path(kind)
+        async with self.lock:
+            current = self.fingerprint(kind)
+            if current is None:
+                return self.read(kind)
+            task = self.tasks.get(kind)
+            if task is not None and not task.done():
+                return self.read(kind)
+            record = self._stored(kind)
+            if (not force and record is not None and record.fingerprint == current
+                    and record.expires_at > self.now()
+                    and record.state in {"available", "unavailable"}):
+                return record.public()
+            if kind not in self.probes:
+                return self.read(kind)
+            return self._launch(kind, uuid4(), current)
+
+    async def ensure_all(self, *, force: bool = False) -> dict[str, object]:
+        for kind in ("model", "asr", "tts"):
+            await self.ensure(kind, force=force)
+        return self.read_all()
 
     async def _run(self, record: FunctionalRecord) -> None:
         state: State = "available"

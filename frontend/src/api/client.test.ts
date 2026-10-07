@@ -291,7 +291,8 @@ it('reads functional evidence without starting a probe and sends one explicit re
   const calls: Array<{ url: string; body: string | undefined }> = [];
   const api = createApi(async (input, init) => {
     calls.push({ url: String(input), body: init?.body as string | undefined });
-    return json(String(input).endsWith('/functional') ? { checks } : item);
+    return json(String(input).endsWith('/functional') || String(input).endsWith('/auto')
+      ? { checks } : item);
   });
   expect((await api.functionalStatus()).checks.model.state).toBe('available');
   expect(calls).toEqual([{ url: '/api/status/functional', body: undefined }]);
@@ -299,4 +300,9 @@ it('reads functional evidence without starting a probe and sends one explicit re
   expect(JSON.parse(calls[1].body ?? '{}')).toEqual({ request_id: item.request_id, accept_cost: true });
   await api.cancelFunctionalCheck('model', item.request_id);
   expect(calls[2].url).toBe('/api/status/functional/model/cancel');
+  expect((await api.autoFunctionalChecks()).checks.model.state).toBe('available');
+  expect(calls[3].url).toBe('/api/status/functional/auto');
+  expect(JSON.parse(calls[3].body ?? '{}')).toEqual({ accept_cost: true, force: false });
+  await api.autoFunctionalChecks(true);
+  expect(JSON.parse(calls[4].body ?? '{}')).toEqual({ accept_cost: true, force: true });
 });

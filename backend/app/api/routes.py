@@ -33,6 +33,11 @@ class FunctionalCheckRequest(BaseModel):
     accept_cost: Literal[True]
 
 
+class FunctionalAutoRequest(BaseModel):
+    accept_cost: Literal[True]
+    force: bool = False
+
+
 class FunctionalCancelRequest(BaseModel):
     request_id: UUID
 
@@ -132,6 +137,12 @@ async def check_status(request: Request):
 async def functional_status(request: Request):
     """Read local evidence only; never send a supplier request."""
     return request.app.state.functional_checks.read_all()
+
+
+@router.post("/status/functional/auto", status_code=202)
+async def auto_functional_checks(body: FunctionalAutoRequest, request: Request):
+    """Run one bounded batch for configured suppliers, reusing fresh evidence."""
+    return await request.app.state.functional_checks.ensure_all(force=body.force)
 
 
 @router.post("/status/functional/{kind}", status_code=202)

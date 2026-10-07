@@ -129,3 +129,36 @@ def locate_chunk(chunk: str, original: str, blocks: list[SourceBlock]) -> Locate
                                 "line_start": covered[0].locator["line_start"],
                                 "line_end": covered[-1].locator["line_end"]},
                         start, end)
+
+
+_ARTICLE = re.compile(r"第[〇零一二三四五六七八九十百千0-9]{1,12}条")
+
+
+def select_verified_article_block(question: str, located: LocatedChunk,
+                                  original: str, blocks: list[SourceBlock]
+                                  ) -> LocatedChunk | None:
+    """Narrow an oversized, already verified chunk to one complete article block."""
+    markers = set(_ARTICLE.findall(question))
+    if (len(markers) != 1 or located.start < 0 or located.end > len(original)
+        or original[located.start:located.end] != located.quote):
+        return None
+    marker = next(iter(markers))
+    matches = []
+    for block in blocks:
+        if (_ARTICLE.findall(block.text) != [marker]
+            or not re.match(r"^\s*#{0,6}\s*" + re.escape(marker), block.text)
+            or not (located.start <= block.start < block.end <= located.end)):
+            continue
+        locator = block.locator
+        if (original[block.start:block.end] != block.text
+            or not isinstance(locator, dict) or locator.get("kind") != "lines"
+            or type(locator.get("line_start")) is not int
+            or type(locator.get("line_end")) is not int
+            or locator["line_start"] != original.count("\n", 0, block.start) + 1
+            or locator["line_end"] != original.count("\n", 0, block.end - 1) + 1):
+            return None
+        matches.append(block)
+    if len(matches) != 1:
+        return None
+    block = matches[0]
+    return LocatedChunk(block.text, block.locator, block.start, block.end)

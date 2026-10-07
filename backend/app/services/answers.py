@@ -29,7 +29,7 @@ from app.models import (
 )
 from app.rag.answer_adapter import AnswerError, checked_answer, checked_route
 from app.rag.query_adapter import QueryError, RetrievedChunk
-from app.rag.source_mapping import locate_chunk
+from app.rag.source_mapping import locate_chunk, select_verified_article_block
 from app.rag.streamed_answer import ExtractiveDraft
 from app.services.conversation_context import ORDINARY_WORKSPACE, prepare_context
 from app.services.conversation_retention import active_conversation
@@ -702,6 +702,14 @@ class AnswerService:
             location = locate_chunk(chunk.content, document.parsed_text, blocks)
             if location is None:
                 continue
+            if (len(location.quote) > 2500
+                or estimate_json_tokens([{"id": "E1", "text": location.quote}])
+                > EVIDENCE_TOKENS):
+                location = select_verified_article_block(
+                    question, location, document.parsed_text, blocks,
+                )
+                if location is None:
+                    break
             if (len(location.quote) > 2500
                 or sum(len(e["text"]) for e in evidence) + len(location.quote) > 6000):
                 break

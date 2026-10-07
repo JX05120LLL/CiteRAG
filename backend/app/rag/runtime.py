@@ -372,10 +372,11 @@ class RagRuntime:
             "工具结果出现确实无法消除的歧义时，才用 request_input 请求具体的缺失信息；"
             "不得猜测候选地点，也不得把提问当作工具调用成功。"
         )
+        # Agent decisions include the full validated tool catalog on general turns too.
         messages = fit_chat_messages(system, {
             "question": question, "evidence": evidence, "conversation_context": context,
             "allowed_tools": tools, "tool_results": results,
-        }, GENERAL_INPUT_TOKENS if general else ANSWER_INPUT_TOKENS)
+        }, ANSWER_INPUT_TOKENS)
         client = await self._get_client()
         result = await client.complete("qwen-flash", messages, max_tokens=2048,
                                        response_format="json_object")

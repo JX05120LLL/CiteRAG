@@ -41,6 +41,7 @@ jobs:
               "backend/tests/test_m13_exact_api.py",
               "backend/tests/test_m13_answer_api.py",
               "backend/tests/test_source_mapping_line_ranges.py",
+              "backend/tests/test_article_evidence_selection.py",
               "backend/tests/test_m1_stream.py",
               "backend/tests/test_m14_lifecycle.py",
               "backend/tests/test_voice_transport.py",

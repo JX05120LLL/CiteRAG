@@ -1,6 +1,7 @@
 import { StrictMode } from 'react';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { ApiError } from '../api/client';
 import type { ApiClient, FunctionalReport, FunctionalResult } from '../api/client';
 import type { AppView } from '../app';
 import { sampleHealth } from '../preview/samples';
@@ -101,6 +102,17 @@ it('shows a request failure without reporting the provider as available', async 
   await waitFor(() => expect(screen.getAllByText('自动检测未能启动，请刷新后重试。').length).toBeGreaterThan(0));
   const cards = document.querySelectorAll('.status-capability');
   expect(within(cards[1] as HTMLElement).getByText('未验证')).toBeTruthy();
+});
+
+it('identifies an older local API when the automatic endpoint is missing', async () => {
+  const autoFunctionalChecks = vi.fn(async (): Promise<FunctionalReport> => {
+    throw new ApiError('not-found');
+  });
+  render(<Status view={view()} api={{ autoFunctionalChecks } as unknown as ApiClient} />);
+  await waitFor(() => expect(screen.getAllByText(
+    '自动检测接口未加载：本地 API 与当前页面版本不一致，请更新本地 API 后刷新页面。',
+  ).length).toBeGreaterThan(0));
+  expect(autoFunctionalChecks).toHaveBeenCalledTimes(1);
 });
 
 it('stops polling after a read error and does not leave a stale running card', async () => {

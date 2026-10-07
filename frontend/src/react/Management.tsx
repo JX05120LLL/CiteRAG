@@ -8,6 +8,7 @@ import { errorText, failureReason, locatorLabel, stoppedStage } from '../pages/d
 import { matchesPendingFiles } from '../document-draft';
 import { backupErrors } from '../pages/status';
 import { StateTag, dateLabel, sizeLabel } from '../preview/shared';
+import { ApiError } from '../api/client';
 
 export function Knowledge({ view, api }: { view: AppView; api: ApiClient }) {
   const { state: s, actions: a } = view;
@@ -183,6 +184,15 @@ export function Status({ view, api }: { view: AppView; api: ApiClient }) {
   const [functionalError, setFunctionalError] = useState<string | null>(null);
   const [starting, setStarting] = useState(true);
   const autoPromiseRef = useRef<Promise<FunctionalReport> | null>(null);
+  function startError(error: unknown) {
+    if (error instanceof ApiError && error.kind === 'not-found')
+      return '自动检测接口未加载：本地 API 与当前页面版本不一致，请更新本地 API 后刷新页面。';
+    if (error instanceof ApiError && error.kind === 'network')
+      return '无法连接本地 API，请确认服务运行后刷新页面。';
+    if (error instanceof ApiError && error.kind === 'invalid-response')
+      return '自动检测响应格式不匹配，请更新本地 API 后刷新页面。';
+    return '自动检测未能启动，请刷新后重试。';
+  }
   const reasonLabels: Record<string, string> = {
     never_checked: '尚未检测', check_running: '检测中', check_succeeded: '实际调用成功',
     check_expired: '结果已过期，请刷新状态', configuration_changed: '配置已变化，请刷新状态',
@@ -194,11 +204,11 @@ export function Status({ view, api }: { view: AppView; api: ApiClient }) {
   };
   useEffect(() => {
     let active = true;
-    if (!api.autoFunctionalChecks) { setStarting(false); setFunctionalError('自动检测入口不可用。'); return; }
+    if (!api.autoFunctionalChecks) { setStarting(false); setFunctionalError(startError(new ApiError('not-found'))); return; }
     const promise = autoPromiseRef.current ?? api.autoFunctionalChecks(false);
     autoPromiseRef.current = promise;
     void promise.then((value) => { if (active) { setFunctional(value); setFunctionalError(null); } })
-      .catch(() => { if (active) setFunctionalError('自动检测未能启动，请刷新后重试。'); })
+      .catch((error) => { if (active) setFunctionalError(startError(error)); })
       .finally(() => { if (active) setStarting(false); });
     return () => { active = false; };
   }, [api]);
@@ -255,7 +265,7 @@ export function Status({ view, api }: { view: AppView; api: ApiClient }) {
     const promise = api.autoFunctionalChecks(true);
     autoPromiseRef.current = promise;
     try { setFunctional(await promise); }
-    catch { setFunctionalError('自动检测未能启动，请刷新后重试。'); }
+    catch (error) { setFunctionalError(startError(error)); }
     finally { setStarting(false); }
   }
   const capabilities = [

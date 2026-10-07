@@ -19,6 +19,33 @@ class RunHooks:
     def __init__(self, runner, run_id, generation, base):
         self.runner, self.run_id, self.generation, self.base = runner, run_id, generation, base
 
+    @staticmethod
+    def _resolved_current_weather(decision, question, results):
+        """Use a unique exact city match when the model asks for a finer place anyway."""
+        if (decision.get("action") != "request_input"
+            or decision.get("fields") != {"location": "string"}
+            or "天气" not in question
+            or not any(word in question for word in ("今天", "现在", "目前", "实时"))
+            or any(word in question for word in (
+                "预报", "未来", "明天", "后天", "今晚", "昨天", "前天", "过去", "历史"
+            ))
+            or not results):
+            return decision
+        last = results[-1]
+        data = last.get("data") or {}
+        if (last.get("status") != "succeeded" or last.get("tool_id") != "weather.city_search"
+            or data.get("kind") != "city_search" or data.get("requires_selection") is not False
+            or data.get("exact_match") is not True):
+            return decision
+        city = data.get("resolved_candidate")
+        if (not isinstance(city, dict)
+            or not isinstance(city.get("latitude"), (int, float))
+            or not isinstance(city.get("longitude"), (int, float))):
+            return decision
+        return {"action": "call_tool", "tool_id": "weather.current",
+                "arguments": {"latitude": city["latitude"],
+                              "longitude": city["longitude"]}}
+
     async def guard(self, state):
         self.runner.assert_owned()
         async with self.runner.db.sessions() as session:
@@ -74,6 +101,11 @@ class RunHooks:
             and set(value) == {"text"} and isinstance(value["text"], str)):
             value = {"action": "finish", "answer": value}
         value = checked_decision(value)
+        value = self._resolved_current_weather(value, prepared["question"], state["results"])
+        if (prepared["general"] and value["action"] == "request_input"
+            and state["model_rounds"] >= 5):
+            value = {"action": "finish", "answer": {"text":
+                "本轮仍无法确定继续所需的信息，已停止。请在聊天中重新提问并补充必要参数。"}}
         if len(json.dumps(value, ensure_ascii=False, allow_nan=False)) > 16000:
             raise AgentError("agent_decision_invalid")
         async with self.runner.db.sessions() as session:

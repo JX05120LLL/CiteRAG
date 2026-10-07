@@ -56,6 +56,15 @@ def test_credentials_are_hidden_and_registration_does_not_load_saved_records(mon
     assert qweather_tools(Settings(qweather_enabled=True)) == {}
 
 
+def test_registered_weather_tools_are_bounded_read_only_without_approval():
+    from app.tools.qweather import qweather_tools
+
+    registry = qweather_tools(configured())
+    assert set(registry) == {"weather.city_search", "weather.current", "weather.forecast"}
+    assert all(spec.backend == "local" and spec.effect == "read_only"
+               and spec.requires_approval({}) is False for spec in registry.values())
+
+
 @pytest.mark.parametrize("tool,arguments", [
     ("weather.current", {"latitude": True, "longitude": 120}),
     ("weather.current", {"latitude": float("nan"), "longitude": 120}),
@@ -108,9 +117,10 @@ async def test_city_search_preserves_ambiguous_candidates_and_empty_results_are_
 
     async def respond(request):
         assert request.url.path == "/geo/v2/city/lookup"
-        assert dict(request.url.params) == {
-            "location": "朝阳", "adm": "北京", "number": "5", "lang": "zh",
-        }
+        assert dict(request.url.params) in (
+            {"location": "朝阳", "number": "5", "lang": "zh"},
+            {"location": "朝阳", "adm": "北京", "number": "5", "lang": "zh"},
+        )
         return httpx.Response(200, json={"code": "200", "location": [
             {"id": "synthetic-1", "name": "朝阳", "lat": "39.92", "lon": "116.44",
              "adm1": "北京市", "adm2": "北京", "country": "中国"},
@@ -120,15 +130,40 @@ async def test_city_search_preserves_ambiguous_candidates_and_empty_results_are_
 
     spec = qweather_tools(configured(), transport=httpx.MockTransport(respond))[
         "weather.city_search"]
-    result = await spec.run(None, None, {"location": "朝阳", "adm": "北京"})
+    result = await spec.run(None, None, {"location": "朝阳"})
     assert len(result["candidates"]) == 2 and result["requires_selection"] is True
+    assert result["exact_match"] is False and result["resolved_candidate"] is None
     assert result["candidates"][0]["latitude"] == 39.92
+    narrowed = await spec.run(None, None, {"location": "朝阳", "adm": "北京"})
+    assert narrowed["requires_selection"] is False
+    assert narrowed["exact_match"] is True
+    assert narrowed["resolved_candidate"]["id"] == "synthetic-1"
     empty = qweather_tools(configured(), transport=httpx.MockTransport(
         lambda _request: httpx.Response(200, json={"code": "200", "location": []}),
     ))["weather.city_search"]
     with pytest.raises(ServiceError) as failure:
         await empty.run(None, None, {"location": "不存在"})
     assert failure.value.code == "weather_location_not_found"
+
+
+async def test_city_search_marks_unique_exact_city_among_child_counties():
+    from app.tools.qweather import qweather_tools
+
+    def respond(_request):
+        return httpx.Response(200, json={"code": "200", "location": [
+            {"id": "city", "name": "\u6c49\u4e2d", "lat": "33.07767", "lon": "107.02862",
+             "adm1": "\u9655\u897f\u7701", "adm2": "\u6c49\u4e2d", "country": "\u4e2d\u56fd"},
+            {"id": "county", "name": "\u7565\u9633", "lat": "33.32964", "lon": "106.1539",
+             "adm1": "\u9655\u897f\u7701", "adm2": "\u6c49\u4e2d", "country": "\u4e2d\u56fd"},
+        ], "refer": {"sources": [ATTRIBUTION]}})
+
+    spec = qweather_tools(configured(), transport=httpx.MockTransport(respond))[
+        "weather.city_search"]
+    result = await spec.run(None, None, {"location": "\u6c49\u4e2d"})
+    assert len(result["candidates"]) == 2
+    assert result["requires_selection"] is False
+    assert result["exact_match"] is True
+    assert result["resolved_candidate"]["id"] == "city"
 
 
 async def test_forecast_keeps_period_units_and_supplier_attribution():
@@ -247,7 +282,7 @@ def test_weather_is_opt_in_and_only_registered_with_complete_configuration(monke
     assert {key for key in registry if key.startswith("weather.")} == {
         "weather.city_search", "weather.current", "weather.forecast",
     }
-    assert all(registry[key].scope == "any" and registry[key].approval_required
+    assert all(registry[key].scope == "any" and not registry[key].approval_required
                for key in registry if key.startswith("weather."))
     monkeypatch.delenv("CITERAG_QWEATHER_API_KEY")
     assert not any(key.startswith("weather.") for key in

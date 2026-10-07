@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from dataclasses import replace
 from uuid import uuid4
 
 import httpx
@@ -16,6 +17,25 @@ from app.tools.qweather import qweather_tools
 
 pytest_plugins = ["test_postgres_local"]
 pytestmark = pytest.mark.postgres
+
+
+def approval_weather(transport):
+    """Keep explicit-approval gateway regressions separate from weather's default policy."""
+    return {name: replace(spec, approval_required=True)
+            for name, spec in qweather_tools(configured(), transport=transport).items()}
+
+
+def test_exact_city_fallback_does_not_turn_a_forecast_into_current_weather():
+    from app.agent.hooks import RunHooks
+
+    decision = {"action": "request_input", "prompt": "Which county?",
+                "fields": {"location": "string"}}
+    results = [{"status": "succeeded", "tool_id": "weather.city_search", "data": {
+        "kind": "city_search", "requires_selection": False, "exact_match": True,
+        "resolved_candidate": {"latitude": 33.07767, "longitude": 107.02862},
+    }}]
+    question = "\u6c49\u4e2d\u4eca\u5929\u8d77\u672a\u6765\u4e09\u5929\u5929\u6c14\u9884\u62a5"
+    assert RunHooks._resolved_current_weather(decision, question, results) == decision
 
 
 @pytest.fixture(autouse=True)
@@ -41,8 +61,7 @@ async def test_weather_approval_scope_idempotency_and_durable_result(environment
         calls.append(request)
         return httpx.Response(200, json=current_response())
 
-    api._transport.app.state.tool_registry.update(qweather_tools(
-        configured(), transport=httpx.MockTransport(respond)))
+    api._transport.app.state.tool_registry.update(approval_weather(httpx.MockTransport(respond)))
     path = f"/api/conversations/{chat}/tools"
     catalog = (await api.get(path)).json()["items"]
     assert len([item for item in catalog if item["id"].startswith("weather.")]) == 3
@@ -81,13 +100,13 @@ async def test_weather_approval_scope_idempotency_and_durable_result(environment
 async def test_failed_weather_is_persisted_safely_and_is_not_a_success(environment):  # noqa: F811
     api, database = environment
     chat = (await api.post("/api/conversations", json={"kb_id": None})).json()["id"]
-    api._transport.app.state.tool_registry.update(qweather_tools(configured(), transport=(
-        httpx.MockTransport(lambda _request: httpx.Response(401, json={"error": {"detail": KEY}}))
-    )))
+    api._transport.app.state.tool_registry.update(qweather_tools(
+        configured(), transport=httpx.MockTransport(
+            lambda _request: httpx.Response(401, json={"error": {"detail": KEY}}))))
     path = f"/api/conversations/{chat}/tools/calls"
-    pending = (await api.post(path, json={"request_id": str(uuid4()),
-               "tool_id": "weather.current", "arguments": {"latitude": 0, "longitude": 0}})).json()
-    response = await api.post(f"{path}/{pending['id']}/decision", json={"approve": True})
+    response = await api.post(path, json={"request_id": str(uuid4()),
+                              "tool_id": "weather.current",
+                              "arguments": {"latitude": 0, "longitude": 0}})
     assert response.json()["status"] == "failed"
     assert response.json()["error_code"] == "weather_auth_failed"
     assert response.json()["result"] is None and KEY not in response.text
@@ -126,8 +145,7 @@ async def test_agent_city_then_weather_uses_one_history_and_no_kb_citations(envi
             pytest.fail("General external-weather answer must not query LightRAG")
 
     app.state.query_adapter = ForbiddenRetriever()
-    app.state.tool_registry.update(qweather_tools(
-        configured(), transport=httpx.MockTransport(respond)))
+    app.state.tool_registry.update(approval_weather(httpx.MockTransport(respond)))
     try:
         accepted = await api.post(path, json={"client_message_id": str(uuid4()),
                                               "text": "合成问题：杭州现在天气怎么样？"})
@@ -171,8 +189,7 @@ async def test_agent_cancel_stops_weather_http_and_persists_interruption(environ
         finally:
             cancelled.set()
 
-    app.state.tool_registry.update(qweather_tools(
-        configured(), transport=httpx.MockTransport(waiting)))
+    app.state.tool_registry.update(approval_weather(httpx.MockTransport(waiting)))
     try:
         run = (await api.post(path, json={"client_message_id": str(uuid4()),
                       "text": "合成问题：查询零度坐标天气"})).json()["id"]
@@ -189,5 +206,52 @@ async def test_agent_cancel_stops_weather_http_and_persists_interruption(environ
             call = await session.scalar(select(ToolCall))
             assert call.status == "interrupted" and call.result is None
         assert (await api.get(f"{path}/{run}")).json()["status"] == "cancelled"
+    finally:
+        await app.state.agent_runtime.close()
+
+
+async def test_exact_city_weather_completes_without_approval_or_repeated_clarification(environment):  # noqa: F811
+    api, database = environment
+    app, chat, path = await ready(api, [
+        {"action": "call_tool", "tool_id": "weather.city_search",
+         "arguments": {"location": "\u6c49\u4e2d"}},
+        {"action": "request_input", "prompt": "Which county?",
+         "fields": {"location": "string"}},
+        {"action": "finish", "answer": {"text": "Synthetic Hanzhong weather."}},
+    ])
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        if request.url.path == "/geo/v2/city/lookup":
+            return httpx.Response(200, json={"code": "200", "location": [
+                {"id": "city", "name": "\u6c49\u4e2d", "lat": "33.07767",
+                 "lon": "107.02862", "adm1": "\u9655\u897f\u7701",
+                 "adm2": "\u6c49\u4e2d", "country": "\u4e2d\u56fd"},
+                {"id": "county", "name": "\u7565\u9633", "lat": "33.32964",
+                 "lon": "106.1539", "adm1": "\u9655\u897f\u7701",
+                 "adm2": "\u6c49\u4e2d", "country": "\u4e2d\u56fd"},
+            ], "refer": {"sources": [ATTRIBUTION]}})
+        assert request.url.path == "/weather/v1/current/33.08/107.03"
+        return httpx.Response(200, json=current_response())
+
+    app.state.tool_registry.update(qweather_tools(
+        configured(), transport=httpx.MockTransport(respond)))
+    try:
+        accepted = await api.post(path, json={
+            "client_message_id": str(uuid4()),
+            "text": "\u6c49\u4e2d\u4eca\u5929\u4ec0\u4e48\u5929\u6c14",
+        })
+        assert accepted.status_code == 202, accepted.text
+        run = await settled(api, path, accepted.json()["id"])
+        assert run["status"] == "completed", run
+        assert run["tool_attempts"] == 2 and run["model_rounds"] == 3
+        assert len(requests) == 2
+        async with database.sessions() as session:
+            calls = list(await session.scalars(
+                select(ToolCall).where(ToolCall.run_id == run["id"])
+            ))
+            assert [call.tool_id for call in calls] == ["weather.city_search", "weather.current"]
+            assert all(call.status == "succeeded" and call.approved_at is None for call in calls)
     finally:
         await app.state.agent_runtime.close()

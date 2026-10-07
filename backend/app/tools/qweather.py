@@ -226,8 +226,20 @@ class QWeatherClient:
         candidates = [{"id": city.id, "name": city.name, "latitude": city.lat,
                        "longitude": city.lon, "adm1": city.adm1, "adm2": city.adm2,
                        "country": city.country} for city in parsed.location]
+        def matches_parent(city):
+            parent = args.adm.casefold()
+            return any(value.casefold() in {parent, parent + "市", parent + "省"}
+                       for value in (city["adm1"], city["adm2"]))
+
+        exact = [city for city in candidates if city["name"].casefold() == args.location.casefold()
+                 and (not args.adm or matches_parent(city))]
+        resolved = (exact[0] if len(exact) == 1 else
+                    candidates[0] if len(candidates) == 1 and not args.adm else None)
         return self.result("city_search", parsed.refer.sources, candidates=candidates,
-                           licenses=parsed.refer.license, requires_selection=len(candidates) > 1)
+                           licenses=parsed.refer.license,
+                           requires_selection=resolved is None,
+                           exact_match=len(exact) == 1,
+                           resolved_candidate=resolved)
 
     async def current(self, arguments: dict) -> dict:
         args = Coordinates.model_validate(arguments)
@@ -308,9 +320,9 @@ def qweather_tools(settings: Settings, *, transport: httpx.AsyncBaseTransport | 
                                    "天气服务返回格式不符合已接入协议") from None
 
         spec = ToolDefinition(
-            f"weather.{name}", title, "any", True,
-            f"{description} 将所示城市名或坐标发往和风天气，每次最多 1 次供应商请求，"
-            "可能按量计费；不读取聊天正文或知识库。", validate, run,
+            f"weather.{name}", title, "any", False,
+            f"{description} 将所示城市名或坐标发往和风天气，每次最多 1 次供应商请求。"
+            "该只读调用无需逐次审批，可能按量计费；不读取聊天正文或知识库。", validate, run,
             version=f"qweather-geo2-weather1-{host_version}",
             input_schema=model.model_json_schema(), timeout_seconds=12,
             destination="QWeather（后端配置的专属 API Host）",

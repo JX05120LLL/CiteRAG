@@ -235,8 +235,6 @@ export function Workbench({ view, api }: { view: AppView; api: ApiClient }) {
         <Button size="small" onClick={() => setToolOpen(true)}>工具与调用记录</Button></Space>
     </div>}
     {s.chatError && <Alert showIcon type="error" title={s.chatError.message} />}
-    {s.agentEnabled && s.selectedChatId && <AgentTasks key={s.selectedChatId} chatId={s.selectedChatId}
-      api={api} changed={a.refreshAgentMessages} onWaitingInput={setInputRun} />}
     <div className="message-scroll" aria-live="polite" aria-busy={busy}>
       {!s.chatMessages.length && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={s.selectedChatId ? s.selectedKbId === null ? '直接提问；本聊天不会检索知识库' : '直接提问，自动区分交流与资料查询' : '新建普通聊天或选择知识库聊天'} />}
       {s.chatMessages.map((m) => {
@@ -245,7 +243,9 @@ export function Workbench({ view, api }: { view: AppView; api: ApiClient }) {
         const streaming = m.status === 'running' && s.chatStreamAttemptId === m.attempt_id;
         const content = !readable ? '知识库已变化，此回答与来源已暂停展示。'
           : m.phase === 'waiting_approval' ? '等待你核对并审批工具操作，本轮回答尚未完成。'
-            : m.phase === 'waiting_input' ? '等待你补充参数，本轮回答尚未完成。'
+            : m.phase === 'waiting_input' ? waitingInput?.message_id === m.message_id
+              ? waitingInput.waiting?.prompt || '等待你补充参数，本轮回答尚未完成。'
+              : '等待你补充参数，本轮回答尚未完成。'
               : m.status === 'running' || !m.saved ? '正在生成并核验，正文提交后再展示。'
           : ['failed', 'interrupted'].includes(m.status) ? answerFailure(m.error_code)
             : m.status === 'insufficient_evidence' ? '当前知识库没有足够的可核查证据，暂不作答。'
@@ -277,6 +277,8 @@ export function Workbench({ view, api }: { view: AppView; api: ApiClient }) {
                 onClick={() => void a.retryChat(m.message_id)}>重试回答</Button>}
           </div><time className="answer-time" dateTime={m.created_at}>{messageTime(m.created_at)}</time></div></article>;
       })}
+      {s.agentEnabled && s.selectedChatId && <AgentTasks key={s.selectedChatId} chatId={s.selectedChatId}
+        api={api} changed={a.refreshAgentMessages} onWaitingInput={setInputRun} showHistory={false} />}
     </div>
     <div className="composer"><input ref={imageInput} type="file" accept="image/png,image/jpeg" multiple hidden
       aria-label="选择提问图片" onChange={(event) => { a.selectChatImages(Array.from(event.target.files ?? [])); event.target.value = ''; }} />

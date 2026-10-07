@@ -299,6 +299,35 @@ async def test_explicit_replan_uses_saved_detail_then_still_requires_tool_approv
         await app.state.agent_runtime.close()
 
 
+async def test_general_clarification_stops_as_a_message_at_model_limit(environment):  # noqa: F811
+    api, _ = environment
+    app, chat, path = await ready(api, [
+        {"action": "request_input", "prompt": "Which location?",
+         "fields": {"location": "string"}} for _ in range(6)
+    ])
+    try:
+        response = await api.post(path, json={"client_message_id": str(uuid4()),
+                                              "text": "Synthetic weather request"})
+        assert response.status_code == 202
+        run_id = response.json()["id"]
+        for _ in range(5):
+            waiting = await settled(api, path, run_id)
+            assert waiting["status"] == "waiting_input", waiting
+            resumed = await api.post(f"{path}/{run_id}/resume", json={
+                "request_id": str(uuid4()), "generation": waiting["generation"],
+                "input": {"detail": "still ambiguous"},
+            })
+            assert resumed.status_code == 202
+        done = await settled(api, path, run_id)
+        assert done["status"] == "completed" and done["model_rounds"] == 6
+        assert done["waiting"] is None and done["tool_attempts"] == 0
+        messages = (await api.get(f"/api/conversations/{chat}/messages")).json()["items"]
+        assert len(messages) == 1 and messages[0]["saved"] is True
+        assert "\u5df2\u505c\u6b62" in messages[0]["text"]
+    finally:
+        await app.state.agent_runtime.close()
+
+
 async def test_invalid_model_shape_fails_without_tool_and_unlocks_chat(environment):  # noqa: F811
     api, _ = environment
     app, _, path = await ready(api, [

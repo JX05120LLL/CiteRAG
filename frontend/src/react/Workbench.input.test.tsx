@@ -28,7 +28,7 @@ it('uses the main composer to continue a waiting text task in the same chat', as
     const [state] = useState(() => ({
       agentEnabled: true, selectedChatId: 'chat', selectedKbId: null, bases: [],
       chats: [], chatMessages: [{ message_id: 'message', attempt_id: 'attempt',
-        client_message_id: 'client', question: 'Weather?', mode: 'auto', route: null,
+        client_message_id: 'client', question: 'Weather?', mode: 'auto', route: 'general',
         status: 'running', phase: 'waiting_input', text: '', citations: [], kb_revision: 0,
         error_code: null, created_at: '2026-10-01T00:00:00Z', saved: false }],
       chatDraft: '', chatPending: false, loading: false, chatImages: [],
@@ -40,6 +40,8 @@ it('uses the main composer to continue a waiting text task in the same chat', as
   }
   render(<Harness />);
   await screen.findByText('Which location?');
+  expect(document.querySelector('.message-scroll .agent-task')).not.toBeNull();
+  expect(document.querySelector('.answer-card .answer-text')?.textContent).toBe('Which location?');
   const input = document.querySelector<HTMLTextAreaElement>('.composer textarea');
   expect(input?.disabled).toBe(false);
   fireEvent.change(input!, { target: { value: 'Hanzhong' } });
@@ -70,7 +72,7 @@ it('restores image and voice actions promptly after cancelling a waiting task', 
     const [state] = useState(() => ({
       agentEnabled: true, selectedChatId: 'chat', selectedKbId: null, bases: [],
       chats: [], chatMessages: [{ message_id: 'message', attempt_id: 'attempt',
-        client_message_id: 'client', question: 'Weather?', mode: 'auto', route: null,
+        client_message_id: 'client', question: 'Weather?', mode: 'auto', route: 'general',
         status: 'running', phase: 'waiting_input', text: '', citations: [], kb_revision: 0,
         error_code: null, created_at: '2026-10-07T00:00:00Z', saved: false }],
       chatDraft: '', chatPending: false, loading: false, chatImages: [],

@@ -372,6 +372,11 @@ class RagRuntime:
             "工具结果出现确实无法消除的歧义时，才用 request_input 请求具体的缺失信息；"
             "不得猜测候选地点，也不得把提问当作工具调用成功。"
         )
+        system += (
+            "\nweather.city_search 返回 exact_match=true 且 resolved_candidate 非空时，"
+            "用户已明确该城市；使用其坐标查询所需天气，不要追问该城市下辖区县。"
+            "若 requires_selection=true 且没有唯一匹配，才用聊天追问上级行政区。"
+        )
         # Agent decisions include the full validated tool catalog on general turns too.
         messages = fit_chat_messages(system, {
             "question": question, "evidence": evidence, "conversation_context": context,

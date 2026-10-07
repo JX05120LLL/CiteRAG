@@ -167,11 +167,15 @@ async def test_input_resume_cannot_reset_model_round_budget():
     assert len(hooks.seen) == 6
 
 
-async def test_single_missing_tool_text_continues_same_decision_without_replanning():
+async def test_missing_tool_natural_text_is_replanned_without_blind_field_mapping():
     from langgraph.checkpoint.memory import InMemorySaver
     from langgraph.types import Command
 
     class MissingToolHooks(Hooks):
+        async def plan(self, state):
+            self.seen.append(state.get("supplements", []))
+            return self.decisions.pop(0)
+
         async def prepare(self, state):
             if "location" not in state["decision"]["arguments"]:
                 return {"kind": "input", "fields": {"location": "string"},
@@ -180,6 +184,8 @@ async def test_single_missing_tool_text_continues_same_decision_without_replanni
 
     hooks = MissingToolHooks([
         {"action": "call_tool", "tool_id": "test.read", "arguments": {}},
+        {"action": "call_tool", "tool_id": "test.read",
+         "arguments": {"location": "Hanzhong"}},
         {"action": "finish", "answer": {"text": "done"}},
     ])
     task_id = str(uuid4())
@@ -188,6 +194,7 @@ async def test_single_missing_tool_text_continues_same_decision_without_replanni
     waiting = await compiled.ainvoke(engine().initial_state(task_id), config)
     assert waiting["__interrupt__"] and len(hooks.seen) == 1
     result = await compiled.ainvoke(Command(resume={"detail": "Hanzhong"}), config)
-    assert result["model_rounds"] == 2
+    assert result["model_rounds"] == 3
     assert hooks.executed == ["test.read"]
-    assert len(hooks.seen) == 2
+    assert hooks.seen[1][0]["reply_text"] == "Hanzhong"
+    assert hooks.seen[1][0]["requested_fields"] == {"location": "string"}

@@ -123,21 +123,26 @@ def build_graph(hooks: AgentHooks, checkpointer=None):
         waiting = state.get("waiting") or {}
         if waiting.get("kind") == "input":
             response = state["response"]
-            supplement = {"supplements": state["supplements"] + [response], "waiting": None}
             fields = waiting.get("fields") or {}
+            if set(response) == {"detail"}:
+                clarification = {
+                    "reply_text": response["detail"],
+                    "requested_fields": fields,
+                    "tool_id": waiting.get("tool_id"),
+                    "prior_arguments": waiting.get("arguments", {}),
+                }
+                return {"supplements": state["supplements"] + [clarification],
+                        "waiting": None, "retry_prepare": False}
+            supplement = {"supplements": state["supplements"] + [response], "waiting": None}
             decision = state["decision"]
             if (decision["action"] == "call_tool"
                 and waiting.get("tool_id") == decision["tool_id"]
-                and waiting.get("arguments") == decision["arguments"]):
-                values = response
-                if (set(response) == {"detail"} and len(fields) == 1
-                    and next(iter(fields.values())) == "string"):
-                    values = {next(iter(fields)): response["detail"]}
-                if set(values) == set(fields):
-                    supplement["decision"] = checked_decision({
-                        **decision, "arguments": {**decision["arguments"], **values},
-                    })
-                    supplement["retry_prepare"] = True
+                and waiting.get("arguments") == decision["arguments"]
+                and set(response) == set(fields)):
+                supplement["decision"] = checked_decision({
+                    **decision, "arguments": {**decision["arguments"], **response},
+                })
+                supplement["retry_prepare"] = True
             return supplement
         if waiting.get("kind") == "approval" and state["response"].get("approve") is not True:
             result = {"status": "rejected", "source_type": "tool", "data": None}

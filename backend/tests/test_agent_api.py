@@ -65,6 +65,8 @@ async def test_missing_tool_location_accepts_chat_text_and_keeps_one_task(enviro
     api, _ = environment
     app, chat, path = await ready(api, [
         {"action": "call_tool", "tool_id": "synthetic.location", "arguments": {}},
+        {"action": "call_tool", "tool_id": "synthetic.location",
+         "arguments": {"location": "Hanzhong"}},
         {"action": "finish", "answer": {"text": "Synthetic location accepted."}},
     ])
     executions = []
@@ -87,12 +89,17 @@ async def test_missing_tool_location_accepts_chat_text_and_keeps_one_task(enviro
         assert waiting["status"] == "waiting_input" and waiting["tool_attempts"] == 0
         key = str(uuid4())
         body = {"request_id": key, "generation": waiting["generation"],
-                "input": {"detail": "Hanzhong"}}
+                "input": {"detail": "Please check the weather in Hanzhong"}}
         resumed = await api.post(f"{path}/{waiting['id']}/resume", json=body)
         assert resumed.status_code == 202, resumed.text
         done = await settled(api, path, waiting["id"])
         assert done["status"] == "completed" and done["tool_attempts"] == 1
-        assert done["model_rounds"] == 2 and executions == [{"location": "Hanzhong"}]
+        assert done["model_rounds"] == 3 and executions == [{"location": "Hanzhong"}]
+        assert app.state.answer_adapter.inputs[1]["context"]["task_supplements"][0] == {
+            "reply_text": "Please check the weather in Hanzhong",
+            "requested_fields": {"location": "string"},
+            "tool_id": "synthetic.location", "prior_arguments": {},
+        }
         assert (await api.post(f"{path}/{waiting['id']}/resume", json=body)).status_code == 202
         assert executions == [{"location": "Hanzhong"}]
         assert len((await api.get(path)).json()["items"]) == 1
@@ -136,6 +143,116 @@ async def test_missing_tool_input_rejects_changed_tool_contract(environment):  #
         assert rejected.status_code == 409
         assert rejected.json()["detail"]["code"] == "tool_scope_changed"
         assert executions == []
+    finally:
+        await app.state.agent_runtime.close()
+
+
+async def test_natural_multifield_reply_keeps_original_text_for_model_decision(environment):  # noqa: F811
+    from app.tools.gateway import ToolDefinition
+
+    api, _ = environment
+    app, _, path = await ready(api, [
+        {"action": "call_tool", "tool_id": "synthetic.weather", "arguments": {}},
+        {"action": "call_tool", "tool_id": "synthetic.weather",
+         "arguments": {"location": "Hanzhong", "days": 3}},
+        {"action": "finish", "answer": {"text": "Synthetic forecast."}},
+    ])
+    executions = []
+
+    async def run(_session, _context, arguments):
+        executions.append(arguments)
+        return {"synthetic": True}
+
+    app.state.tool_registry["synthetic.weather"] = ToolDefinition(
+        "synthetic.weather", "Synthetic weather", "any", False, "Local synthetic read",
+        lambda arguments: arguments, run,
+        input_schema={"type": "object", "properties": {
+            "location": {"type": "string"}, "days": {"type": "integer"}},
+            "required": ["location", "days"], "additionalProperties": False},
+    )
+    try:
+        response = await api.post(path, json={"client_message_id": str(uuid4()),
+                                              "text": "Synthetic forecast task"})
+        waiting = await settled(api, path, response.json()["id"])
+        assert waiting["status"] == "waiting_input" and not executions
+        resumed = await api.post(f"{path}/{waiting['id']}/resume", json={
+            "request_id": str(uuid4()), "generation": waiting["generation"],
+            "input": {"detail": "Please use Hanzhong for the next three days"},
+        })
+        assert resumed.status_code == 202
+        done = await settled(api, path, waiting["id"])
+        assert done["status"] == "completed" and executions == [
+            {"location": "Hanzhong", "days": 3},
+        ]
+        supplement = app.state.answer_adapter.inputs[1]["context"]["task_supplements"][0]
+        assert supplement["reply_text"] == "Please use Hanzhong for the next three days"
+        assert supplement["requested_fields"] == {"location": "string", "days": "integer"}
+    finally:
+        await app.state.agent_runtime.close()
+
+
+async def test_irrelevant_reply_remains_waiting_then_cancel_unlocks_chat(environment):  # noqa: F811
+    from app.tools.gateway import ToolDefinition
+
+    api, _ = environment
+    app, _, path = await ready(api, [
+        {"action": "call_tool", "tool_id": "synthetic.location", "arguments": {}},
+        {"action": "request_input", "prompt": "Which city?", "fields": {"location": "string"}},
+        {"action": "finish", "answer": {"text": "New task succeeded."}},
+    ])
+    executions = []
+
+    async def run(_session, _context, arguments):
+        executions.append(arguments)
+        return {"synthetic": True}
+
+    app.state.tool_registry["synthetic.location"] = ToolDefinition(
+        "synthetic.location", "Synthetic location", "any", False, "Local synthetic read",
+        lambda arguments: arguments, run,
+        input_schema={"type": "object", "properties": {"location": {"type": "string"}},
+                      "required": ["location"], "additionalProperties": False},
+    )
+    try:
+        response = await api.post(path, json={"client_message_id": str(uuid4()),
+                                              "text": "Synthetic location task"})
+        waiting = await settled(api, path, response.json()["id"])
+        resumed = await api.post(f"{path}/{waiting['id']}/resume", json={
+            "request_id": str(uuid4()), "generation": waiting["generation"],
+            "input": {"detail": "Hello"},
+        })
+        assert resumed.status_code == 202
+        still_waiting = await settled(api, path, waiting["id"])
+        assert still_waiting["status"] == "waiting_input"
+        assert still_waiting["tool_attempts"] == 0 and executions == []
+        assert app.state.answer_adapter.inputs[1]["context"]["task_supplements"][0][
+            "reply_text"] == "Hello"
+        cancelled = await api.post(f"{path}/{waiting['id']}/cancel")
+        assert cancelled.status_code == 200 and cancelled.json()["status"] == "cancelled"
+        next_task = await api.post(path, json={"client_message_id": str(uuid4()),
+                                               "text": "A new task"})
+        assert next_task.status_code == 202
+        assert (await settled(api, path, next_task.json()["id"]))["status"] == "completed"
+    finally:
+        await app.state.agent_runtime.close()
+
+
+async def test_invalid_model_shape_fails_without_tool_and_unlocks_chat(environment):  # noqa: F811
+    api, _ = environment
+    app, _, path = await ready(api, [
+        {"text": "Do not execute", "action": "call_tool", "tool_id": "local.calculate",
+         "arguments": {"expression": "1+1"}},
+        {"action": "finish", "answer": {"text": "New task succeeded."}},
+    ])
+    try:
+        first = await api.post(path, json={"client_message_id": str(uuid4()),
+                                           "text": "Synthetic invalid decision"})
+        failed = await settled(api, path, first.json()["id"])
+        assert failed["status"] == "failed" and failed["error_code"] == "agent_decision_invalid"
+        assert failed["tool_attempts"] == 0
+        next_task = await api.post(path, json={"client_message_id": str(uuid4()),
+                                               "text": "A new task"})
+        assert next_task.status_code == 202
+        assert (await settled(api, path, next_task.json()["id"]))["status"] == "completed"
     finally:
         await app.state.agent_runtime.close()
 

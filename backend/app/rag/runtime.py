@@ -358,6 +358,12 @@ class RagRuntime:
             "工具结果是独立外部来源，绝不是知识库证据；资料事实只能由本轮 evidence 支持。"
             "没有工具提供的实时数据时，不声称已经查过。不要重复无进展调用。"
         )
+        system += (
+            "\ntask_supplements 中的 reply_text 是用户对上次提问的原话，"
+            "requested_fields 是待补字段。"
+            "只从明确相关的内容提取字段值；不要把整句、无关回复或猜测值直接作为工具参数。"
+            "若补充仍不足或含糊，再次请求具体信息。工具参数仍须符合已登记 schema。"
+        )
         messages = fit_chat_messages(system, {
             "question": question, "evidence": evidence, "conversation_context": context,
             "allowed_tools": tools, "tool_results": results,

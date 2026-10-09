@@ -40,7 +40,7 @@ jobs:
               raise SystemExit("Tracked backend tests and the public manifest differ:\n"
                                + "\n".join(sorted(expected_backend ^ tracked_backend)))
           patterns = (
-              ".local/*", "output/*", "scripts/*", "LiveRAG/*", "LightRAG/*",
+              ".local/*", "docs/*", "output/*", "scripts/*", "LiveRAG/*", "LightRAG/*",
               ".playwright-cli/*", "frontend/.playwright-cli/*",
               "backend/tests/*", "frontend/*.test.*", "frontend/*.spec.*",
           )

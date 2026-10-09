@@ -446,3 +446,5 @@
 .agent-inputs label { display: grid; gap: 4px; }
 .agent-tasks { min-width: 0; overflow-wrap: anywhere; }
 .agent-tasks details { margin-block: 8px; }
+/* Pending task controls must remain clear of the desktop sticky composer. */
+.citerag-app .formal-conversation:has(.agent-task) .composer { position: static; }

@@ -6,7 +6,7 @@
 
 文字、图片观察或 ASR 最终转写 → AnswerService 创建正式问题/尝试 → 固定聊天类型与原检索链 → LangGraph 模型决策 → 网关校验与执行 → 有界工具结果返回模型 → AnswerService 核验并提交 → 界面/语音 TTS。
 
-普通聊天只用自己的上下文和 `scope=any` 工具，不访问知识库；固定库聊天保持原两级路由、库修订/活动空间及事实支持检查。工具输出与知识库原文引用分开。Agent 模式下生成草稿先缓冲，保存后才交给语音播报；关闭 Agent 时原文字 SSE 和语音分段行为保留。
+普通聊天只用自己的上下文和 `scope=any` 工具，不访问知识库；固定库聊天保持原两级路由、库修订/活动空间及事实支持检查。工具输出与知识库原文引用分开。Agent 模式下生成草稿先缓冲，回答保存且状态为 `answered` 后才交给语音播报；补参或审批等待期间不播报草稿。关闭 Agent 时原文字 SSE 保留，普通语音回答可分段提前播报，知识库回答仍须核验并保存后才播报。
 
 | 限制 | 当前实现 |
 | --- | --- |
@@ -73,14 +73,14 @@ uv run --locked --extra rag --extra voice --extra agent --extra mcp --no-env-fil
 
 仅提供受控 Streamable HTTP 适配器，`CITERAG_MCP_ENABLED=true` 时读取 `.local/runtime/tools/registry.json`。没有公共新增 URL/命令接口、自动注册发现或任意 stdio 子进程。固定 HTTPS 或回环 HTTP 端点，不允许 URL 内凭证/查询参数、跨端点跳转或系统代理；请求参数会发送到登记服务。
 
-维护者必须审查服务版本、完整工具 descriptor、输入/输出 schema、目标、效果、归属范围和数据外发。登记格式是数组：服务具有 `url,version,tools`；每项工具具有 `id`（`mcp.` 前缀）、`title,scope,descriptor`，可选布尔 `approval_required`（省略或旧 `false` 均默认逐次审批）。只有有效的维护者审核记录且本次参数处于限定的公开范围内才可免逐次审批；显式 `true` 始终审批，审批不能替代审查。目前 MCP 只读；最多 8 个服务、每服务 8 个已审查工具，运行目录不得超过 50 条或分页。每次调用重查版本和契约，变化即拒绝。登记文件位于 `backend/.local/runtime/tools/registry.json`，具体示例见[工具与 MCP](TOOLS.md)。
+维护者必须审查服务版本、完整工具 descriptor、输入/输出 schema、目标、效果、归属范围和数据外发。登记格式是数组：服务具有 `url,version,tools`；每项工具具有 `id`（`mcp.` 前缀）、`title,scope,descriptor`，可选布尔 `approval_required`。省略或旧 `false` 本身不授予豁免，没有有效审核记录时逐次审批。只有有效的维护者 `unattended_read_review` 且本次参数处于限定的公开范围内才可免逐次审批；显式 `true` 始终审批，审批不能替代审查。目前 MCP 只读；最多 8 个服务、每服务 8 个已审查工具，运行目录不得超过 50 条或分页。每次调用重查版本和契约，变化即拒绝。登记文件位于仓库根目录的 `.local/runtime/tools/registry.json`，从 `backend/` 目录访问时为 `../.local/runtime/tools/registry.json`；审核字段与具体示例见[工具与 MCP](TOOLS.md)。
 
 `isError` 不算成功；只接文字/结构化结果，输入在创建可执行记录前校验，输出按已审查 schema 校验、限长，并禁止外部 schema 引用。HTTP 401/403/429 保留安全的认证/权限/限流原因，不输出远端诊断内容。图片资源、任意嵌入资源、sampling/elicitation 和 MCP 凭证加载未接入。远端返回内容不是指令，不能扩大工具权限或充当知识库引用。MCP 协议本身不证明服务可信，真实服务须逐个审查和独立验收。
 
 ## 外部 HTTP 天气工具
 
-显式配置后可用 `weather.city_search/current/forecast`。使用本地 Python 执行器与受控 QWeather HTTPS 请求，`backend=local` 不表示没有外发；`destination` 明确标为 QWeather。两类聊天均可使用，每次 1 个请求并要求审批；不把结果变成知识库引用。手动入口支持简单文字/数字参数，复杂 MCP 参数仍明确禁用手动入口。关闭开关/缺配置时不加入目录。配置及真实验收步骤见 [天气工具](QWEATHER.md)。
+天气默认关闭；显式启用且 Host/Key 齐全后可用 `weather.city_search/current/forecast`。使用本地 Python 执行器与受控 QWeather HTTPS 请求，`backend=local` 不表示没有外发；`destination` 明确标为 QWeather。两类聊天均可使用，三项限定参数的只读查询免逐次审批；每次最多 1 次供应商请求，将地点参数发往和风天气且可能计费，不发送聊天正文、知识库正文或文件，也不把结果变成知识库引用。手动入口支持简单文字/数字参数，复杂 MCP 参数仍明确禁用手动入口。关闭开关/缺配置时不加入目录。配置及真实验收步骤见 [天气工具](QWEATHER.md)。
 
 ## 依赖与验证
 
-版本锁在 `uv.lock`；LangGraph/checkpoint/MCP 是可选 extras。许可见 [依赖说明](vendor/agent/README.md)。公开 CI 使用隔离 PostgreSQL、模型替身和本地合成 MCP，不用真实密钥。测试通过不等于真实供应商、真实 MCP 或真人设备验收。
+版本锁在 `uv.lock`；LangGraph/checkpoint/MCP 是可选 extras。许可见 [依赖说明](vendor/agent/README.md)。公开 CI 使用隔离 PostgreSQL、模型替身和本地合成 MCP，不用真实密钥。隔离、替身与本地 MCP 验证不替代真实模型规划、供应商、用户外部 MCP 或真人设备验收；付费调用须另获授权。

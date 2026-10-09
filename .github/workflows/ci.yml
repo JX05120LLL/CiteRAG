@@ -25,47 +25,26 @@ jobs:
         shell: python
         run: |
           import fnmatch
+          from pathlib import Path
+          import re
           import subprocess
 
           paths = subprocess.check_output(["git", "ls-files", "-z"]).decode().split("\0")
+          backend_tests = Path(".github/public-backend-tests.txt").read_text(encoding="utf-8").splitlines()
+          if (not backend_tests or len(backend_tests) != len(set(backend_tests))
+              or any(not re.fullmatch(r"tests/test_[a-z0-9_]+\.py", path) for path in backend_tests)):
+              raise SystemExit("Public backend test manifest must contain unique test file paths.")
+          expected_backend = {f"backend/{path}" for path in backend_tests}
+          tracked_backend = {path for path in paths if path.startswith("backend/tests/")}
+          if expected_backend != tracked_backend:
+              raise SystemExit("Tracked backend tests and the public manifest differ:\n"
+                               + "\n".join(sorted(expected_backend ^ tracked_backend)))
           patterns = (
               ".local/*", "output/*", "scripts/*", "LiveRAG/*", "LightRAG/*",
               ".playwright-cli/*", "frontend/.playwright-cli/*",
               "backend/tests/*", "frontend/*.test.*", "frontend/*.spec.*",
           )
           public_tests = {
-              "backend/tests/test_postgres_local.py",
-              "backend/tests/test_ingestion_lifecycle.py",
-              "backend/tests/test_ingestion_jobs.py",
-              "backend/tests/test_query_routing.py",
-              "backend/tests/test_m13_exact_api.py",
-              "backend/tests/test_m13_answer_api.py",
-              "backend/tests/test_source_mapping_line_ranges.py",
-              "backend/tests/test_article_evidence_selection.py",
-              "backend/tests/test_m1_stream.py",
-              "backend/tests/test_m14_lifecycle.py",
-              "backend/tests/test_voice_transport.py",
-              "backend/tests/test_m2_voice.py",
-              "backend/tests/test_voice_latency.py",
-              "backend/tests/test_m3_image_storage.py",
-              "backend/tests/test_m3_images_api.py",
-              "backend/tests/test_m3_image_provider.py",
-              "backend/tests/test_conversation_modes.py",
-              "backend/tests/test_tool_gateway.py",
-              "backend/tests/test_local_calculator.py",
-              "backend/tests/test_qweather_tools.py",
-              "backend/tests/test_qweather_api.py",
-              "backend/tests/test_qweather_local_config.py",
-              "backend/tests/test_status_checks.py",
-              "backend/tests/test_functional_checks.py",
-              "backend/tests/test_agent_contracts.py",
-              "backend/tests/test_agent_graph.py",
-              "backend/tests/test_agent_api.py",
-              "backend/tests/test_agent_semantic_prompt.py",
-              "backend/tests/test_agent_boundaries.py",
-              "backend/tests/test_agent_knowledge.py",
-              "backend/tests/test_agent_mcp.py",
-              "backend/tests/test_agent_persistence.py",
               "frontend/src/api/client.test.ts",
               "frontend/src/api/stream.test.ts",
               "frontend/src/app.test.ts",
@@ -81,7 +60,7 @@ jobs:
               "frontend/src/react/AgentTasks.test.tsx",
               "frontend/src/react/Status.check.test.tsx",
               "frontend/src/react/Workbench.input.test.tsx",
-          }
+          } | expected_backend
           private_names = (
               ".env", ".env.*", "*.pem", "*.key", "*.p12", "*.pfx",
               "credentials*.json", "*.credential.xml", "*.backup.xml", "*.dpapi",
@@ -154,6 +133,7 @@ jobs:
 
   backend:
     name: Backend tests and PostgreSQL smoke
+    needs: repository
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     defaults:
@@ -191,11 +171,16 @@ jobs:
       - name: Install locked dependencies
         run: uv sync --locked --extra rag --extra voice --extra agent --extra mcp
       - name: Lint and compile
+        shell: bash
         run: |
-          uv run --locked --extra rag --extra voice --extra agent --extra mcp --no-env-file ruff check app migrations tests/test_postgres_local.py tests/test_ingestion_jobs.py tests/test_ingestion_lifecycle.py tests/test_query_routing.py tests/test_m13_exact_api.py tests/test_m13_answer_api.py tests/test_source_mapping_line_ranges.py tests/test_article_evidence_selection.py tests/test_m1_stream.py tests/test_m14_lifecycle.py tests/test_voice_transport.py tests/test_m2_voice.py tests/test_voice_latency.py tests/test_m3_image_storage.py tests/test_m3_images_api.py tests/test_m3_image_provider.py tests/test_conversation_modes.py tests/test_tool_gateway.py tests/test_local_calculator.py tests/test_qweather_tools.py tests/test_qweather_api.py tests/test_agent_contracts.py tests/test_agent_graph.py tests/test_agent_api.py tests/test_agent_boundaries.py tests/test_agent_knowledge.py tests/test_agent_mcp.py tests/test_agent_persistence.py
+          mapfile -t public_tests < ../.github/public-backend-tests.txt
+          uv run --locked --extra rag --extra voice --extra agent --extra mcp --no-env-file ruff check app migrations "${public_tests[@]}"
           uv run --locked --extra rag --extra voice --extra agent --extra mcp --no-env-file python -m compileall -q app migrations
       - name: Public PostgreSQL and routing regressions
-        run: uv run --locked --extra rag --extra voice --extra agent --extra mcp --no-env-file pytest -q tests/test_postgres_local.py tests/test_ingestion_jobs.py tests/test_ingestion_lifecycle.py tests/test_query_routing.py tests/test_m13_exact_api.py tests/test_m13_answer_api.py tests/test_source_mapping_line_ranges.py tests/test_article_evidence_selection.py tests/test_m1_stream.py tests/test_m14_lifecycle.py tests/test_voice_transport.py tests/test_m2_voice.py tests/test_voice_latency.py tests/test_m3_image_storage.py tests/test_m3_images_api.py tests/test_m3_image_provider.py tests/test_conversation_modes.py tests/test_tool_gateway.py tests/test_local_calculator.py tests/test_qweather_tools.py tests/test_qweather_api.py tests/test_agent_contracts.py tests/test_agent_graph.py tests/test_agent_api.py tests/test_agent_boundaries.py tests/test_agent_knowledge.py tests/test_agent_mcp.py tests/test_agent_persistence.py
+        shell: bash
+        run: |
+          mapfile -t public_tests < ../.github/public-backend-tests.txt
+          uv run --locked --extra rag --extra voice --extra agent --extra mcp --no-env-file pytest -q "${public_tests[@]}"
       - name: Generate migration SQL
         run: uv run --locked --extra rag --extra voice --extra agent --extra mcp --no-env-file alembic upgrade head --sql > "$RUNNER_TEMP/citerag-migration.sql"
       - name: Migrate and verify local API behavior

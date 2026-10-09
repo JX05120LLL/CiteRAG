@@ -9,7 +9,7 @@
 | `local.time` | 两类聊天 | 读取本机 UTC 时间，无外发 |
 | `local.calculate` | 两类聊天 | 本地有界十进制四则运算，无外发 |
 | `kb.documents` | 固定知识库聊天 | 只读当前绑定库的资料名称和状态；普通聊天不提供 |
-| `weather.city_search/current/forecast` | 两类聊天，可选 | 和风天气 HTTPS；每次显示参数并审批，默认关闭，见[配置](QWEATHER.md) |
+| `weather.city_search/current/forecast` | 两类聊天，可选 | 默认关闭；显式配置后的三项只读查询免逐次审批，地点参数外发至和风天气 HTTPS，每次最多 1 次请求且可能计费，见[配置](QWEATHER.md) |
 | `mcp.local.calculate` | 两类聊天，审查登记后 | 本文参考服务；真实 Streamable HTTP，默认示例要求审批 |
 
 计算器接受 `{"expression":"(0.1 + 0.2) * 3"}`。只支持数字、小数点、括号、`+ - * /`；不支持函数、幂、科学计数法、变量或代码。表达式最多 256 字符、括号最多 32 层、AST 最多 64 节点、数字字面量最多 64 字符。按 28 位有效数字计算，返回十进制字符串；`rounded=true` 表示发生近似，不能称为任意精度计算。除零和结果超限返回安全失败原因，失败记录无成功结果。
@@ -34,7 +34,7 @@ uv run --locked --extra mcp --no-env-file python -m app.tools.local_mcp --port 8
 uv run --locked --extra mcp --no-env-file python -m app.tools.local_mcp --port 8765 --print-registry
 ```
 
-核对输出中的地址、版本、完整输入/输出 schema 和工具效果，再将该数组中的服务条目合并到 **`backend/.local/runtime/tools/registry.json`**。已有登记须保留，不能用示例覆盖；没有文件时才新建数组。不要加入凭证或私人内容。模板中的工具 ID 为 `mcp.local.calculate`，`scope=any`、`approval_required=true`；`descriptor` 必须使用命令输出的完整对象，不能手工缩写。命令输出使用 UTF-8。
+核对输出中的地址、版本、完整输入/输出 schema 和工具效果，再将该数组中的服务条目合并到**仓库根目录的 `.local/runtime/tools/registry.json`**（从 `backend/` 目录访问时为 `../.local/runtime/tools/registry.json`）。已有登记须保留，不能用示例覆盖；没有文件时才新建数组。不要加入凭证或私人内容。模板中的工具 ID 为 `mcp.local.calculate`，`scope=any`、`approval_required=true`；`descriptor` 必须使用命令输出的完整对象，不能手工缩写。命令输出使用 UTF-8。
 
 在受控 API 环境设置 `CITERAG_MCP_ENABLED=true`，按照 [Agent 启动说明](AGENT.md)启动唯一 API owner。Agent 自动选择工具还需明确启用 Agent/回答、完成受控模型配置及适用付费授权；手动入口无需模型。实际业务库迁移仍需另行授权，本示例不迁移数据库。
 
@@ -87,13 +87,13 @@ MCP 不证明服务可信；远端内容不能充当指令或扩大权限。参�
 | 取消任务 | `cancelAgent` | POST `/agent-runs/{run}/cancel`，实际取消在途任务 |
 | MCP 计算 | `MCPAdapter.call`（后端） | `initialize` → 版本检查 → `list_tools` 契约检查 → `call_tool` |
 
-表中缩写路径均继续以 `/api/conversations/{chat}` 开头。审批接口和业务 schema 保持原样；语音继续使用当前通话的控制端凭证与同一 AnswerService。
+表中缩写路径均继续以 `/api/conversations/{chat}` 开头。审批接口和业务 schema 保持原样；语音继续使用当前通话的控制端凭证与同一 AnswerService。Agent 语音回答在保存且状态为 `answered` 后才播报，补参或审批等待期间不播报草稿。关闭 Agent 时，普通语音回答可分段提前播报；知识库回答仍须核验并保存后才播报。
 
 ## 集中验收
 
 1. 在独立空库按 Agent 说明准备环境，启动本地参考 MCP 和 API。先用普通聊天的“工具与调用记录”计算 `0.1 + 0.2`，预期真实结果 `0.3`；计算 `1 / 0`，预期除零原因及失败记录。
 2. 调用 MCP 计算器，审批前只显示待确认参数；拒绝后无结果，批准后保存真实 `0.3`，刷新仍可查看。
-3. 已获模型调用授权并启用 Agent 后，提问“用计算器计算 0.1 加 0.2”。是否选择工具取决于真实模型，不以本轮合成模型结果替代这项验收。若请求 MCP，须先审批；保存回答不生成知识库引用。
+3. 已获模型调用授权并启用 Agent 后，提问“用计算器计算 0.1 加 0.2”。是否选择工具取决于真实模型，不以合成模型结果替代这项验收。若请求本文默认登记的 MCP 计算器，须先审批；只有有效审核记录覆盖本次公开参数时才可豁免，显式 `approval_required=true` 始终审批。保存回答不生成知识库引用。
 4. 停止自己的 MCP 服务后重新调用并批准，预期安全连接失败；恢复服务后仅主动重试，不自动重做旧调用。
 
-本轮已验证隔离 PostgreSQL、替身模型编排、真实本地 MCP TCP/HTTP/SDK 握手及浏览器操作。真实模型规划、用户外部 MCP、供应商鉴权/额度、真人语音工具审批和外部写入均未验收；历史 M0—M3 未完成项不因此改变。
+隔离 PostgreSQL、替身模型编排、真实本地 MCP TCP/HTTP/SDK 握手及浏览器操作可分别验证。真实模型规划、用户外部 MCP、供应商鉴权/额度、真人语音工具审批和外部写入均未完成集中验收；历史 M0—M3 未完成项不因此改变，付费调用须另获授权。

@@ -66,9 +66,9 @@ CiteRAG 使用 [LightRAG](https://github.com/HKUDS/LightRAG) 为本地资料建�
 
 ## 🖼️ 界面预览
 
-![CiteRAG 对话工作台、知识库与资料、语音通话和系统状态四合一界面预览](assets/preview/citerag-ui-overview.png)
+![CiteRAG 知识库回答与来源、资料管理、语音通话连接前状态和处理任务四合一界面预览](assets/preview/citerag-ui-overview.png)
 
-四张图为正式 React 工作台的浏览器预览示例，使用公开合成资料和只读 API 响应。语音页停在连接前；界面可能随代码更新变化，截图不代表真实模型、媒体连接或业务库验收通过。
+四张图来自正式 React 工作台的真实浏览器截图，使用隔离的公开合成资料和拦截的示例 API 响应。语音页停在连接前；界面可能随代码更新变化，截图不代表真实模型、媒体连接或业务库验收通过。
 
 ## 🗂️ 数据保存在哪里
 

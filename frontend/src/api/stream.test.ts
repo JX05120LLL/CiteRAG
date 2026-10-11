@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createApi } from './client';
 
 const final = {
@@ -22,6 +22,32 @@ function wire(chunks: string[]): Response {
 const event = (name: string, data: unknown): string => `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`;
 
 describe('checked answer stream', () => {
+  it('releases a still-open response body after receiving a committed final answer', async () => {
+    const cancel = vi.fn();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(event('accepted', { ...final, status: 'running', text: '', saved: false }) + event('saved', final)));
+      }, cancel,
+    });
+    const api = createApi(async () => new Response(stream, { headers: { 'Content-Type': 'text/event-stream' } }));
+    await expect(api.askMessageStream('chat', '问题', 'key')).resolves.toEqual(final);
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(stream.locked).toBe(false);
+  });
+
+  it('releases the response body when an old attempt sends a late delta', async () => {
+    const cancel = vi.fn();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(event('accepted', { ...final, status: 'running', text: '', saved: false }) +
+          event('delta', { attempt_id: 'old-attempt', seq: 1, text: '迟到文本', saved: false })));
+      }, cancel,
+    });
+    const api = createApi(async () => new Response(stream, { headers: { 'Content-Type': 'text/event-stream' } }));
+    await expect(api.askMessageStream('chat', '问题', 'key')).rejects.toMatchObject({ kind: 'invalid-response' });
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(stream.locked).toBe(false);
+  });
   it('accepts an automatic-route answer without manual exact filters', async () => {
     const automatic = { ...final, mode: 'auto' };
     const api = createApi(async (_url, init) => {

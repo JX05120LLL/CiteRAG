@@ -1,5 +1,6 @@
 # Local reference repositories and material that is not part of CiteRAG
 /.local/
+/.impeccable/
 /docs/
 /LiveRAG/
 /LightRAG/
@@ -38,6 +39,8 @@
 !/backend/tests/test_local_calculator.py
 !/backend/tests/test_qweather_tools.py
 !/backend/tests/test_qweather_api.py
+!/backend/tests/test_startup_doctor.py
+!/backend/tests/test_model_setup.py
 /frontend/**/*.test.*
 /frontend/**/*.spec.*
 !/frontend/src/api/client.test.ts
@@ -53,6 +56,12 @@
 !/frontend/src/react/controller.test.ts
 !/frontend/src/react/app.test.tsx
 !/frontend/src/react/AgentTasks.test.tsx
+!/frontend/src/react/management.test.tsx
+!/frontend/src/react/VoiceVisual.test.tsx
+!/frontend/src/react/VoiceThreeEcho.test.tsx
+!/frontend/src/react/VoiceFirstFrame.test.tsx
+!/frontend/src/react/VoicePhase.test.tsx
+!/frontend/src/react/voiceVisualModel.test.ts
 
 # Credentials and local configuration
 .env

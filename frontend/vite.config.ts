@@ -11,5 +11,6 @@ export default defineConfig({
     fs: { allow: [fileURLToPath(new URL('.', import.meta.url)), fileURLToPath(new URL('../assets/brand', import.meta.url))] },
     proxy: { '/api': { target: 'http://127.0.0.1:8000' } },
   },
-  test: { environment: 'jsdom', clearMocks: true, restoreMocks: true },
+  // Running Ant Design UI tests concurrently in jsdom can exceed the existing per-test timeouts.
+  test: { environment: 'jsdom', clearMocks: true, restoreMocks: true, maxWorkers: 1 },
 });

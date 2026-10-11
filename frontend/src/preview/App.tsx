@@ -109,9 +109,9 @@ export function PreviewApp({ initialLocation }: PreviewAppProps) {
           </div>
         </div>
       </div>
-      <Drawer title="页面导航" aria-label="页面导航" open={navigationOpen} onClose={() => setNavigationOpen(false)} destroyOnHidden placement="left" size={280}>
+      <Drawer title="页面导航" aria-label="页面导航" rootClassName="preview-navigation-drawer" open={navigationOpen} onClose={() => setNavigationOpen(false)} destroyOnHidden placement="left" size={280}>
         <Menu selectedKeys={[location.page]} items={(Object.keys(pageTitles) as PreviewPage[]).map((key) => ({ key, icon: icons[key], label: pageTitles[key] }))} onClick={({ key }) => navigate(key as PreviewPage)}/></Drawer>
-      <Drawer title="我的聊天" aria-label="我的聊天" open={chatsOpen} onClose={() => setChatsOpen(false)} destroyOnHidden size={360}>{history}</Drawer>
+      <Drawer title="我的聊天" aria-label="我的聊天" rootClassName="preview-history-drawer" open={chatsOpen} onClose={() => setChatsOpen(false)} destroyOnHidden size={360}>{history}</Drawer>
     </div></XProvider>
   </ConfigProvider>;
 }

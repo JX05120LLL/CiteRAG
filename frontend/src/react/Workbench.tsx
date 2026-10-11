@@ -72,6 +72,7 @@ function ToolResult({ call }: { call: ToolCallRecord }) {
 export function Workbench({ view, api }: { view: AppView; api: ApiClient }) {
   const { state: s, actions: a } = view;
   const base = s.bases?.find((item) => item.id === s.selectedKbId);
+  const unknownKnowledge = s.selectedKbId !== null && !base;
   const [inputRun, setInputRun] = useState<AgentRun | null>(null);
   const [continuationError, setContinuationError] = useState('');
   const [continuing, setContinuing] = useState(false);
@@ -230,18 +231,20 @@ export function Workbench({ view, api }: { view: AppView; api: ApiClient }) {
   }, [citation]);
   return <div ref={root} className="conversation-column formal-conversation">
     {s.selectedChatId && <div className="shared-memory-toolbar">
-      <span>{base ? `当前对话固定知识库 · ${base.name}` : '普通聊天 · 无知识库访问'}</span>
+      <span>{s.selectedKbId === null ? '普通聊天 · 无知识库访问' : `当前对话固定知识库 · ${base?.name ?? '暂不可读取，请刷新'}`}</span>
       <Space wrap>{base && <Button size="small" onClick={() => setMemoryOpen(true)}>同库共享摘要</Button>}
         <Button size="small" onClick={() => setToolOpen(true)}>工具与调用记录</Button></Space>
     </div>}
     {s.chatError && <Alert showIcon type="error" title={s.chatError.message} />}
-    <div className="message-scroll" aria-live="polite" aria-busy={busy}>
+    <div className="message-scroll" role="log" aria-label="当前聊天记录" aria-live="polite" aria-busy={busy}>
       {!s.chatMessages.length && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={s.selectedChatId ? s.selectedKbId === null ? '直接提问；本聊天不会检索知识库' : '直接提问，自动区分交流与资料查询' : '新建普通聊天或选择知识库聊天'} />}
       {s.chatMessages.map((m) => {
         const readable = !m.hidden && !m.stale && (m.route === 'general' || m.route === 'chat' || base?.status === 'ready');
         const cited = base?.status === 'ready' && displayCitations(m).length > 0;
         const streaming = m.status === 'running' && s.chatStreamAttemptId === m.attempt_id;
-        const content = !readable ? '知识库已变化，此回答与来源已暂停展示。'
+        const content = !readable ? unknownKnowledge && !m.hidden && !m.stale
+          ? '当前知识库状态暂不可核实，此回答与来源已暂停展示。请刷新后重试。'
+          : '知识库已变化，此回答与来源已暂停展示。'
           : m.phase === 'waiting_approval' ? '等待你核对并审批工具操作，本轮回答尚未完成。'
             : m.phase === 'waiting_input' ? waitingInput?.message_id === m.message_id
               ? waitingInput.waiting?.prompt || '等待你补充参数，本轮回答尚未完成。'
@@ -267,7 +270,7 @@ export function Workbench({ view, api }: { view: AppView; api: ApiClient }) {
             {!m.saved && <Tag>尚未保存</Tag>}</div>
             <div className="answer-text">{content}</div>
             {streaming && <p className="muted">{s.chatStreamSaved ? '结果已保存，等待最终提交' : '核验与保存处理中'}</p>}
-            {readable && m.route !== 'needs_clarification' && <p className="muted">{answerRouteLabel(m.route)}</p>}
+            {readable && m.route !== 'needs_clarification' && <p className="muted answer-route">{answerRouteLabel(m.route)}</p>}
             {readable && m.error_code && <p className="failure-reason">{!['failed', 'interrupted'].includes(m.status) && <>{answerFailure(m.error_code)}<br /></>}{ /^[a-z][a-z0-9_]{0,63}$/.test(m.error_code) && <>错误代码：{m.error_code}</>}</p>}
             {cited && <div className="source-buttons">{m.citations.map((c) => <Button key={c.evidence_id} icon={<FileTextOutlined />} data-source-key={`${m.message_id}:${c.evidence_id}`}
               onClick={() => { trigger.current = `${m.message_id}:${c.evidence_id}`; a.selectCitation(m.message_id, c.evidence_id); }}>查看来源 · {c.filename} · {locationText(c)} <span aria-hidden="true">›</span></Button>)}</div>}
@@ -291,22 +294,22 @@ export function Workbench({ view, api }: { view: AppView; api: ApiClient }) {
         if (enabled && s.chatDraft.trim()) void (waitingInput ? continueInput() : a.sendChat());
       }}
       disabled={!enabled} loading={continuing || busy && !waitingInput} autoSize={{ minRows: 2, maxRows: 6 }}
-      placeholder={waitingInput ? '在此回复补充信息，继续当前任务' : enabled ? s.selectedKbId === null ? '输入问题，直接使用普通回答' : '输入问题，自动识别普通交流或知识库查询'
+      placeholder={unknownKnowledge && s.selectedChatId ? '当前知识库状态暂不可核实，请刷新后再提问' : waitingInput ? '在此回复补充信息，继续当前任务' : enabled ? s.selectedKbId === null ? '输入问题，直接使用普通回答' : '输入问题，自动识别普通交流或知识库查询'
         : busy && s.selectedChatId ? '当前任务未结束，请先补充、审批或取消' : '先新建或打开聊天'}
       suffix={false} footer={<div className="composer-controls"><Space wrap><Tooltip title="每条问题最多 2 张 PNG/JPEG，每张 10 MiB"><Button icon={<PictureOutlined />}
         disabled={!enabled || !!waitingInput} onClick={() => imageInput.current?.click()}>添加图片</Button></Tooltip>
-        <span className="composer-kb"><BookOutlined />{s.selectedKbId === null ? '普通聊天' : base?.name || '未选择知识库'}</span></Space>
+        <span className="composer-kb"><BookOutlined />{s.selectedKbId === null ? '普通聊天' : base?.name || '当前聊天固定知识库 · 暂不可读取'}</span></Space>
         <Space wrap><Tooltip title={taskConflict ? '先补充或取消当前任务，也可新建聊天' : undefined}><Button icon={<AudioOutlined />} disabled={busy} onClick={() => a.navigate('voice')}>语音通话</Button></Tooltip>
           <Button type="primary" loading={continuing || busy && !waitingInput} disabled={!enabled || !s.chatDraft.trim()} onClick={() => void (waitingInput ? continueInput() : a.sendChat())}>{waitingInput ? '补充并继续' : '发送问题 ↑'}</Button></Space></div>} />
       <p className="composer-note">{s.selectedKbId === null ? 'Enter 发送 · Shift+Enter 换行。本聊天不会检索知识库。' : 'Enter 发送 · Shift+Enter 换行。资料回答只展示已提交且有原文依据的结果。'}</p></div>
-    <Drawer title="原文来源" aria-label="原文来源" rootClassName="formal-source-drawer" focusable={{ focusTriggerAfterClose: false }} open={!!citation} onClose={a.closeCitation} size={460} destroyOnHidden
+    <Drawer title="原文来源" aria-label="原文来源" rootClassName="formal-source-drawer" focusable={{ focusTriggerAfterClose: false }} open={!!citation} onClose={a.closeCitation} size="min(460px, 100vw)" destroyOnHidden
       footer={citation && <div className="source-drawer-actions"><Button aria-label="下载原文" href={api.originalUrl(citation.document_id)} icon={<FileTextOutlined />}>下载原文</Button><Button type="primary" onClick={a.closeCitation}>关闭来源</Button></div>}>
       {citation && <div className="source-content"><div className="source-file-card"><h2><FileTextOutlined />{citation.filename}</h2><p><BookOutlined />{locationText(citation)}</p></div>
         <h3>原文内容（节选）</h3><blockquote>{citation.excerpt}</blockquote>
         <p className="muted">摘录、文件和定位均来自已保存的核验结果。</p>
         <div className="source-buttons">{sourceMessage?.citations.map((c) => <Button key={c.evidence_id} onClick={() => a.selectCitation(sourceMessage.message_id, c.evidence_id)}>{c.filename} · {locationText(c)}</Button>)}</div></div>}
     </Drawer>
-    <Drawer title={`同库共享摘要 · ${base?.name || ''}`} open={memoryOpen && !!base} onClose={() => setMemoryOpen(false)} size={460} destroyOnHidden>
+    <Drawer title={`同库共享摘要 · ${base?.name || ''}`} rootClassName="workspace-detail-drawer" open={memoryOpen && !!base} onClose={() => setMemoryOpen(false)} size="min(460px, 100vw)" destroyOnHidden>
       <p className="muted">仅用于理解偏好和讨论背景。资料结论仍须重新检索当前知识库；这些条目不是引用。</p>
       {memoryError && <Alert type="error" showIcon title={memoryError} />}
       {memories.length ? memories.map((item) => <div key={item.id} className="memory-entry">
@@ -328,7 +331,7 @@ export function Workbench({ view, api }: { view: AppView; api: ApiClient }) {
       </div>}
       {!!s.selectedChatId && !memorySources.length && <p className="muted">本聊天暂无可作为来源的已完成纯文字提问。</p>}
     </Drawer>
-    <Drawer title="工具与调用记录" open={toolOpen && !!s.selectedChatId} onClose={() => setToolOpen(false)} size="min(460px, 100vw)" destroyOnHidden>
+    <Drawer title="工具与调用记录" rootClassName="workspace-detail-drawer" open={toolOpen && !!s.selectedChatId} onClose={() => setToolOpen(false)} size="min(460px, 100vw)" destroyOnHidden>
       <p className="muted">工具调用由服务端检查聊天范围，结果单独记录，不作为知识库引用。仅显示已登记工具；历史结果只反映调用当时的状态。</p>
       {toolError && <Alert type="error" showIcon title={toolError} />}
       <h3>可用工具</h3>

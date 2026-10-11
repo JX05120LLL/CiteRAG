@@ -1,0 +1,150 @@
+/* Management pages share the workbench rhythm and retain all real status controls. */
+.citerag-app .management-surface { min-width: 0; }
+.citerag-app .management-surface .management-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin: 0 0 24px; }
+.citerag-app .management-surface .management-toolbar .ant-btn { min-height: 38px; }
+.citerag-app .management-surface .management-count { color: var(--muted); font-size: 13px; }
+.citerag-app .management-surface .management-count strong { margin-inline: 4px; font-size: 17px; color: #1c3028; }
+.citerag-app .management-surface .kb-cards { display: grid; margin-top: 0; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 16px; }
+.citerag-app .management-surface .kb-cards .knowledge-card { min-height: 240px; border-color: var(--line); border-radius: 16px; background: #fff; box-shadow: none; }
+.citerag-app .management-surface .knowledge-card .ant-card-body { padding: 24px; height: 100%; display: flex; flex-direction: column; }
+.citerag-app .management-surface .knowledge-card-title { display: flex; align-items: flex-start; gap: 14px; }
+.citerag-app .management-surface .knowledge-card-icon { display: grid; place-items: center; width: 44px; height: 44px; flex: 0 0 44px; border-radius: 12px; font-size: 22px; background: #e8efdf; color: #276650; }
+.citerag-app .management-surface .knowledge-card.is-maintaining .knowledge-card-icon { background: #fcf0db; color: #8b6525; }
+.citerag-app .management-surface .knowledge-card.is-blocked .knowledge-card-icon { background: #f8e9e5; color: #a1423d; }
+.citerag-app .management-surface .knowledge-card-name { min-width: 0; }
+.citerag-app .management-surface .knowledge-card-name h2 { margin: 0 0 8px; font-size: 17px; line-height: 1.45; letter-spacing: -.01em; overflow-wrap: anywhere; }
+.citerag-app .management-surface .knowledge-card-note { margin: 20px 0; font-size: 13px; line-height: 1.7; color: var(--muted); }
+.citerag-app .management-surface .knowledge-card-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: auto; padding-top: 16px; border-top: 1px solid var(--line); }
+.citerag-app .management-surface .knowledge-card-actions .ant-btn { min-height: 36px; padding-inline: 12px; font-size: 13px; }
+.citerag-app .management-surface .knowledge-tip { margin-top: 24px; padding: 12px 16px; font-size: 13px; }
+.citerag-app .management-surface .library-summary { margin: 0 0 20px; }
+.citerag-app .management-surface .upload-strip { display: flex; align-items: center; min-height: 0; padding: 20px; gap: 16px; justify-content: space-between; border: 1px solid var(--line); border-radius: 14px; background: #f4f3ef; }
+.citerag-app .management-surface .upload-strip-copy { min-width: 0; display: grid; gap: 6px; }
+.citerag-app .management-surface .upload-strip-copy strong { color: #1c3028; font-size: 14px; }
+.citerag-app .management-surface .upload-strip-copy span { font-size: 12px; line-height: 1.6; color: var(--muted); overflow-wrap: anywhere; }
+.citerag-app .management-surface .upload-strip small { margin: 0; font-size: 12px; color: #886525; line-height: 1.6; }
+.citerag-app .management-surface .upload-strip .ant-btn { min-height: 38px; flex-shrink: 0; padding-inline: 16px; }
+.citerag-app .management-surface .upload-section { margin: 16px 0 24px; padding: 20px; border: 1px solid var(--line); border-radius: 14px; background: #fff; }
+.citerag-app .management-surface .upload-section .ant-upload-wrapper { display: block; min-width: 0; }
+.citerag-app .management-surface .upload-section .ant-upload-drag { background: #f4f3ef; border-color: #b7c6b9; }
+.citerag-app .management-surface .upload-section .ant-upload-list-item-name { overflow-wrap: anywhere; }
+.citerag-app .management-surface .section-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; justify-content: space-between; margin: 28px 0 12px; }
+.citerag-app .management-surface .section-heading h2 { font-size: 16px; margin: 0; }
+.citerag-app .management-surface .document-list { min-width: 0; }
+.citerag-app .management-surface .document-list-row { display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; align-items: start; gap: 14px; padding: 20px 4px; }
+.citerag-app .management-surface .document-list-row:hover { background: #f4f3ef; }
+.citerag-app .management-surface .document-list-row .file-icon { width: 36px; height: 40px; display: grid; place-items: center; border: 1px solid #dedfd8; border-radius: 9px; background: #eef2e9; font-size: 22px; }
+.citerag-app .management-surface .document-list-row { border-bottom: 1px solid var(--line); }
+.citerag-app .management-surface .file-icon { color: #276650; }
+.citerag-app .management-surface .file-pdf { color: #a94a44; }
+.citerag-app .management-surface .file-docx { color: #627167; }
+.citerag-app .management-surface .document-info { min-width: 0; }
+.citerag-app .management-surface .document-info > strong { display: block; font-size: 14px; line-height: 1.65; overflow-wrap: anywhere; color: #1c3028; }
+.citerag-app .management-surface .document-meta { margin: 3px 0 9px; color: var(--muted); font-size: 12px; }
+.citerag-app .management-surface .document-status { grid-column: auto; margin: 0; min-width: 0; }
+.citerag-app .management-surface .failure-reason { margin: 8px 0 0; font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; color: #a1423d; }
+.citerag-app .management-surface .document-list-row .row-actions { grid-column: auto; grid-row: auto; display: flex; justify-content: flex-end; gap: 4px; flex-wrap: wrap; }
+.citerag-app .management-surface .document-list-row .row-actions .ant-btn { min-height: 36px; font-size: 12px; }
+.citerag-app .management-surface .document-list-row .row-actions .muted { max-width: 130px; font-size: 12px; }
+.citerag-app .management-surface .ant-pagination { display: flex; flex-wrap: wrap; gap: 4px; margin: 18px 0; }
+.citerag-app .management-surface .ant-pagination-total-text { margin-inline-end: auto; font-size: 12px; }
+.citerag-app .management-surface .history-collapse { margin-top: 22px; border-color: var(--line); border-radius: 12px; background: #f4f3ef; }
+.citerag-app .management-surface .detail-actions { display: flex; flex-wrap: wrap; justify-content: flex-start; gap: 10px; margin: 24px 0 0; padding-top: 20px; border-top: 1px solid var(--line); }
+.citerag-app .management-surface .task-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 0 0 24px; max-width: none; }
+.citerag-app .management-surface .task-summary > div { display: flex; min-height: 84px; padding: 16px 20px; flex-direction: row; justify-content: space-between; align-items: center; border: 1px solid var(--line); border-radius: 14px; background: #fff; }
+.citerag-app .management-surface .task-summary span { font-size: 13px; color: var(--muted); }
+.citerag-app .management-surface .task-summary strong { font-size: 26px; font-weight: 600; letter-spacing: -.04em; color: #276650; }
+.citerag-app .management-surface .task-columns { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(290px, .9fr); align-items: start; gap: 20px; }
+.citerag-app .management-surface .task-table, .citerag-app .management-surface .task-detail { min-width: 0; border: 1px solid var(--line); border-radius: 14px; background: #fff; overflow: hidden; }
+.citerag-app .management-surface .task-table { padding-bottom: 0; }
+.citerag-app .management-surface .task-table-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 20px; flex-wrap: wrap; border-bottom: 1px solid var(--line); }
+.citerag-app .management-surface .task-table-header strong { font-size: 14px; }
+.citerag-app .management-surface .task-detail { padding: 20px; }
+.citerag-app .management-surface .task-detail-header h2 { font-size: 16px; }
+.citerag-app .management-surface .task-detail-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-bottom: 16px; }
+.citerag-app .management-surface .task-detail-header h2 { margin: 0; }
+.citerag-app .management-surface .task-detail .ant-alert { margin-block: 18px; }
+.citerag-app .management-surface .active-jobs > h2 { margin: 16px 20px 4px; font-size: 13px; color: var(--muted); }
+.citerag-app .management-surface .job-row { display: grid; width: 100%; margin: 0; grid-template-columns: minmax(0, 1fr) auto 12px; gap: 6px 10px; padding: 16px 20px; color: #1c3028; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: #fff; text-align: left; cursor: pointer; }
+.citerag-app .management-surface .job-row:disabled { cursor: wait; opacity: .65; }
+.citerag-app .management-surface .job-row:hover, .citerag-app .management-surface .job-row.selected { --muted: #5e6d62; background: #e8efdf; }
+.citerag-app .management-surface .job-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
+.citerag-app .management-surface .job-name { display: flex; gap: 10px; min-width: 0; grid-column: 1; grid-row: 1; align-items: flex-start; }
+.citerag-app .management-surface .job-name > span { min-width: 0; }
+.citerag-app .management-surface .job-name strong, .citerag-app .management-surface .job-name small { display: block; }
+.citerag-app .management-surface .job-name > .anticon { font-size: 18px; color: #276650; margin-top: 2px; }
+.citerag-app .management-surface .job-name strong { white-space: normal; overflow-wrap: anywhere; font-size: 13px; line-height: 1.6; }
+.citerag-app .management-surface .job-name small { font-size: 11px; color: var(--muted); }
+.citerag-app .management-surface .job-row > .state-tag { align-self: start; margin-top: 2px; font-size: 11px; }
+.citerag-app .management-surface .job-chevron { color: #627167; }
+.citerag-app .management-surface .job-row .job-stage { display: block; grid-column: 1; margin-left: 28px; font-size: 12px; color: var(--muted); }
+.citerag-app .management-surface .job-row time { display: block; grid-column: 2 / -1; text-align: right; font-size: 11px; color: var(--muted); }
+.citerag-app .management-surface .job-failure { grid-column: 1 / -1; margin-left: 28px; color: #a1423d; overflow-wrap: anywhere; font-size: 12px; line-height: 1.65; }
+.citerag-app .management-surface .task-history-collapse { border: 0; border-radius: 0; background: transparent; }
+.citerag-app .management-surface .task-history-collapse .ant-collapse-header { padding: 16px 20px; font-size: 13px; color: #627167; }
+.citerag-app .management-surface .task-history-collapse .ant-collapse-body { padding: 0; }
+.citerag-app .management-surface .task-table .ant-pagination { margin: 16px 20px; }
+.citerag-app .management-surface .task-history-note { margin: 12px 20px 20px; font-size: 12px; line-height: 1.7; }
+.citerag-app .management-surface .task-detail .ant-descriptions-item-label { width: 88px; color: var(--muted); font-size: 12px; }
+.citerag-app .management-surface .task-detail .ant-descriptions-item-content { color: #1c3028; font-size: 13px; overflow-wrap: anywhere; }
+.citerag-app .management-surface .status-actions { flex-direction: row-reverse; }
+.citerag-app .management-surface .status-actions .status-refresh-button { background: var(--accent); border-color: var(--accent); box-shadow: none; }
+.citerag-app .management-surface .status-actions .status-refresh-button:not(:disabled):hover { background: #1d503e; border-color: #1d503e; }
+.citerag-app .management-surface .status-actions .status-refresh-button:disabled { background: #eeefea; border-color: var(--line); color: #626e65; }
+.citerag-app .management-surface .status-actions > span { color: var(--muted); font-size: 12px; }
+.citerag-app .management-surface.status-layout .section-heading { margin: 0 0 8px; }
+.citerag-app .management-surface.status-layout .section-heading .muted { font-size: 12px; }
+.citerag-app .management-surface .status-check-note { margin: 0 0 22px; max-width: 760px; color: var(--muted); font-size: 12px; line-height: 1.75; }
+.citerag-app .management-surface .status-capabilities { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.citerag-app .management-surface .status-capability { min-height: 180px; border-radius: 14px; border-color: var(--line); box-shadow: none; }
+.citerag-app .management-surface .status-capability .ant-card-body { padding: 22px; }
+.citerag-app .management-surface .status-capability-head { display: flex; align-items: flex-start; gap: 14px; }
+.citerag-app .management-surface .status-capability-icon { display: grid; place-items: center; width: 42px; height: 42px; flex: 0 0 42px; border-radius: 12px; font-size: 20px; color: #276650; background: #e8efdf; }
+.citerag-app .management-surface .status-capability.tone-caution .status-capability-icon { color: #8b6525; background: #fcf0db; }
+.citerag-app .management-surface .status-capability.tone-off .status-capability-icon { color: #a1423d; background: #f8e9e5; }
+.citerag-app .management-surface .status-capability h3 { margin: 0 0 8px; font-size: 15px; }
+.citerag-app .management-surface .status-capability p { margin: 18px 0 0; padding-top: 14px; font-size: 12px; line-height: 1.7; color: var(--muted); overflow-wrap: anywhere; }
+.citerag-app .management-surface .status-capability-parts { display: flex; flex-wrap: wrap; gap: 8px 12px; margin-top: 16px; }
+.citerag-app .management-surface .status-capability-parts > span { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.citerag-app .management-surface .status-diagnostics { margin-top: 28px; border-top: 1px solid var(--line); }
+.citerag-app .management-surface .status-diagnostics > summary { cursor: pointer; font-size: 14px; font-weight: 600; padding: 20px 0; }
+.citerag-app .management-surface .status-diagnostics-body { padding-bottom: 24px; }
+.citerag-app .management-surface .status-panels { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 24px; }
+.citerag-app .management-surface .status-panels .ant-card-head-title { font-size: 15px; }
+.citerag-app .management-surface .status-panels .ant-card-body { min-height: 0; padding: 20px; font-size: 13px; }
+.citerag-app .management-surface .status-diagnostics-body [aria-label='本地检查结果'] { margin-top: 24px; overflow-wrap: anywhere; }
+.management-drawer h2 { overflow-wrap: anywhere; font-size: 19px; line-height: 1.5; }
+.management-drawer h3 { margin-top: 28px; font-size: 15px; }
+.management-drawer .ant-alert { margin-block: 16px; overflow-wrap: anywhere; }
+.management-drawer .parsed-block { white-space: pre-wrap; overflow-wrap: anywhere; border-bottom: 1px solid #dedfd8; padding: 16px 0; }
+.management-drawer .muted { color: #627167; font-size: 12px; line-height: 1.7; }
+@media (max-width: 1050px) {
+  .citerag-app .management-surface .task-columns { grid-template-columns: 1fr; }
+}
+@media (max-width: 600px) {
+  .citerag-app .management-surface .management-toolbar { gap: 10px; margin-bottom: 20px; }
+  .citerag-app .management-surface .knowledge-heading { align-items: flex-start; }
+  .citerag-app .management-surface .knowledge-card .ant-card-body { padding: 20px; }
+  .citerag-app .management-surface .kb-cards .knowledge-card { min-height: 220px; }
+  .citerag-app .management-surface .upload-strip { flex-direction: column; align-items: flex-start; padding: 16px; }
+  .citerag-app .management-surface .upload-section { padding: 14px; }
+  .citerag-app .management-surface .document-list-row { grid-template-columns: 32px minmax(0, 1fr); gap: 10px; padding-block: 18px; }
+  .citerag-app .management-surface .document-list-row .file-icon { width: 30px; height: 34px; font-size: 18px; }
+  .citerag-app .management-surface .document-list-row .row-actions { grid-column: 2; grid-row: auto; justify-content: flex-start; }
+  .citerag-app .management-surface .document-list-row .row-actions .muted { max-width: none; }
+  .citerag-app .management-surface .task-summary { gap: 8px; }
+  .citerag-app .management-surface .task-summary > div { align-items: flex-start; flex-direction: column; gap: 8px; padding: 12px; }
+  .citerag-app .management-surface .task-summary span { font-size: 12px; }
+  .citerag-app .management-surface .task-summary strong { font-size: 24px; }
+  .citerag-app .management-surface .task-table-header, .citerag-app .management-surface .job-row { padding-inline: 14px; }
+  .citerag-app .management-surface .job-row { grid-template-columns: minmax(0, 1fr) 12px; }
+  .citerag-app .management-surface .job-chevron { grid-column: 2; grid-row: 1; }
+  .citerag-app .management-surface .job-row > .state-tag { grid-column: 1; grid-row: 2; justify-self: start; margin-left: 28px; }
+  .citerag-app .management-surface .job-row time { grid-column: 1 / -1; margin-left: 28px; text-align: left; }
+  .citerag-app .management-surface .task-detail { padding: 18px 14px; }
+  .citerag-app .management-surface .status-capabilities, .citerag-app .management-surface .status-panels { grid-template-columns: 1fr; }
+  .citerag-app .management-surface .status-capability { min-height: 0; }
+  .citerag-app .management-surface .status-capability .ant-card-body { padding: 20px; }
+  .citerag-app .management-surface .status-actions { flex-direction: column; align-items: flex-start; }
+  .management-drawer .ant-drawer-body { padding: 20px 16px; }
+}

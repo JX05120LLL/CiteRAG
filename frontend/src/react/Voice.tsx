@@ -9,6 +9,8 @@ import { locationText } from '../pages/sources';
 import { answerFailure } from '../pages/workbench';
 import logo from '../../../assets/brand/mark.svg';
 import { AgentTaskCard } from './AgentTasks';
+import { VoiceVisual } from './VoiceVisual';
+import { voiceVisualState } from './voiceVisualModel';
 
 // React adaptation of LiveKit's MIT welcome-view and agent-session-view-01.
 // Source pinned in vendor/livekit/README.md. Media remains owned by VoiceController.
@@ -62,6 +64,12 @@ export function Voice({ context, actions, levels = [], readOnly = false }: {
   const selected = media.answers?.find((answer) => answer.message_id === source?.message);
   const citation = selected && displayCitations(selected).find((item) => item.evidence_id === source?.evidence);
   const active = ['connecting', 'connected', 'reconnecting', 'ending'].includes(media.phase);
+  const echo = voiceVisualState(media, levels);
+  const ready = media.phase === 'connected' && ['listening', 'recognizing', 'generating', 'speaking', 'waiting_input', 'waiting_approval'].includes(media.assistantPhase ?? '');
+  const assistantBadge: Record<string, string> = { listening: '助手就绪', recognizing: '助手正在识别',
+    generating: '助手正在生成', speaking: '播报音频送出中', waiting_input: '等待补充信息', waiting_approval: '等待审批' };
+  const badgeColor = !ready || media.assistantPhase === 'waiting_input' || media.assistantPhase === 'waiting_approval'
+    ? 'warning' : media.assistantPhase === 'listening' ? 'success' : 'processing';
   const answers = media.answers ?? [];
   const answerCard = (answer: typeof answers[number]) => <article className="voice-exchange" key={answer.message_id}>
     <div className="voice-user-row"><span className="voice-user-avatar"><UserOutlined /></span><div className="voice-user-card"><strong><UserOutlined /> 用户</strong>
@@ -83,26 +91,29 @@ export function Voice({ context, actions, levels = [], readOnly = false }: {
         : actions.capability?.transport !== 'configured' ? '本地 LiveKit 尚未配置'
           : assistant && actions.capability?.assistant !== 'configured' ? 'ASR、TTS、VAD 或问答未配置，请使用文字问答'
             : '点击按钮后才会创建通话、连接房间并申请麦克风权限');
-  return <div className="official-voice">
+  return <div className="official-voice voice-studio">
     <div className="voice-context-brief"><Space wrap><Tag>{context.chatTitle || '尚未选择聊天'}</Tag>
       <span>{context.chatId && !context.kbName ? '普通聊天 · 不检索知识库' : `固定知识库：${context.kbName || '尚未读取'}`}</span></Space>
       <Button title={readOnly ? '只读设计状态，请使用正式语音入口刷新实际条件' : undefined} icon={<ReloadOutlined />} disabled={readOnly || active || actions.checking} loading={actions.checking} onClick={() => void actions.refresh()}>刷新连接条件</Button></div>
+    <div className="voice-studio-layout">
     <Card className="official-voice-stage"><div className="voice-stage-main">
-      <div className={`voice-call-symbol${active ? ' is-active' : ''}`} aria-hidden="true"><img src={logo} alt="" /></div>
+      <VoiceVisual media={media} levels={levels} />
       <div className="voice-call-state"><Space wrap>{media.phase === 'connected' ? <StateTag value="connected" />
         : media.phase === 'failed' ? <StateTag value="failed" /> : <Tag className="state-tag">媒体待连接</Tag>}
-        {assistant && <Tag className="state-tag" color={active && media.assistantPhase === 'listening' ? 'success' : 'warning'}>
-          {active && media.assistantPhase === 'listening' ? '助手就绪' : active ? '助手待就绪' : '助手待连接'}</Tag>}</Space>
+        {assistant && <Tag className="state-tag" color={badgeColor}>
+          {ready ? assistantBadge[media.assistantPhase ?? ''] : active ? '助手待就绪' : '助手待连接'}</Tag>}</Space>
       <h2>{labels[media.phase]}</h2>
       {assistant && <p role="status">{media.phase === 'idle' && actions.capability?.assistant === 'configured'
         ? '尚未开始，助手连接待验证' : media.phase === 'connecting' && media.assistantPhase === 'not_configured' && actions.capability?.assistant === 'configured'
           ? '等待助手就绪' : phaseLabels[media.assistantPhase ?? 'starting']}</p>}
       <p className="voice-hint">{active ? `当前播放轨道：${media.remoteAudio} · ${media.muted ? '麦克风已静音' : media.phase === 'connected' ? '麦克风采集中' : '等待连接状态'}` : condition}</p></div>
-      <div className="voice-meter"><div className="official-voice-bars" aria-hidden="true">{[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15].map((i) => <span key={i}
-        style={{ height: active && media.phase === 'connected' && !media.muted && !media.meterUnavailable ? `${6 + Math.min(1, Math.max(0, levels[i % 5] ?? 0)) * (14 + i % 4 * 4)}px` : '6px' }} />)}</div>
-        <span><SoundOutlined /> {!active ? '尚未播放' : media.outputMuted || media.playbackRequired ? '播放已关闭' : '播放已开启'}</span></div></div>
+      <div className="voice-device-status">
+        <span><AudioOutlined />{echo.input === 'measuring' ? '回响环随麦克风输入变化' : echo.input === 'muted' ? '麦克风已静音'
+          : echo.input === 'unavailable' ? '输入音量不可读取' : '麦克风尚未采集'}</span>
+        <span><SoundOutlined />{echo.output === 'inactive' ? '尚未播放' : echo.output === 'blocked' ? '播放已关闭' : '播放已开启'}</span>
+      </div></div>
       {assistant && active && <div className="voice-inline-caption"><AudioOutlined /> <strong>{media.subtitle ? '正在识别：' : '实时字幕：'}</strong><span aria-live="polite">{media.subtitle || '等待实际语音转写'}</span></div>}
-      {assistant && active && media.speechText && <div className="voice-inline-caption"><SoundOutlined /> <strong>正在播报：</strong><span aria-live="polite">{media.speechText}</span></div>}
+      {assistant && active && media.speechText && <div className="voice-inline-caption"><SoundOutlined /> <strong>{echo.output === 'blocked' ? '已生成文字：' : '播报内容：'}</strong><span aria-live="polite">{media.speechText}</span></div>}
       {assistant && active && (media.firstTextMs !== undefined || media.firstAudioSentMs !== undefined) &&
         <p className="voice-caption-note muted">最终转写后：首段文字 {media.firstTextMs === undefined ? '等待中' : `${media.firstTextMs} ms`} · 首段音频送出 {media.firstAudioSentMs === undefined ? '等待中' : `${media.firstAudioSentMs} ms`}（服务端计时，不代表实际听见）</p>}
       {media.meterUnavailable && <p className="muted">音量分析不可用，连接状态不受影响。</p>}
@@ -129,8 +140,9 @@ export function Voice({ context, actions, levels = [], readOnly = false }: {
       {answers.length > 3 && <details className="voice-history"><summary>早前记录（{answers.length - 3} 条）</summary>
         <div className="voice-dialogue">{answers.slice(0, -3).map(answerCard)}</div></details>}
       {answers.slice(-3).map(answerCard)}
-      {!answers.length && <p className="muted">最终转写提交后，问题与已保存回答会出现在这里和文字工作台。</p>}
+      {!answers.length && <div className="voice-empty-record"><FileTextOutlined /><p>最终转写提交后，问题与已保存回答会出现在这里和文字工作台。</p></div>}
     </section>}
+    </div>
     <details className="voice-explainer"><summary>通话说明与连接条件</summary><p className="muted">{assistant ? '最终转写才创建聊天问题；资料回答核验并保存后才播报。插话与停止会清除旧播报，重连不续播。通话中要发送文字或图片，请先挂断。原始音频不保存。' : '当前只有本地媒体连接，没有识别、字幕与助手回答。'}</p>
     <Descriptions className="voice-capabilities" column={1} items={[
       { key: 'transport', label: '媒体配置', children: actions.capability?.transport === 'configured' ? <Tag>已配置</Tag> : <StateTag value={actions.capability?.transport ?? 'unverified'} /> },
@@ -138,7 +150,7 @@ export function Voice({ context, actions, levels = [], readOnly = false }: {
     ]} /></details>
     <div className="voice-return"><Button icon={<ArrowLeftOutlined />} onClick={() => void actions.back()}>{active ? '挂断并返回聊天' : '返回文字工作台'}</Button>
       <Button onClick={() => void actions.status()}>查看系统状态</Button></div>
-    <Drawer title="语音回答来源" open={!!citation} onClose={() => setSource(null)} size={460} destroyOnHidden>
+    <Drawer title="语音回答来源" rootClassName="workspace-detail-drawer" open={!!citation} onClose={() => setSource(null)} size="min(460px, 100vw)" destroyOnHidden>
       {citation && <div className="source-content"><h2>{citation.filename}</h2><Tag>{locationText(citation)}</Tag><blockquote>{citation.excerpt}</blockquote>
         <Button href={actions.originalUrl?.(citation.document_id)} download={citation.filename} disabled={!actions.originalUrl}>下载原文</Button></div>}
     </Drawer>

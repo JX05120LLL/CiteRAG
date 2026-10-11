@@ -62,6 +62,8 @@ export function CiteRagApp({ api: suppliedApi, factory }: { api?: ApiClient; fac
   const busy = !!s?.chatPending;
   const mediaActive = !!view && !['idle', 'failed'].includes(view.voice.actions.media.phase);
   const managementBusy = !!view?.documents.snapshot.busy;
+  const chatCreationUnavailable = !s || s.loading || s.chats === null || !!s.chatsError;
+  const chatCreationReason = s?.chatsError?.message ?? (s?.loading ? '正在读取聊天，请稍候' : '请先刷新并读取聊天状态');
   const navigate = (page: Page) => {
     setNavigation(false); setHistory(false); view?.actions.navigate(page);
     if (base && (page === 'tasks' || page === 'knowledge' && view?.documents.isOpen) && view?.documents.currentBaseId !== base.id)
@@ -69,20 +71,20 @@ export function CiteRagApp({ api: suppliedApi, factory }: { api?: ApiClient; fac
     if (page === 'status') void view?.voice.actions.refresh();
     if (page === 'workbench' && s?.page !== 'workbench' && !busy) void view?.actions.refresh();
   };
-  const menu = <Menu selectedKeys={[s?.page ?? 'workbench']} items={(Object.keys(pageTitles) as Page[]).map((key) => ({ key, icon: icons[key], label: key === 'knowledge' ? '我的知识库' : pageTitles[key] }))}
+  const menu = <Menu aria-label="主要导航" selectedKeys={[s?.page ?? 'workbench']} items={(Object.keys(pageTitles) as Page[]).map((key) => ({ key, icon: icons[key], label: key === 'knowledge' ? '我的知识库' : pageTitles[key] }))}
     onClick={({ key }) => navigate(key as Page)} />;
   const brand = <div className="brand"><img src={logo} alt="回响 Logo" /><strong>CiteRAG</strong></div>;
-  const chatList = <><div className="sidebar-chat-heading"><span>对话记录</span><Button className="sidebar-new-chat" type="text" icon={<PlusOutlined />} aria-label="新建聊天" title="新建普通聊天"
-    disabled={busy || mediaActive || s?.loading} onClick={() => { setHistory(false); view?.actions.navigate('workbench'); void view?.actions.createChat(null); }} /><Dropdown trigger={['click']} menu={{ items: [
+  const chatList = <><div className="sidebar-chat-heading"><span>对话记录</span><Button className="sidebar-new-chat" type="text" icon={<PlusOutlined />} aria-label="新建聊天" title={chatCreationUnavailable ? chatCreationReason : '新建普通聊天'}
+    disabled={busy || mediaActive || chatCreationUnavailable} onClick={() => { setHistory(false); view?.actions.navigate('workbench'); void view?.actions.createChat(null); }} /><Dropdown trigger={['click']} menu={{ items: [
     ...(s?.bases ?? []).map((kb) => ({ key: kb.id, label: `知识库 · ${kb.name}`, disabled: kb.status !== 'ready' })),
   ], onClick: ({ key }) => { setHistory(false); view?.actions.navigate('workbench');
-    void view?.actions.createChat(key); } }}><Button className="sidebar-new-chat" type="text" icon={<DownOutlined />} aria-label="新建知识库聊天" title="新建知识库聊天"
-    disabled={busy || mediaActive || s?.loading} /></Dropdown></div>
+    void view?.actions.createChat(key); } }}><Button className="sidebar-new-chat" type="text" icon={<DownOutlined />} aria-label="新建知识库聊天" title={chatCreationUnavailable ? chatCreationReason : '新建知识库聊天'}
+    disabled={busy || mediaActive || chatCreationUnavailable || !s?.bases?.some((item) => item.status === 'ready')} /></Dropdown></div>
     {s?.chatsError && <Alert type="error" title={s.chatsError.message} />}
     <div className="sidebar-chat-list" aria-label="对话列表">
       {(s?.chats ?? []).map((item) => <div className={`sidebar-chat-row${s?.selectedChatId === item.id ? ' selected' : ''}`} key={item.id}>
         {item.kb_id === null ? <MessageOutlined className="sidebar-chat-icon" /> : <BookOutlined className="sidebar-chat-icon" />}
-        <Button className="sidebar-chat-title" type="text" disabled={busy || mediaActive}
+        <Button className="sidebar-chat-title" type="text" aria-current={s?.selectedChatId === item.id ? 'page' : undefined} disabled={busy || mediaActive}
           title={busy ? '请等待当前提交完成' : mediaActive ? '请先挂断当前通话' : item.title}
           onClick={() => { setHistory(false); view?.actions.navigate('workbench'); void view?.actions.selectChat(item.id); }}>{item.title}</Button>
         <Dropdown trigger={['click']} menu={{ items: [
@@ -110,10 +112,10 @@ export function CiteRagApp({ api: suppliedApi, factory }: { api?: ApiClient; fac
       </div>}</div>
     {view?.hasMoreChats && <Button block disabled={busy || mediaActive} onClick={() => void view.actions.loadMoreChats()}>加载更多聊天</Button>}
     {!s?.chats?.length && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无已读取的聊天" />}</>;
-  return <Theme><div ref={host} className="citerag-app design-b">
+  return <Theme><div ref={host} className="citerag-app design-b workspace-refresh">
     <a className="skip-link" href="#main-content">跳到主要内容</a>
-    <aside className="primary-sidebar">{brand}{menu}<div className="sidebar-divider" />{chatList}
-      <div className="sidebar-foot">本地工作台<span>单用户</span></div></aside>
+    <aside className="primary-sidebar" aria-label="工作台侧栏">{brand}{menu}<div className="sidebar-divider" />{chatList}
+      <div className="sidebar-foot"><span className="local-mode-dot" aria-hidden="true" />本地工作台<span>单用户 · 资料保存在本机</span></div></aside>
     <div className="product-main"><header className="context-bar"><Button className="mobile-nav-button" icon={<MenuOutlined />} aria-label="打开导航" onClick={() => setNavigation(true)} />
       <div className="context-title">{chatHeader && s?.selectedKbId === null ? <MessageOutlined /> : <BookOutlined />}<span>{chatHeader ? '当前聊天' : '查看知识库'}</span></div>
       {chatHeader ? <span className="kb-select">{s?.selectedKbId === null ? '普通聊天 · 不检索知识库' : headerBase?.name ?? '知识库不可用'}</span> : <Select className="kb-select" aria-label="查看知识库" placeholder="选择知识库" value={headerBase?.id ?? undefined} disabled={busy || managementBusy || mediaActive || s?.loading}
@@ -124,15 +126,15 @@ export function CiteRagApp({ api: suppliedApi, factory }: { api?: ApiClient; fac
       <Button className="mobile-history-button" icon={<MessageOutlined />} aria-label="打开聊天记录" onClick={() => setHistory(true)} />
       <Button icon={<ReloadOutlined />} aria-label="刷新工作台" disabled={busy || managementBusy || mediaActive || s?.loading} onClick={() => void view?.actions.refresh()} /></header>
       <main id="main-content" className={`page-content page-${s?.page ?? 'workbench'}`} tabIndex={-1}>
-        <div className="page-heading"><div><div className="eyebrow">CiteRAG / {s?.page === 'workbench' ? '对话工作台' : s?.page === 'knowledge' && view?.documents.isOpen ? '知识库与资料' : s ? pageTitles[s.page] : '本地工作台'}</div><h1 tabIndex={-1}>{s?.page === 'knowledge' ? view?.documents.isOpen ? view.documents.snapshot.base?.name ?? '知识库资料' : '我的知识库' : s?.page === 'workbench' ? '对话工作台' : s ? pageTitles[s.page] : '对话工作台'}{s?.page === 'knowledge' && view?.documents.isOpen && <StateTag value={view.documents.snapshot.base?.status ?? 'unverified'} />}</h1>
+        <div className="page-heading"><div><h1 tabIndex={-1}>{s?.page === 'knowledge' ? view?.documents.isOpen ? view.documents.snapshot.base?.name ?? '知识库资料' : '我的知识库' : s?.page === 'workbench' ? '对话工作台' : s ? pageTitles[s.page] : '对话工作台'}{s?.page === 'knowledge' && view?.documents.isOpen && <StateTag value={view.documents.snapshot.base?.status ?? 'unverified'} />}</h1>
           <p>{s?.page === 'workbench' ? chatHeader && s.selectedKbId === null ? '普通聊天直接回答，不检索知识库' : '基于知识库资料，获得可验证的专业回答' : s?.page === 'knowledge' ? view?.documents.isOpen ? '资料上传、解析与入库分别记录' : '管理资料和固定的问答范围' : s?.page === 'tasks' ? '查看资料处理进度与失败原因' : s?.page === 'status' ? '查看本地服务与配置' : s?.page === 'voice' ? '当前聊天 · 语音和文字记录保存在一起' : '资料、任务与状态一目了然'}</p></div>
           </div>
         {!view || !api ? <Skeleton active /> : <PageBoundary key={s?.page}><Suspense fallback={<Skeleton active />}>{s?.basesError && <Alert showIcon type="error" title={s.basesError.message} />}
           {s?.page === 'workbench' && <Workbench view={view} api={api} />}{s?.page === 'knowledge' && <Knowledge view={view} api={api} />}
           {s?.page === 'tasks' && <Tasks view={view} />}{s?.page === 'status' && <Status view={view} api={api} />}{s?.page === 'voice' && <Voice {...view.voice} />}</Suspense></PageBoundary>}
       </main></div>
-    <Drawer title={brand} open={navigation} onClose={() => setNavigation(false)} placement="left" size={280}>{menu}<Button block onClick={() => { setNavigation(false); setHistory(true); }}>打开聊天记录</Button></Drawer>
-    <Drawer title="我的聊天" open={history} onClose={() => setHistory(false)} placement="left" size={340}>{chatList}</Drawer>
+    <Drawer title={brand} rootClassName="workspace-navigation-drawer" open={navigation} onClose={() => setNavigation(false)} placement="left" size="min(280px, 100vw)">{menu}<Button block onClick={() => { setNavigation(false); setHistory(true); }}>打开聊天记录</Button></Drawer>
+    <Drawer title="我的聊天" rootClassName="workspace-history-drawer" open={history} onClose={() => setHistory(false)} placement="left" size="min(340px, 100vw)">{chatList}</Drawer>
     <Modal title={dialog?.kind === 'prompt' ? dialog.text : '确认操作'} open={!!dialog} onCancel={() => finishDialog(dialog?.kind === 'confirm' ? false : null)}
       okText={dialog?.kind === 'prompt' ? '保存名称' : '确认'} okButtonProps={{ danger: dialog?.kind === 'confirm', disabled: dialog?.kind === 'prompt' && !dialog.value.trim() }}
       onOk={() => finishDialog(dialog?.kind === 'prompt' ? dialog.value : true)} destroyOnHidden>
@@ -155,6 +157,6 @@ export function StandaloneVoice({ api: suppliedApi, factory }: { api?: ApiClient
       { render: (value) => { if (alive) setView(value); }, onDispose: (fn) => { dispose = fn; } });
     return () => { alive = false; dispose(); abort.abort(); };
   }, [suppliedApi, factory]);
-  return <Theme><div ref={host} className="citerag-app standalone-voice design-b"><header className="standalone-brand"><img src={logo} alt="回响 Logo" /><strong>CiteRAG</strong><span>语音通话</span></header>
-    <main id="main-content" className="page-content"><h1>语音通话</h1>{view ? <Voice {...view} /> : <Skeleton active />}</main></div></Theme>;
+  return <Theme><div ref={host} className="citerag-app standalone-voice design-b workspace-refresh"><a className="skip-link" href="#main-content">跳到主要内容</a><header className="standalone-brand"><img src={logo} alt="回响 Logo" /><strong>CiteRAG</strong><span>语音通话</span></header>
+    <main id="main-content" className="page-content page-voice" tabIndex={-1}><div className="page-heading"><div><h1>语音通话</h1><p>文字、字幕与原文来源，保留在当前聊天。</p></div></div>{view ? <Voice {...view} /> : <Skeleton active />}</main></div></Theme>;
 }

@@ -219,12 +219,15 @@ class AnswerService:
     async def list_messages(self, owner: UUID, conversation_id: UUID) -> list[dict]:
         _, kb = await self._owned_conversation(owner, conversation_id)
         expired_image_at = await self._expired_image_at(conversation_id)
+        latest_attempt = (select(AnswerAttempt.id).where(
+            AnswerAttempt.message_id == ConversationMessage.id,
+        ).order_by(AnswerAttempt.created_at.desc(), AnswerAttempt.id.desc())
+            .limit(1).correlate(ConversationMessage).scalar_subquery())
         rows = await self.session.execute(
             select(ConversationMessage, AnswerAttempt)
-            .join(AnswerAttempt, AnswerAttempt.message_id == ConversationMessage.id)
+            .join(AnswerAttempt, AnswerAttempt.id == latest_attempt)
             .where(ConversationMessage.conversation_id == conversation_id)
-            .order_by(ConversationMessage.created_at.desc(), ConversationMessage.id.desc(),
-                      AnswerAttempt.created_at.desc())
+            .order_by(ConversationMessage.created_at.desc(), ConversationMessage.id.desc())
             .limit(50)
         )
         messages: dict[UUID, dict] = {}
@@ -303,7 +306,7 @@ class AnswerService:
         self.session.add(attempt)
         await self.session.commit()
         if on_accepted is not None:
-            await on_accepted(await self._view(message, attempt))
+            await self._notify_accepted(message, attempt, on_accepted)
         if defer_finish:
             return await self._view(message, attempt)
         return await self._finish_attempt(owner, conversation_id, kb, message, attempt,
@@ -353,6 +356,11 @@ class AnswerService:
         ).limit(1))
         if active is not None:
             raise ServiceError(409, "answer_in_progress", "当前聊天已有提问正在处理")
+        if await self.session.scalar(select(ToolCall.id).where(
+            ToolCall.conversation_id == conversation_id,
+            ToolCall.status.in_(("pending_approval", "running")),
+        ).limit(1)):
+            raise ServiceError(409, "tool_in_progress", "请先完成当前工具调用或审批")
         last = await self.session.scalar(select(AnswerAttempt).where(
             AnswerAttempt.message_id == message_id,
         ).order_by(AnswerAttempt.created_at.desc(), AnswerAttempt.id.desc()))
@@ -377,12 +385,41 @@ class AnswerService:
         self.session.add(attempt)
         await self.session.commit()
         if on_accepted is not None:
-            await on_accepted(await self._view(message, attempt))
+            await self._notify_accepted(message, attempt, on_accepted)
         if defer_finish:
             return await self._view(message, attempt)
         return await self._finish_attempt(owner, conversation_id, kb, message, attempt,
                                           retriever, answerer, message.mode,
                                           message.query_filter)
+
+    async def _notify_accepted(self, message, attempt, callback) -> None:
+        try:
+            await callback(await self._view(message, attempt))
+        except asyncio.CancelledError:
+            await self._interrupt_attempt(attempt.id)
+            raise
+
+    async def _interrupt_attempt(self, attempt_id: UUID, previewed: str = "") -> None:
+        async def interrupt() -> None:
+            # Release this transaction's locks before the independent update.
+            await self.session.rollback()
+            # The request session belongs to the cancelled ASGI task.
+            async with AsyncSession(bind=self.session.bind) as cleanup:
+                await cleanup.execute(update(AnswerAttempt).where(
+                    AnswerAttempt.id == attempt_id, AnswerAttempt.status == "running",
+                ).values(status="partial" if previewed else "interrupted",
+                         text=previewed or None, citations=[], error_code="request_interrupted",
+                         finished_at=datetime.now(UTC)))
+                await cleanup.commit()
+
+        cleanup_task = asyncio.create_task(interrupt())
+        while not cleanup_task.done():
+            try:
+                await asyncio.shield(cleanup_task)
+            except asyncio.CancelledError:
+                # Do not let repeated disconnects race session.close with rollback.
+                continue
+        cleanup_task.result()
 
     async def _finish_attempt(
         self, owner: UUID, conversation_id: UUID, kb: KnowledgeBase | None,
@@ -481,22 +518,7 @@ class AnswerService:
             return await self._view(message, waiting_attempt)
         except asyncio.CancelledError:
             # A disconnected request must not hold the conversation until restart.
-            async def interrupt() -> None:
-                # The request session belongs to the cancelled ASGI task.
-                async with AsyncSession(bind=self.session.bind) as cleanup:
-                    await cleanup.execute(update(AnswerAttempt).where(
-                        AnswerAttempt.id == attempt.id, AnswerAttempt.status == "running",
-                    ).values(status="partial" if previewed else "interrupted",
-                             text=previewed or None, citations=[], error_code="request_interrupted",
-                             finished_at=datetime.now(UTC)))
-                    await cleanup.commit()
-
-            cleanup_task = asyncio.create_task(interrupt())
-            try:
-                await asyncio.shield(cleanup_task)
-            except asyncio.CancelledError:
-                # The separate task still commits; startup also recovers on process loss.
-                pass
+            await self._interrupt_attempt(attempt.id, previewed)
             raise
         except (QueryError, AnswerError, AgentError) as error:
             status, text, citations, error_code = (
@@ -511,17 +533,22 @@ class AnswerService:
             status, text, citations, error_code = (
                 "partial" if previewed else "failed", previewed, [], "answer_unavailable"
             )
-        return await self._commit_result(owner, conversation_id, kb, message, attempt,
-                                         status, text, citations, error_code)
+        try:
+            return await self._commit_result(owner, conversation_id, kb, message, attempt,
+                                             status, text, citations, error_code)
+        except asyncio.CancelledError:
+            await self._interrupt_attempt(attempt.id, previewed)
+            raise
 
     async def _commit_result(self, owner, conversation_id, kb, message, attempt,
                              status, text, citations, error_code=None):
-        current_kb = (await self.session.scalar(select(KnowledgeBase).where(
-            KnowledgeBase.id == kb.id, KnowledgeBase.owner_id == owner,
-        ).with_for_update().execution_options(populate_existing=True)) if kb else None)
+        # Match admission/delete's conversation -> knowledge-base lock order.
         current_chat = await self.session.scalar(select(Conversation).where(
             Conversation.id == conversation_id, Conversation.owner_id == owner,
         ).with_for_update().execution_options(populate_existing=True))
+        current_kb = (await self.session.scalar(select(KnowledgeBase).where(
+            KnowledgeBase.id == kb.id, KnowledgeBase.owner_id == owner,
+        ).with_for_update().execution_options(populate_existing=True)) if kb else None)
         current_attempt = await self.session.get(
             AnswerAttempt, attempt.id, with_for_update=True, populate_existing=True,
         )

@@ -4,14 +4,16 @@ Python 3.12、FastAPI、SQLAlchemy/Alembic、PostgreSQL 和可选的 LightRAG/�
 
 ## 启动与迁移
 
+Windows 日常文字入口、只读诊断、受控配置和退出步骤见 [启动与配置](STARTUP.md)。入口复用现有 `.venv`，不自动安装、迁移或要求语音服务。
+
 在本目录运行以下命令，可启动无数据库配置的 API 并查看真实缺项：
 
 ```powershell
 uv sync --locked
-uv run --no-env-file uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1 --no-proxy-headers
+uv run --no-sync --no-env-file uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1 --no-proxy-headers
 ```
 
-`GET /api/health` 只表明进程存活；`GET /api/status` 分别报告数据库、引擎、模型、备份等状态。持久服务需单独准备 PostgreSQL 业务库，将敏感的 CITERAG_DATABASE_URL 注入受控进程环境，并在**新建空库**上显式执行 `uv run --no-env-file alembic upgrade head`。当前源码要求 `0012_agent_runs`。已有业务库升级前要停写并成套备份业务库、引擎库、私有原文/图片与配置；启动不会自动迁移或认领旧资料。未完成显式升级的旧业务库不能用本版本启动。
+`GET /api/health` 只表明进程存活；`GET /api/status` 分别报告数据库、引擎、模型、备份等状态。持久服务需单独准备 PostgreSQL 业务库，将敏感的 CITERAG_DATABASE_URL 注入受控进程环境，并在**新建空库**上显式执行 `uv run --no-sync --no-env-file alembic upgrade head`。当前源码要求 `0012_agent_runs`。已有业务库升级前要停写并成套备份业务库、引擎库、私有原文/图片与配置；启动不会自动迁移或认领旧资料。未完成显式升级的旧业务库不能用本版本启动。
 
 入库、问答、备份、LiveKit 传输和语音助手默认关闭；安装可选依赖或配置 Key 不会自动启用。可选依赖使用 `uv sync --locked --extra rag --extra voice` 安装，配置字段见 [app/config.py](app/config.py)。不要把本地服务开放到局域网或公网，应用拒绝代理来源身份并核对 Host、Origin 与资源归属。
 
@@ -55,4 +57,4 @@ uv run --locked --extra rag --extra voice --extra agent --extra mcp --no-env-fil
 uv run --locked --extra rag --extra voice --extra agent --extra mcp --no-env-file pytest -q @publicBackendTests
 ```
 
-公开后端测试的唯一清单为 [.github/public-backend-tests.txt](../.github/public-backend-tests.txt)，每行是相对于 `backend/` 的 `tests/test_*.py` 路径；CI 的边界检查、Ruff 和 pytest 共用该清单。以上命令须在 `backend/` 执行；运行 PostgreSQL 用例前，将 `CITERAG_TEST_DATABASE_URL` 指向独立可丢弃测试库，用例会创建和删除测试 schema，不能使用实际业务库。未配置时跳过，不能说数据库测试通过。GitHub CI 的临时数据库和合成模型替身不验证用户业务数据、真实模型或真人语音。其余检查见[工作流](../.github/workflows/ci.yml)。
+公开后端测试的唯一清单为 [.github/public-backend-tests.txt](../.github/public-backend-tests.txt)，每行是相对于 `backend/` 的 `tests/test_*.py` 路径；CI 的边界检查、Ruff 和 pytest 共用该清单。以上命令须在 `backend/` 执行；运行 PostgreSQL 用例前，将 `CITERAG_TEST_DATABASE_URL` 指向独立可丢弃测试库，用例会创建和删除测试 schema，不能使用实际业务库。未配置时跳过，不能说数据库测试通过。GitHub CI 的临时数据库和合成模型替身不验证用户业务数据、真实模型或真人语音。Windows 启动任务另覆盖 PowerShell 5/7、只读 Doctor 和合成 DPAPI/ACL 配置，无需真实 Key/DB；新增任务尚须对应提交运行。其余检查见[工作流](../.github/workflows/ci.yml)。

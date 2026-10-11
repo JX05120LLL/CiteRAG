@@ -349,6 +349,7 @@ const conflictMessages: Record<string, string> = {
   idempotency_conflict: '请求与先前的名称不一致，请刷新列表并检查已创建的知识库。',
   kb_not_ready: '知识库尚未就绪，当前不能问答。',
   answer_in_progress: '当前聊天已有提问正在处理。',
+  voice_active: '当前聊天正在语音通话。请先挂断，再发送或重试文字、图片问题。',
   conversation_archived: '聊天已归档。请先恢复对话，再继续提问或通话。',
   kb_changed: '知识库在回答期间发生变化，本次结果已停止；请刷新后重新提问。',
 };
@@ -365,10 +366,10 @@ const documentErrors: Record<string, string> = {
 };
 
 const databaseErrors: Record<string, string> = {
-  database_not_configured: '业务数据库尚未配置。请按本地开发指南配置数据库并执行初始化迁移，然后重启后端。',
-  database_unavailable: '业务数据库暂不可用。请检查数据库连接和初始化迁移，然后重试。',
-  persistence_failed: '业务数据库操作未完成。请检查数据库连接和初始化迁移，然后重试。',
-  answer_disabled: '文字问答尚未启用；解析完成不等于已入库。',
+  database_not_configured: '业务数据库尚未配置。请先确认目标数据库和后端连接配置；需要初始化或迁移时，请先备份并确认后操作。',
+  database_unavailable: '业务数据库暂不可用。请检查 PostgreSQL 是否启动、端口和后端连接配置，然后刷新；现有数据需要迁移时须先备份并确认。',
+  persistence_failed: '业务数据库操作未完成。请刷新核对已保存状态，并检查数据库连接；需要迁移时须先备份并确认。',
+  answer_disabled: '文字问答尚未启用。请在确认模型配置与调用费用后启用后端 CITERAG_ANSWER_ENABLED，再重启服务。',
   image_observation_unavailable: '图片识别未完成，请重试或补充文字。',
 };
 
@@ -533,6 +534,7 @@ export function createApi(fetcher: typeof fetch = globalThis.fetch) {
       onProgress?: (progress: AnswerProgress) => void, imageIds: string[] = []): Promise<ChatMessage> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 120000);
+    let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
     try {
       const response = await fetcher(`/api/conversations/${encodeURIComponent(id)}/messages/stream`, {
         method: 'POST', credentials: 'omit',
@@ -550,7 +552,7 @@ export function createApi(fetcher: typeof fetch = globalThis.fetch) {
       }
       if (!response.headers.get('Content-Type')?.startsWith('text/event-stream') || !response.body)
         throw new ApiError('invalid-response');
-      const reader = response.body.getReader();
+      reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
       let accepted: ChatMessage | null = null;
@@ -613,7 +615,13 @@ export function createApi(fetcher: typeof fetch = globalThis.fetch) {
     } catch (error) {
       if (error instanceof ApiError) throw error;
       throw new ApiError('network');
-    } finally { clearTimeout(timeout); }
+    } finally {
+      clearTimeout(timeout);
+      if (reader) {
+        await reader.cancel().catch(() => { /* Cleanup must preserve the saved result or original error. */ });
+        reader.releaseLock();
+      }
+    }
   }
 
   return {

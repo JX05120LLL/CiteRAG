@@ -68,7 +68,11 @@ CiteRAG 使用 [LightRAG](https://github.com/HKUDS/LightRAG) 为本地资料建�
 
 ![CiteRAG 知识库回答与来源、资料管理、语音通话连接前状态和处理任务四合一界面预览](assets/preview/citerag-ui-overview.png)
 
-四张图来自正式 React 工作台的真实浏览器截图，使用隔离的公开合成资料和拦截的示例 API 响应。语音页停在连接前；界面可能随代码更新变化，截图不代表真实模型、媒体连接或业务库验收通过。
+四张图来自正式 React 工作台的真实浏览器截图，使用明确标注的公开合成资料与拦截的 API 样例，没有连接业务库或调用模型。语音页停在连接前；界面可能随代码更新变化，截图不代表真实模型、媒体连接或业务库验收通过。
+
+界面保留原有页面布局与交互，统一采用墨绿侧栏、暖白页面、白色阅读面和浅柠绿选中项；暗侧栏使用近白文字，语音阶段区沿用同一配色。主题约定见[前端设计说明](frontend/DESIGN.md)。
+
+`ui-preview.html` 为只读开发预览，共用 theme tokens，预览布局仅使用独立样式。合成模式不连接业务 API，预览不会发起写操作或媒体连接。
 
 ## 🗂️ 数据保存在哪里
 
@@ -85,25 +89,34 @@ git clone https://github.com/JX05120LLL/CiteRAG.git
 cd CiteRAG
 ```
 
-在仓库根目录打开两个终端。
+首次显式安装依赖；日常启动复用已安装环境，避免自动同步移除可选依赖：
+
+```powershell
+cd backend
+uv sync --locked --extra rag
+cd ../frontend
+pnpm install --frozen-lockfile
+cd ..
+```
+
+已有业务库与受控模型配置时，在仓库根目录打开两个终端。Windows 文字启动入口会先进行有超时的只读预检，不创建数据库、不迁移、不停止未知服务，也不要求语音服务。数据库、首次模型配置、费用边界和缺项排查见 [启动与配置](backend/STARTUP.md)。
 
 **终端一：后端**
 
 ```powershell
-cd backend
-uv sync --locked
-uv run --no-env-file uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1 --no-proxy-headers
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\backend\start.ps1 -Profile knowledge -CheckOnly
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\backend\start.ps1 -Profile knowledge
 ```
 
 **终端二：前端**
 
 ```powershell
-cd frontend
-pnpm install --frozen-lockfile
-pnpm dev
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\backend\start.ps1 -Role frontend
 ```
 
-打开 [工作台](http://127.0.0.1:5173/) 或[独立语音页](http://127.0.0.1:5173/voice.html)。在**无数据库、无模型或语音凭证配置**的新环境中，这些命令可启动界面和 API；系统状态会如实显示缺失的服务，不会生成演示资料或发起供应商请求。已有本机配置的检测行为见下一段。
+打开 [工作台](http://127.0.0.1:5173/)。上述入口关闭语音、Agent、MCP、天气与备份后台任务；普通聊天使用默认 `text` profile，固定库聊天额外需要当前库真实就绪。退出前等待当前文字回答完成，在两个窗口分别按 `Ctrl+C`，Docker 保持运行。只有已授权时才显式启用入库/问答开关。
+
+**无业务配置的界面预览、其他系统或需要启用可选能力时**，在 `backend/` 直接使用 `uv run --no-sync --no-env-file uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1 --no-proxy-headers`，前端在 `frontend/` 使用 `pnpm dev`。未配置业务库时创建/发送聊天不可用，不会生成演示资料。独立语音页位于 `/voice.html`，完整语音仍需另行配置。已有本机配置的检测行为见下一段。
 
 打开系统状态页时，已配置的模型与语音能力会自动进行有界实际调用，独立于入库、问答与语音助手开关：模型至多一次 DashScope 请求，TTS 至多一次 MiniMax 请求，ASR 至多一次 MiniMax 合成及一次火山引擎识别请求。检测仅发送固定短提示“只回复 OK”或合成“你好”语音，不发送聊天或资料正文，可能产生供应商费用。结果按配置指纹保留一小时；重复打开页面复用有效结果，点击“刷新系统状态”会重新检测。未配置的能力显示不可用；知识检索目前缺少可证明只读的完整验收路径，因此保持“未检测”，不会伪报可用。本地诊断仍可在状态页单独运行。单项检测成功不代表完整通话或资料问答验收通过。
 
@@ -118,13 +131,13 @@ pnpm dev
 | 受控后端模型配置 | 入库、Embedding、重排、文字回答和图片观察；凭证不写入前端或 Git。 |
 | 本地自托管 LiveKit 与语音服务 | 开启实时通话、火山 ASR、MiniMax TTS 和本地 VAD。 |
 
-完整接入还需在 `backend/` 安装锁定的可选依赖（`uv sync --locked --extra rag --extra voice`），准备独立业务库与引擎库，将数据库和模型配置注入受控后端环境，并对**新建空业务库**显式运行 `uv run --no-env-file alembic upgrade head`。已有数据升级前须停写并成套备份业务库、引擎库和私有文件。默认 `CITERAG_INGESTION_ENABLED=false`、`CITERAG_ANSWER_ENABLED=false`；业务入库与问答须按授权范围显式启用，系统状态页检测则独立按上文自动执行且可能计费。不要把实际业务库、私人资料或密钥用于公开测试。配置字段见 [backend/app/config.py](backend/app/config.py)。
+完整接入还需在 `backend/` 安装锁定的可选依赖（`uv sync --locked --extra rag --extra voice`），准备独立业务库与引擎库（可位于同一个 PostgreSQL 服务），将数据库和模型配置注入受控后端环境，并对**新建空业务库**显式运行 `uv run --no-sync --no-env-file alembic upgrade head`。已有数据升级前须停写并成套备份业务库、引擎库和私有文件。默认 `CITERAG_INGESTION_ENABLED=false`、`CITERAG_ANSWER_ENABLED=false`；业务入库与问答须按授权范围显式启用，系统状态页检测则独立按上文自动执行且可能计费。不要把实际业务库、私人资料或密钥用于公开测试。配置字段见 [backend/app/config.py](backend/app/config.py)。
 
 自动工具编排另需 `--extra agent`，MCP 接入另需 `--extra mcp`；两项默认关闭。启用 Agent 前还须显式初始化 PostgreSQL 检查点，完整安装、开关和恢复步骤见 [Agent 说明](backend/AGENT.md)。
 
 ## 🏗️ 技术与项目结构
 
-- **界面**：React、TypeScript、Vite、Ant Design / Ant Design X。
+- **界面**：React、TypeScript、Vite、Ant Design / Ant Design X；各正式页面共用布局与主题，语音页使用按需加载的 Three.js 回响环。
 - **应用**：FastAPI、SQLAlchemy、Alembic，负责资料、会话、任务、来源和状态。
 - **知识引擎**：固定版本 LightRAG SDK 与 PostgreSQL/pgvector。
 - **Agent 编排（可选）**：[LangGraph 1.2.12](backend/AGENT.md)，负责有界模型决策、工具循环、补参/审批暂停与恢复；检查点使用 PostgreSQL，正式聊天历史与回答核验仍由 AnswerService 管理。
@@ -141,6 +154,8 @@ CiteRAG/
 ## 🧪 当前验证边界
 
 - GitHub CI 使用公开合成资料与临时 PostgreSQL，执行静态检查、测试、构建、迁移与 API 冒烟；它不调用真实供应商，也不验收私人业务数据。公开后端测试范围统一维护在[测试清单](.github/public-backend-tests.txt)，文件边界检查、Ruff 和 pytest 共用该清单；添加公开测试时必须同步登记。
+- Windows 启动回归覆盖 PowerShell 5/7、只读诊断及合成 DPAPI/ACL 配置，不需要真实 Key 或业务库。新增 CI 配置须以对应提交的实际运行结果为准。
+- P0 本机合成验证覆盖普通回答保存、失败重试、断线中断、重启读取与知识库原文引用，以及 1440px、390px、320px 布局。使用同一 PostgreSQL 服务内经授权新建的业务库和模型/索引替身，不代表真实模型或已有业务资料验收通过。
 - 已有局部真实供应商与合成语音验证记录，不能替代真人设备、真实资料及完整语音质量验收。
 - M0 的 Embedding 超长输入边界、完整 M1 验收、完整 M2 真人语音验收和实际业务库图片闭环仍有未完成项。
 
@@ -179,4 +194,4 @@ flowchart TD
 
 CiteRAG 的自有内容采用 [Apache License 2.0](LICENSE)。该许可证允许商用与修改，但不授予项目名称或标志的商标使用权。
 
-第三方材料保留各自许可：[LightRAG](https://github.com/HKUDS/LightRAG/blob/59af311307c7417b342f44850b097648d47e83bd/LICENSE) 为 MIT；改写的 LiveKit starter 布局及其 MIT 声明见[供应商说明](frontend/vendor/livekit/README.md)；Silero VAD 参考实现及 MIT 声明见[后端供应商说明](backend/vendor/silero/README.md)。Agent 可选依赖包含 MIT 与 LGPL-3.0-only，见[依赖许可](backend/vendor/agent/README.md)。云模型和语音服务仍按各供应商条款使用。
+第三方材料保留各自许可：[LightRAG](https://github.com/HKUDS/LightRAG/blob/59af311307c7417b342f44850b097648d47e83bd/LICENSE) 为 MIT；改写的 LiveKit starter 布局及其 MIT 声明见[供应商说明](frontend/vendor/livekit/README.md)；Three.js 与 React Three Fiber 的 MIT 声明见[语音视觉说明](frontend/vendor/three/README.md)；Silero VAD 参考实现及 MIT 声明见[后端供应商说明](backend/vendor/silero/README.md)。Agent 可选依赖包含 MIT 与 LGPL-3.0-only，见[依赖许可](backend/vendor/agent/README.md)。云模型和语音服务仍按各供应商条款使用。

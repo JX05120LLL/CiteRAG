@@ -18,6 +18,55 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); sessionStorage.clear(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 const json = (value: unknown) => new Response(JSON.stringify(value), { headers: { 'Content-Type': 'application/json' } });
+
+it('disables chat creation when the business database is not configured and keeps setup errors visible', async () => {
+  sessionStorage.clear();
+  const writes = vi.fn();
+  const api = createApi(async (url, init) => {
+    if (init?.method === 'POST') writes();
+    if (String(url) === '/api/agent/capability') return json({ enabled: false });
+    return new Response(JSON.stringify({ detail: { code: 'database_not_configured', message: 'private connection details' } }),
+      { status: 503, headers: { 'Content-Type': 'application/json' } });
+  });
+  render(<CiteRagApp api={api} />);
+  await waitFor(() => expect(screen.getAllByText(/业务数据库尚未配置/).length).toBeGreaterThan(0));
+  const ordinary = screen.getByRole<HTMLButtonElement>('button', { name: '新建聊天' });
+  const knowledge = screen.getByRole<HTMLButtonElement>('button', { name: '新建知识库聊天' });
+  expect(ordinary.disabled).toBe(true);
+  expect(knowledge.disabled).toBe(true);
+  expect(ordinary.title).toContain('业务数据库尚未配置');
+  fireEvent.click(ordinary);
+  expect(writes).not.toHaveBeenCalled();
+  expect(document.body.textContent).not.toContain('private connection details');
+}, 20000);
+
+it('keeps a knowledge chat labelled as knowledge when its catalog cannot be read', async () => {
+  const { api } = fixture();
+  render(<CiteRagApp api={{ ...api, knowledgeBases: async () => { throw new Error('synthetic catalog failure'); } }} />);
+  await waitFor(() => expect(document.querySelector('.shared-memory-toolbar')?.textContent).toContain('当前对话固定知识库'));
+  expect(document.querySelector('.shared-memory-toolbar')?.textContent).not.toContain('普通聊天');
+  expect(document.querySelector('.message-pair')).toBeTruthy();
+  expect(screen.getByText('当前知识库状态暂不可核实，此回答与来源已暂停展示。请刷新后重试。')).toBeTruthy();
+  expect(screen.queryByText('知识库已变化，此回答与来源已暂停展示。')).toBeNull();
+  expect(document.querySelector('.composer-kb')?.textContent).toContain('当前聊天固定知识库 · 暂不可读取');
+  expect(document.querySelector('.composer-kb')?.textContent).not.toContain('未选择知识库');
+  expect(screen.getByPlaceholderText<HTMLTextAreaElement>('当前知识库状态暂不可核实，请刷新后再提问').disabled).toBe(true);
+  expect(screen.queryByRole('button', { name: /查看来源/ })).toBeNull();
+  expect(screen.queryByText(sampleMessages[sampleChats[0].id][0].text)).toBeNull();
+  expect(screen.getByRole<HTMLButtonElement>('button', { name: '发送问题 ↑' }).disabled).toBe(true);
+}, 20000);
+
+it.each(['hidden', 'stale'] as const)('keeps the confirmed %s invalidation reason when the catalog also fails', async (flag) => {
+  const message = { ...sampleMessages[sampleChats[0].id][0], [flag]: true };
+  const { api } = fixture([message]);
+  render(<CiteRagApp api={{ ...api, knowledgeBases: async () => { throw new Error('synthetic catalog failure'); } }} />);
+  await waitFor(() => expect(screen.getByText('知识库已变化，此回答与来源已暂停展示。')).toBeTruthy());
+  expect(screen.queryByText('当前知识库状态暂不可核实，此回答与来源已暂停展示。请刷新后重试。')).toBeNull();
+  expect(screen.queryByText(message.text)).toBeNull();
+  expect(screen.queryByRole('button', { name: /查看来源/ })).toBeNull();
+  expect(screen.getByRole<HTMLButtonElement>('button', { name: '发送问题 ↑' }).disabled).toBe(true);
+}, 20000);
+
 function assistantActions(): VoiceActions {
   return { capability: { transport: 'configured', assistant: 'configured', purpose: 'voice_assistant' },
     checking: false, capabilityError: false,

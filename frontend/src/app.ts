@@ -147,7 +147,7 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
     state.chatsError = results[1].status === 'rejected'
       ? results[1].reason instanceof ApiError ? results[1].reason : new ApiError('http') : null;
     state.loading = false;
-    if (state.selectedKbId && !state.bases?.some((base) => base.id === state.selectedKbId)) {
+    if (state.selectedKbId && state.bases && !state.bases.some((base) => base.id === state.selectedKbId)) {
       state.selectedKbId = null;
       state.selectedChatId = null;
       state.chatMessages = [];
@@ -191,7 +191,10 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
       try {
         const messages = await api.conversationMessages(selectedChatId);
         if (currentGeneration === generation && currentChatGeneration === chatGeneration &&
-            state.selectedChatId === selectedChatId) state.chatMessages = messages;
+            state.selectedChatId === selectedChatId) {
+          state.chatMessages = messages;
+          state.chatError = null;
+        }
       } catch (error) {
         if (currentGeneration === generation && currentChatGeneration === chatGeneration &&
             state.selectedChatId === selectedChatId)
@@ -277,7 +280,7 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
   }
 
   async function createChat(kbId: string | null = state.selectedKbId) {
-    if (state.chatPending || (kbId !== null &&
+    if (disposed || state.loading || state.chatPending || state.chatsError || !state.chats || (kbId !== null &&
         !state.bases?.some((base) => base.id === kbId && base.status === 'ready'))) return;
     state.chatPending = true;
     state.chatError = null;

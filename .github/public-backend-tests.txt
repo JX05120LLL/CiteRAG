@@ -27,6 +27,8 @@ tests/test_qweather_local_config.py
 tests/test_qweather_tools.py
 tests/test_source_mapping_line_ranges.py
 tests/test_status_checks.py
+tests/test_startup_doctor.py
+tests/test_model_setup.py
 tests/test_tool_gateway.py
 tests/test_voice_latency.py
 tests/test_voice_transport.py

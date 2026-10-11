@@ -35,5 +35,5 @@ export const pageTitles: Record<PreviewPage, string> = {
 };
 
 export const designs = {
-  b: { name: '对话优先知识助手', summary: '对话居中，资料按需展开', accent: '#24765d', radius: 10, density: 'middle' },
+  b: { name: '对话优先知识助手', summary: '对话居中，资料按需展开', accent: '#276650', radius: 10, density: 'middle' },
 } as const;

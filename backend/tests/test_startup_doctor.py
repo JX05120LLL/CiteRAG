@@ -1,0 +1,201 @@
+"""Startup diagnostics must stay read-only and keep configuration private."""
+
+import json
+import os
+import shutil
+import subprocess
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from app import doctor
+
+
+def test_ui_profile_does_not_load_credentials_or_connect(monkeypatch, tmp_path):
+    monkeypatch.setattr(doctor, "dependency_checks", lambda _: [])
+    monkeypatch.setattr(doctor, "port_check", lambda *_: doctor.Check("api_port", "ready", "free"))
+    monkeypatch.setattr(
+        doctor, "file_check", lambda *_: pytest.fail("UI read private configuration")
+    )
+    monkeypatch.setattr(doctor, "database_checks", AsyncMock(side_effect=AssertionError("DB read")))
+    report = doctor.inspect("ui", {}, tmp_path, frontend=False)
+    assert report.exit_code == 0
+    assert "界面" in report.summary
+
+
+def test_missing_database_has_actionable_non_destructive_advice(monkeypatch, tmp_path):
+    monkeypatch.setattr(doctor, "dependency_checks", lambda _: [])
+    monkeypatch.setattr(doctor, "port_check", lambda *_: doctor.Check("api_port", "ready", "free"))
+    report = doctor.inspect("text", {}, tmp_path)
+    assert report.exit_code == 1
+    assert any(item.code == "database_not_configured" for item in report.checks)
+    assert "授权" in report.render()
+    assert "未初始化" in report.render()
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "postgresql+asyncpg://owner:PRIVATE_TEST_PASSWORD@remote.invalid/db",
+        "sqlite:///PRIVATE_TEST_PASSWORD",
+        "postgresql+asyncpg://owner:PRIVATE_TEST_PASSWORD@127.0.0.1/db?search_path=private",
+        "PRIVATE_TEST_PASSWORD is not a connection URL",
+    ],
+)
+def test_rejected_url_never_exposes_credentials(url):
+    check = doctor.database_config_check(url)
+    assert check.state == "blocked"
+    assert "PRIVATE_TEST_PASSWORD" not in json.dumps(check.__dict__)
+    assert "remote.invalid" not in check.detail
+
+
+def test_file_presence_is_unverified_without_reading_content(tmp_path):
+    record = tmp_path / "synthetic.xml"
+    record.write_text("not a credential", encoding="utf-8")
+    check = doctor.file_check("model_record", record)
+    assert check.state == "unverified"
+    assert "未读取" in check.detail
+    assert not Path(str(check.detail)).is_file()
+
+
+@pytest.mark.parametrize("legacy", ["environment", "file"])
+def test_legacy_engine_inputs_block_without_reading_or_removing(monkeypatch, tmp_path, legacy):
+    monkeypatch.setattr(doctor, "dependency_checks", lambda _: [])
+    monkeypatch.setattr(doctor, "port_check", lambda *_: doctor.Check("port", "ready", "free"))
+    environment = (
+        {"POSTGRES_WORKSPACE": "PRIVATE_TEST_WORKSPACE"} if legacy == "environment" else {}
+    )
+    if legacy == "file":
+        (tmp_path / "backend").mkdir()
+        (tmp_path / "backend/config.ini").write_text("PRIVATE_TEST_WORKSPACE", encoding="utf-8")
+    report = doctor.inspect("ui", environment, tmp_path, frontend=False)
+    assert report.exit_code == 1
+    assert "legacy_engine_configuration" in report.render()
+    assert "PRIVATE_TEST_WORKSPACE" not in report.render()
+    if legacy == "file":
+        assert (tmp_path / "backend/config.ini").exists()
+
+
+def fake_engine(monkeypatch, *, revisions=None, owner_count=1, jobs=False):
+    engine = MagicMock()
+    engine.dispose = AsyncMock()
+    connection = engine.connect.return_value.__aenter__.return_value
+    connection.scalars = AsyncMock(return_value=revisions or ["0012_agent_runs"])
+    connection.scalar = AsyncMock(side_effect=[1, owner_count, jobs])
+    monkeypatch.setattr(doctor, "create_async_engine", MagicMock(return_value=engine))
+    return engine, connection
+
+
+async def test_database_check_uses_read_only_metadata_not_application_start(monkeypatch):
+    engine, connection = fake_engine(monkeypatch)
+    checks = await doctor.database_checks("postgresql+asyncpg://synthetic@127.0.0.1:1/synthetic")
+    assert checks[-1].state == "ready"
+    assert (
+        doctor.create_async_engine.call_args.kwargs["connect_args"]["server_settings"][
+            "default_transaction_read_only"
+        ]
+        == "on"
+    )
+    sql = " ".join(str(call.args[0]) for call in connection.scalar.await_args_list)
+    assert "ingestion_jobs" in sql
+    assert not any(word in sql.upper() for word in ("INSERT", "DELETE", "CREATE", "UPDATE"))
+    engine.dispose.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    "revisions, owners, jobs, expected",
+    [
+        (["0002_local_single_user"], 1, False, "database_schema_mismatch"),
+        (["0012_agent_runs"], 0, False, "database_owner_invalid"),
+        (["0012_agent_runs"], 1, True, "unfinished_ingestion"),
+    ],
+)
+async def test_database_gates_do_not_modify_existing_records(
+    monkeypatch,
+    revisions,
+    owners,
+    jobs,
+    expected,
+):
+    engine, _ = fake_engine(monkeypatch, revisions=revisions, owner_count=owners, jobs=jobs)
+    checks = await doctor.database_checks("postgresql+asyncpg://synthetic@127.0.0.1:1/synthetic")
+    assert checks[-1].code == expected
+    assert checks[-1].state == "blocked"
+    engine.dispose.assert_awaited_once()
+
+
+async def test_connection_exception_is_sanitized_and_pool_closed(monkeypatch):
+    engine, _ = fake_engine(monkeypatch)
+    engine.connect.return_value.__aenter__.side_effect = RuntimeError("PRIVATE_TEST_PASSWORD")
+    checks = await doctor.database_checks("postgresql+asyncpg://synthetic@127.0.0.1:1/synthetic")
+    assert checks[-1].state == "blocked"
+    assert "PRIVATE_TEST_PASSWORD" not in json.dumps([item.__dict__ for item in checks])
+    engine.dispose.assert_awaited_once()
+
+
+def test_occupied_port_reports_blocked_without_stopping_owner():
+    import socket
+
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        assert doctor.port_check("api_port", listener.getsockname()[1]).state == "blocked"
+
+
+@pytest.mark.parametrize("shell_name", ["powershell.exe", "pwsh.exe"])
+def test_frontend_launcher_drops_backend_environment_before_real_node(tmp_path, shell_name):
+    if os.name != "nt":
+        pytest.skip("Windows PowerShell startup boundary requires Windows")
+    shell, node = shutil.which(shell_name), shutil.which("node.exe")
+    if not shell or not node:
+        pytest.skip("The selected PowerShell edition and Node.js are required")
+
+    backend = tmp_path / "backend"
+    backend.mkdir()
+    launcher = backend / "start.ps1"
+    shutil.copyfile(Path(__file__).resolve().parents[1] / "start.ps1", launcher)
+    probe = tmp_path / "frontend/node_modules/vite/bin/vite.js"
+    probe.parent.mkdir(parents=True)
+    keys = ("CITERAG_DATABASE_URL", "PGPASSWORD", "DASHSCOPE_API_KEY", "LIVEKIT_API_SECRET")
+    probe.write_text(
+        "const keys = " + json.dumps(keys) + ";\n"
+        "console.log(JSON.stringify({\n"
+        "  seenSensitiveKeys: keys.filter(key => Object.hasOwn(process.env, key)),\n"
+        "  customVariablePreserved: process.env.P0_FRONTEND_CUSTOM === 'public-synthetic',\n"
+        "  frontendArgumentsCorrect: JSON.stringify(process.argv.slice(2)) === "
+        "JSON.stringify(['--host', '127.0.0.1', '--port', '5173', '--strictPort'])\n"
+        "}));\n",
+        encoding="utf-8",
+    )
+    prefixes = (
+        "CITERAG_", "PG", "POSTGRES", "OPENAI_", "DASHSCOPE_", "ANTHROPIC_",
+        "VOLCENGINE_", "MINIMAX_", "LIVEKIT_", "PYTHON",
+    )
+    environment = {
+        name: value for name, value in os.environ.items()
+        if not name.upper().startswith(prefixes)
+        and name.upper() not in {"DATABASE_URL", "WEB_CONCURRENCY"}
+    }
+    environment.update(dict.fromkeys(keys, "synthetic-only-never-a-real-credential"))
+    environment["P0_FRONTEND_CUSTOM"] = "public-synthetic"
+
+    # Prove the same Node probe detects the seeded environment before testing removal.
+    control = subprocess.run(
+        [node, str(probe)], env=environment, capture_output=True, text=True,
+        timeout=15, check=False,
+    )
+    assert control.returncode == 0, "The synthetic Node environment probe did not run"
+    baseline = json.loads(control.stdout)
+    assert baseline["seenSensitiveKeys"] == list(keys)
+    assert baseline["customVariablePreserved"] is True
+
+    launched = subprocess.run(
+        [shell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+         "-File", str(launcher), "-Role", "frontend"],
+        env=environment, capture_output=True, text=True, timeout=30, check=False,
+    )
+    assert launched.returncode == 0, "The copied frontend launcher did not complete"
+    observed = json.loads(launched.stdout)
+    assert observed == {"seenSensitiveKeys": [], "customVariablePreserved": True,
+                        "frontendArgumentsCorrect": True}

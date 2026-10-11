@@ -1,10 +1,18 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createApi } from './client';
+import { ApiError, createApi } from './client';
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 const status = { status: 'partial', mode: 'local_single_user', database: 'available', rag: 'not_configured', models: 'not_configured' };
 
 describe('local same-origin API boundary', () => {
+  it('gives safe startup and voice recovery steps without suggesting an automatic business migration', () => {
+    const missing = new ApiError('unavailable', 'database_not_configured').message;
+    expect(missing).toContain('确认');
+    expect(missing).not.toContain('执行初始化迁移');
+    const disabled = new ApiError('unavailable', 'answer_disabled').message;
+    expect(disabled).toContain('CITERAG_ANSWER_ENABLED');
+    expect(new ApiError('conflict', 'voice_active').message).toContain('挂断');
+  });
   it('waits for a tool decision beyond the ordinary ten-second request timeout', async () => {
     vi.useFakeTimers();
     try {

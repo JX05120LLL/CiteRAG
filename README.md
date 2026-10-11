@@ -66,9 +66,13 @@ CiteRAG 使用 [LightRAG](https://github.com/HKUDS/LightRAG) 为本地资料建�
 
 ## 🖼️ 界面预览
 
-![CiteRAG 知识库回答与来源、资料管理、语音通话连接前状态和处理任务四合一界面预览](assets/preview/citerag-ui-overview.png)
+| 对话工作台 | 我的知识库 |
+| :---: | :---: |
+| [![CiteRAG 对话工作台：普通回答、天气与日期问答](assets/preview/对话.png)](assets/preview/对话.png) | [![CiteRAG 我的知识库：资料状态与管理入口](assets/preview/我的知识库.png)](assets/preview/我的知识库.png) |
+| **系统状态** | **语音通话** |
+| [![CiteRAG 系统状态：数据库、模型、检索与语音能力](assets/preview/系统状态.png)](assets/preview/系统状态.png) | [![CiteRAG 语音通话：回响环、字幕与对话记录](assets/preview/语音通话.png)](assets/preview/语音通话.png) |
 
-四张图来自正式 React 工作台的真实浏览器截图，使用明确标注的公开合成资料与拦截的 API 样例，没有连接业务库或调用模型。语音页停在连接前；界面可能随代码更新变化，截图不代表真实模型、媒体连接或业务库验收通过。
+以上为使用者提供的本机界面截图，点击可查看原图。画面展示截图当时的页面与状态，不代表完整知识库、真实模型或语音质量验收通过。
 
 界面保留原有页面布局与交互，统一采用墨绿侧栏、暖白页面、白色阅读面和浅柠绿选中项；暗侧栏使用近白文字，语音阶段区沿用同一配色。主题约定见[前端设计说明](frontend/DESIGN.md)。
 

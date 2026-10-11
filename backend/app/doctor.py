@@ -59,7 +59,22 @@ class Report:
         return "\n".join(rows)
 
 
-def dependency_checks(profile: str) -> list[Check]:
+def _agent_dependency_check() -> Check:
+    missing = []
+    for name in ("langgraph", "langgraph-checkpoint-postgres", "psycopg", "psycopg-pool"):
+        try:
+            importlib.metadata.version(name)
+        except importlib.metadata.PackageNotFoundError:
+            missing.append(name)
+    return Check(
+        "agent_dependencies_missing" if missing else "agent_dependencies",
+        "blocked" if missing else "ready",
+        "缺少 Agent 依赖；先按锁文件显式安装 --extra agent，不自动安装。"
+        if missing else "Agent 依赖元数据存在；未运行任务或初始化检查点。",
+    )
+
+
+def dependency_checks(profile: str, *, agent: bool = False) -> list[Check]:
     checks = [
         Check(
             "python",
@@ -85,6 +100,8 @@ def dependency_checks(profile: str) -> list[Check]:
             else "所需后端包已安装；本检查不安装或同步依赖。",
         )
     )
+    if agent:
+        checks.append(_agent_dependency_check())
     return checks
 
 
@@ -154,8 +171,9 @@ def inspect(
     api_port: int = 8000,
     ui_port: int = 5173,
     frontend: bool = True,
+    agent: bool = False,
 ) -> Report:
-    checks = dependency_checks(profile)
+    checks = dependency_checks(profile, agent=True) if agent else dependency_checks(profile)
     if environment.get("POSTGRES_WORKSPACE") or (root / "backend/config.ini").exists():
         checks.append(Check(
             "legacy_engine_configuration", "blocked",
@@ -212,18 +230,105 @@ def inspect(
     )
     if profile == "knowledge":
         checks.append(file_check("rag_record", root / ".local/runtime/rag-postgres/credential.xml"))
-    checks.append(
-        Check(
-            "optional_features", "disabled", "文字启动不要求 LiveKit、ASR、TTS、VAD、Agent 或 MCP。"
-        )
-    )
+    checks.append(Check(
+        "optional_features", "disabled",
+        "Agent 为本次显式选项；本检查不启动语音、MCP 或天气工具。"
+        if agent else "文字启动不要求 LiveKit、ASR、TTS、VAD、Agent 或 MCP。",
+    ))
     return Report(profile, checks)
 
 
-async def database_checks(value: str) -> list[Check]:
+async def _agent_checkpoint_checks(connection, expected_version: int) -> Check:
+    from app.agent.checkpoints import checkpoint_namespace
+
+    try:
+        schema = await connection.scalar(text("SELECT current_schema()"))
+        namespace = checkpoint_namespace(schema) if isinstance(schema, str) and schema else None
+        if namespace is None or await connection.scalar(
+            text("SELECT to_regnamespace(:name)"), {"name": namespace}
+        ) is None:
+            return Check(
+                "agent_checkpoint_namespace_missing", "blocked",
+                "Agent 检查点命名空间缺失；先停写备份并确认已有 schema 迁移，不自动创建。",
+            )
+        if not await connection.scalar(
+            text("SELECT has_schema_privilege(:name, 'USAGE')"), {"name": namespace}
+        ):
+            return Check(
+                "agent_checkpoint_permissions_missing", "blocked",
+                "Agent 检查点 schema 缺少 USAGE 权限；请由维护者核对业务角色的最小权限，"
+                "不自动授权或修改结构。",
+            )
+        # Saver reads all data tables, upserts checkpoints/writes, inserts blobs,
+        # and retention deletes all three. Migration metadata is read-only at runtime.
+        table_permissions = {
+            "checkpoints": ("SELECT", "INSERT", "UPDATE", "DELETE"),
+            "checkpoint_blobs": ("SELECT", "INSERT", "DELETE"),
+            "checkpoint_writes": ("SELECT", "INSERT", "UPDATE", "DELETE"),
+            "checkpoint_migrations": ("SELECT",),
+        }
+        for table, permissions in table_permissions.items():
+            if await connection.scalar(
+                text("SELECT to_regclass(:name)"), {"name": f"{namespace}.{table}"}
+            ) is None:
+                return Check(
+                    "agent_checkpoint_tables_missing", "blocked",
+                    "Agent 检查点表缺失；先备份并获得初始化授权，再显式运行 "
+                    "python -m app.agent.checkpoints。本诊断不建表。",
+                )
+            # A comma-separated privilege argument means ANY, not ALL, in PostgreSQL.
+            # Combine fixed individual predicates; do not test permissions by writing.
+            predicate = " AND ".join(
+                f"has_table_privilege(:name, '{permission}')" for permission in permissions
+            )
+            if not await connection.scalar(
+                text("SELECT " + predicate), {"name": f"{namespace}.{table}"}
+            ):
+                return Check(
+                    "agent_checkpoint_permissions_missing", "blocked",
+                    f"Agent 检查点 {table} 运行/清理权限不足；请由维护者核对业务角色的 "
+                    f"{'/'.join(permissions)} 最小权限，不自动授权或试写。",
+                )
+        # Namespace is public's fixed name or a server-derived hexadecimal hash.
+        version = await connection.scalar(text(
+            f'SELECT max(v) FROM "{namespace}".checkpoint_migrations'
+        ))
+        if version != expected_version:
+            return Check(
+                "agent_checkpoint_version_mismatch", "blocked",
+                "检查点版本与已安装的锁定依赖不匹配；先核对依赖、停写备份并确认升级，"
+                "不自动 setup 或迁移。",
+            )
+        return Check(
+            "agent_checkpoints", "ready",
+            "Agent 命名空间、检查点表、运行/清理权限和迁移版本只读检查通过；"
+            "未启动应用或执行任务。",
+        )
+    except Exception:  # noqa: BLE001 - checkpoint/driver diagnostics can contain private values
+        return Check(
+            "agent_checkpoint_read_failed", "blocked",
+            "Agent 检查点元数据读取失败；核对本地表结构与读取权限，未初始化或迁移。",
+        )
+
+
+async def database_checks(value: str, *, agent: bool = False) -> list[Check]:
     config = database_config_check(value)
     if config.state == "blocked":
         return [config]
+    checkpoint_version = None
+    if agent:
+        dependency = _agent_dependency_check()
+        if dependency.state == "blocked":
+            return [dependency]
+        try:
+            from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+
+            checkpoint_version = len(AsyncPostgresSaver.MIGRATIONS) - 1
+        except Exception:  # noqa: BLE001 - optional package errors must not leak local details
+            return [Check(
+                "agent_dependencies_unavailable", "blocked",
+                "Agent 可选依赖无法加载；按锁文件显式检查 --extra agent 安装，不自动修复。",
+            )]
     engine = None
     result = []
     try:
@@ -279,6 +384,8 @@ async def database_checks(value: str) -> list[Check]:
                         "只读连接、当前 schema、唯一归属和待处理任务检查通过；未运行应用清理。",
                     )
                 ]
+                if agent:
+                    result.append(await _agent_checkpoint_checks(connection, checkpoint_version))
     except Exception:  # noqa: BLE001 - sanitize all driver details at this CLI boundary
         result = [
             Check(
@@ -304,12 +411,15 @@ def main() -> int:
     parser.add_argument(
         "--database", action="store_true", help="explicit read-only business DB check"
     )
+    parser.add_argument("--agent", action="store_true", help="opt-in read-only Agent preflight")
     parser.add_argument("--api-port", type=int, default=8000)
     parser.add_argument("--ui-port", type=int, default=5173)
     parser.add_argument("--backend-only", action="store_true")
     args = parser.parse_args()
     if not all(1 <= value <= 65535 for value in (args.api_port, args.ui_port)):
         parser.error("Ports must be between 1 and 65535")
+    if args.agent and args.profile == "ui":
+        parser.error("--agent requires the text or knowledge profile")
     report = inspect(
         args.profile,
         {"CITERAG_DATABASE_URL": os.environ.get("CITERAG_DATABASE_URL", ""),
@@ -317,13 +427,15 @@ def main() -> int:
         api_port=args.api_port,
         ui_port=args.ui_port,
         frontend=not args.backend_only,
+        agent=args.agent,
     )
     if args.database and args.profile != "ui":
         report.checks = [
             item for item in report.checks if item.code != "business_database_unchecked"
         ]
         report.checks.extend(
-            asyncio.run(database_checks(os.environ.get("CITERAG_DATABASE_URL", "")))
+            asyncio.run(database_checks(os.environ.get("CITERAG_DATABASE_URL", ""),
+                                        agent=args.agent))
         )
     print(report.render())
     return report.exit_code

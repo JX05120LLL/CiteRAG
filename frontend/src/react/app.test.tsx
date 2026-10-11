@@ -246,6 +246,23 @@ it('creates an ordinary chat with one click and lists source-linked shared memor
   expect(calls.some((call) => call.path.endsWith(`/knowledge-bases/${sampleBases[0].id}/memories`))).toBe(true);
 }, 20000);
 
+it.each([false, true])('shows the actual automatic tool state without disabling manual registered tools (%s)', async (enabled) => {
+  const { api, calls } = fixture();
+  const capability = vi.fn(async () => ({ enabled }));
+  render(<CiteRagApp api={{ ...api, agentCapability: capability, agentRuns: async () => [] }} />);
+  fireEvent.click(await screen.findByRole('button', { name: '工具与调用记录' }, { timeout: 8000 }));
+  const drawer = await screen.findByRole('dialog');
+  const invoke = await within(drawer).findByRole<HTMLButtonElement>('button', { name: '调用工具：本机当前时间' });
+  expect(capability).toHaveBeenCalled();
+  const disabledNotice = within(drawer).queryByText('自动工具未启用，聊天不会自动调用；仍可在此手动调用可用工具。');
+  if (enabled) expect(disabledNotice).toBeNull();
+  else expect(disabledNotice).toBeTruthy();
+  expect(invoke.disabled).toBe(false);
+  fireEvent.click(invoke);
+  expect(await within(drawer).findByText(/本机时间：/)).toBeTruthy();
+  expect(calls.some((call) => call.path.endsWith('/tools/calls') && call.method === 'POST')).toBe(true);
+}, 20000);
+
 it('runs a registered tool through the API and displays the separate durable result', async () => {
   const { api, calls } = fixture();
   render(<CiteRagApp api={api} />);
@@ -313,7 +330,7 @@ it('reuses an uncertain tool request id after timeout and browser remount', asyn
   const { api, calls, recordCount } = fixture(undefined, undefined, false,
     { loseFirstResponse: true, beforeResponse: () => { now = 12000; } });
   render(<CiteRagApp api={api} />);
-  fireEvent.click(await screen.findByRole('button', { name: '工具与调用记录' }));
+  fireEvent.click(await screen.findByRole('button', { name: '工具与调用记录' }, { timeout: 8000 }));
   fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: '调用工具：本机当前时间' }));
   await waitFor(() => expect(calls.filter((call) => call.path.endsWith('/tools/calls') && call.method === 'POST').length).toBe(1));
   cleanup();
@@ -496,7 +513,107 @@ it('shows a knowledge evidence miss clearly without publishing a general answer 
   expect(screen.queryByRole('button', { name: /合成产品手册.md/ })).toBeNull();
 });
 
-it('keeps a synthetic image observation separate from verified source citations', async () => {
+it.each([null, 'KX-17'])('keeps image observation details collapsed without hiding the answer or confirmed identifier (%s)', async (identifier) => {
+  const image = { id: 'image-1', filename: '合成花朵.png', mime_type: 'image/png' as const,
+    width: 320, height: 240, size: 1024, observation: '合成观察：一株开花植物与一只蝴蝶。',
+    observation_status: 'ready' as const, needs_confirmation: !!identifier, confirmed_identifier: identifier,
+    expires_at: '2099-10-01T00:00:00Z' };
+  const message = { ...sampleMessages[sampleChats[0].id][0], route: 'general' as const,
+    text: '合成图片回答：这是一株开花植物。', citations: [], images: [image] };
+  const { api } = fixture([message]);
+  render(<CiteRagApp api={api} />);
+  expect(await screen.findByText(message.text)).toBeTruthy();
+  expect(screen.getByRole('img', { name: '提问图片：合成花朵.png' })).toBeTruthy();
+  const summary = screen.getByText('查看图片识别详情');
+  const details = summary.closest('details') as HTMLDetailsElement;
+  expect(details).toBeTruthy();
+  expect(details.open).toBe(false);
+  expect(screen.getByText(image.observation).closest('details')).toBe(details);
+  fireEvent.click(summary);
+  expect(details.open).toBe(true);
+  expect(within(details).getByText(image.observation)).toBeTruthy();
+  fireEvent.click(summary);
+  expect(details.open).toBe(false);
+  expect(screen.queryByRole('button', { name: '确认图片编号' })).toBeNull();
+  if (identifier) expect(screen.getByText(`已确认编号：${identifier}`)).toBeTruthy();
+  expect(screen.getByText('普通回答 · 未检索知识库')).toBeTruthy();
+  expect(screen.queryByRole('button', { name: /查看来源/ })).toBeNull();
+}, 20000);
+
+it('keeps image observation failure and retry visible without empty details', async () => {
+  const image = { id: 'image-failed', filename: '合成失败.png', mime_type: 'image/png' as const,
+    width: 320, height: 240, size: 1024, observation: null, observation_status: 'failed' as const,
+    needs_confirmation: false, confirmed_identifier: null, expires_at: '2099-10-01T00:00:00Z' };
+  const message = { ...sampleMessages[sampleChats[0].id][0], status: 'failed' as const,
+    route: null, text: '', citations: [], error_code: 'image_observation_unavailable', images: [image] };
+  const { api } = fixture([message]);
+  render(<CiteRagApp api={api} />);
+  expect(await screen.findByText('图片识别失败，具体原因见下方。排除原因后可重试回答。')).toBeTruthy();
+  expect(screen.getByText(/错误代码：image_observation_unavailable/)).toBeTruthy();
+  expect(screen.getByRole<HTMLButtonElement>('button', { name: '重试回答' }).disabled).toBe(false);
+  expect(screen.queryByText('查看图片识别详情')).toBeNull();
+});
+
+it.each(['failed', 'interrupted', 'partial'] as const)('keeps an unrouted ordinary %s answer readable and connects its retry to the API', async (status) => {
+  const ordinary = { ...sampleChats[0], kb_id: null, title: '合成普通聊天' };
+  sessionStorage.setItem('citerag.workbench.selection', JSON.stringify({ kbId: null, chatId: ordinary.id }));
+  const image = { id: 'ordinary-image-failed', filename: '合成普通失败.png', mime_type: 'image/png' as const,
+    width: 32, height: 32, size: 512, observation: null, observation_status: 'failed' as const,
+    needs_confirmation: false, confirmed_identifier: null, expires_at: '2099-10-01T00:00:00Z' };
+  const error = { failed: 'image_observation_unavailable', interrupted: 'request_interrupted',
+    partial: 'answer_output_limit' }[status];
+  const message = { ...sampleMessages[sampleChats[0].id][0], status, route: null, kb_revision: 0,
+    question: '合成普通聊天问题', text: status === 'partial' ? '合成未完成回答' : '', citations: [],
+    error_code: error, saved: true, images: status === 'failed' ? [image] : [] };
+  const { api, calls } = fixture([message], [ordinary]);
+  render(<CiteRagApp api={api} />);
+  expect(await screen.findByText(message.question)).toBeTruthy();
+  expect(screen.getByText('普通聊天 · 无知识库访问')).toBeTruthy();
+  expect(screen.queryByText('知识库已变化，此回答与来源已暂停展示。')).toBeNull();
+  expect(screen.queryByText('当前知识库状态暂不可核实，此回答与来源已暂停展示。请刷新后重试。')).toBeNull();
+  expect(screen.getByText(new RegExp(`错误代码：${error}`))).toBeTruthy();
+  if (status === 'failed') expect(screen.getByText('图片识别未完成，请重试；若持续失败，请检查图片模型状态。')).toBeTruthy();
+  if (status === 'partial') expect(screen.getByText(message.text)).toBeTruthy();
+  expect(screen.queryByRole('button', { name: /查看来源/ })).toBeNull();
+  const retry = screen.getByRole<HTMLButtonElement>('button', { name: '重试回答' });
+  expect(retry.disabled).toBe(false);
+  fireEvent.click(retry);
+  expect(await screen.findByText('合成重试结果')).toBeTruthy();
+  expect(calls.some((call) => call.path.endsWith(`/messages/${message.message_id}/retry`) && call.method === 'POST')).toBe(true);
+}, 20000);
+
+it.each(['hidden', 'stale'] as const)('keeps explicit %s invalidation for an unrouted ordinary answer', async (flag) => {
+  const ordinary = { ...sampleChats[0], kb_id: null, title: '合成普通聊天' };
+  sessionStorage.setItem('citerag.workbench.selection', JSON.stringify({ kbId: null, chatId: ordinary.id }));
+  const message = { ...sampleMessages[sampleChats[0].id][0], route: null, status: 'failed' as const,
+    text: '合成已失效回答', citations: [], error_code: 'image_observation_unavailable', [flag]: true };
+  const { api } = fixture([message], [ordinary]);
+  render(<CiteRagApp api={api} />);
+  expect(await screen.findByText(message.question)).toBeTruthy();
+  expect(screen.getByText('普通聊天 · 无知识库访问')).toBeTruthy();
+  expect(screen.getByText('知识库已变化，此回答与来源已暂停展示。')).toBeTruthy();
+  expect(screen.queryByText(message.text)).toBeNull();
+  expect(screen.queryByText(/错误代码：image_observation_unavailable/)).toBeNull();
+  expect(screen.queryByRole('button', { name: '重试回答' })).toBeNull();
+}, 20000);
+
+it.each(['unavailable', 'maintaining'] as const)('keeps the %s knowledge gate for an unrouted failed knowledge answer', async (state) => {
+  const message = { ...sampleMessages[sampleChats[0].id][0], route: null, status: 'failed' as const,
+    text: '合成暂停回答', error_code: 'image_observation_unavailable' };
+  const { api } = fixture([message]);
+  render(<CiteRagApp api={{ ...api, knowledgeBases: async () => {
+    if (state === 'unavailable') throw new Error('合成目录暂不可用');
+    return [{ ...sampleBases[0], status: 'maintaining' }];
+  } }} />);
+  expect(await screen.findByText(message.question)).toBeTruthy();
+  expect(screen.getByText(state === 'unavailable' ? '当前知识库状态暂不可核实，此回答与来源已暂停展示。请刷新后重试。'
+    : '知识库已变化，此回答与来源已暂停展示。')).toBeTruthy();
+  expect(screen.queryByText(message.text)).toBeNull();
+  expect(screen.queryByRole('button', { name: '重试回答' })).toBeNull();
+  expect(screen.queryByRole('button', { name: /查看来源/ })).toBeNull();
+}, 20000);
+
+it('keeps collapsed synthetic observation available for identifier confirmation without source citations', async () => {
   const image = { id: 'image-1', filename: '合成铭牌.png', mime_type: 'image/png' as const,
     width: 320, height: 240, size: 1024, observation: '编号字迹模糊',
     observation_status: 'ready' as const, needs_confirmation: true, confirmed_identifier: null,
@@ -507,11 +624,20 @@ it('keeps a synthetic image observation separate from verified source citations'
   const { api } = fixture([message]);
   render(<CiteRagApp api={api} />);
   expect(await screen.findByText('合成铭牌.png')).toBeTruthy();
-  expect(screen.getByText('编号字迹模糊')).toBeTruthy();
-  expect(screen.getByRole('button', { name: '确认图片编号' })).toBeTruthy();
+  const summary = screen.getByText('核对图片识别详情');
+  const details = summary.closest('details') as HTMLDetailsElement;
+  expect(details).toBeTruthy();
+  expect(details.open).toBe(false);
+  expect(screen.getByText('图片编号需人工确认。')).toBeTruthy();
+  fireEvent.click(summary);
+  expect(details.open).toBe(true);
+  expect(within(details).getByText('编号字迹模糊')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: '确认图片编号' }));
+  const confirmation = await screen.findByRole('dialog');
+  expect(within(confirmation).getByText('请核对图片原文，输入确认的完整编号')).toBeTruthy();
   expect(screen.queryByRole('button', { name: '重试回答' })).toBeNull();
   expect(screen.queryByRole('button', { name: /合成产品手册.md/ })).toBeNull();
-});
+}, 20000);
 
 it('uses backend offset pagination for documents and preserves disabled maintenance gates', async () => {
   const { api, calls } = fixture(); render(<CiteRagApp api={api} />);

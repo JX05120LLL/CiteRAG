@@ -1,6 +1,7 @@
 """Offline planning prompt regression; no model or supplier calls."""
 
 import json
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -105,3 +106,70 @@ async def test_agent_still_rejects_oversized_current_question(monkeypatch):
     runtime = object.__new__(RagRuntime)
     with pytest.raises(TokenBudgetExceeded):
         await runtime.complete_agent("问题" * 5000, [], {}, [], [], True)
+
+
+@pytest.mark.parametrize("general", [True, False])
+@pytest.mark.parametrize("outcome", ["missing", "failed", "rejected", "truncated"])
+async def test_agent_realtime_prompt_preserves_clock_and_failed_tool_state(
+    monkeypatch, general, outcome,
+):
+    """Prompt contract coverage; it does not certify a real model's answer quality."""
+    import app.rag.runtime as module
+
+    zone = timezone(timedelta(hours=8))
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            value = cls(2026, 10, 12, 0, 15, tzinfo=zone)
+            return value if tz is None else value.astimezone(tz)
+
+        def astimezone(self, tz=None):
+            return self if tz is None else super().astimezone(tz)
+
+    monkeypatch.setattr(module, "datetime", FrozenDateTime, raising=False)
+    captured = []
+
+    class Client:
+        async def complete(self, _model, messages, **_options):
+            captured.append(messages)
+            return SimpleNamespace(content='{"action":"finish","answer":{"text":"ok"}}')
+
+    async def client(_self):
+        return Client()
+
+    monkeypatch.setattr(module.RagRuntime, "_get_client", client)
+    runtime = object.__new__(module.RagRuntime)
+    tools = [] if outcome == "missing" else [{
+        "id": "weather.current", "title": "公开合成实时天气",
+        "impact": "Synthetic only, no network", "input_schema": {"type": "object"},
+    }]
+    results = [] if outcome == "missing" else [{
+        "tool_id": "weather.current",
+        "status": "succeeded" if outcome == "truncated" else outcome,
+        "error_code": "weather_auth_failed" if outcome == "failed" else None,
+        "truncated": outcome == "truncated", "data": None,
+    }]
+    await runtime.complete_agent(
+        "今天是几号？北京天气如何？", [],
+        {"server_clock": {"local_date": "2024-06-28"}}, tools, results, general,
+    )
+    assert len(captured) == 1
+    system = captured[0][0].content
+    assert "服务端可信时钟：" in system
+    clock = json.loads(system.split("服务端可信时钟：", 1)[1].splitlines()[0])
+    assert clock["local_date"] == "2026-10-12"
+    assert clock["local_time"].endswith("+08:00")
+    assert clock["utc_time"].startswith("2026-10-11")
+    assert "2024-06-28" not in system
+    assert "不是工具调用" in system
+    assert "本机时钟，未联网校准" in system
+    assert "天气等实时外部事实必须" in system
+    assert "status=succeeded" in system and "未截断" in system
+    assert "缺少匹配工具" in system and "具体失败原因" in system
+    assert "不得编造" in system
+    payload = json.loads(captured[0][1].content)
+    assert payload["tool_results"] == results
+    assert {tool["id"] for tool in payload["allowed_tools"]} == {
+        tool["id"] for tool in tools
+    }

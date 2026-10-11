@@ -12,7 +12,88 @@ beforeEach(() => {
 });
 afterEach(() => cleanup());
 
-it('uses the main composer to continue a waiting text task in the same chat', async () => {
+function composerFixture(options: { knowledge?: boolean; pending?: boolean; loading?: boolean;
+  selected?: boolean; maintaining?: boolean } = {}) {
+  const state = {
+    agentEnabled: false, selectedChatId: options.selected === false ? null : 'chat',
+    selectedKbId: options.knowledge ? 'kb' : null,
+    bases: options.knowledge ? [{ id: 'kb', name: '公开合成库', status: options.maintaining ? 'maintaining' : 'ready' }] : [],
+    chats: [], chatMessages: [], chatDraft: '', chatPending: !!options.pending,
+    loading: !!options.loading, chatImages: [], chatUploadedImages: [], chatError: null,
+    selectedCitation: null,
+  };
+  const sendChat = vi.fn(async () => {});
+  function Harness() {
+    const [, refresh] = useState(0);
+    const actions = { setDraft: (text: string) => { state.chatDraft = text; refresh((n) => n + 1); },
+      sendChat };
+    return <Workbench view={{ state, actions } as unknown as AppView} api={{} as ApiClient} />;
+  }
+  render(<Harness />);
+  const input = document.querySelector<HTMLTextAreaElement>('.composer textarea')!;
+  return { input, sendChat, state };
+}
+
+it.each([false, true])('sends Enter after typing into an initially empty composer (%s knowledge)', (knowledge) => {
+  const { input, sendChat } = composerFixture({ knowledge });
+  fireEvent.change(input, { target: { value: '公开合成问题' } });
+  expect(screen.getByRole<HTMLButtonElement>('button', { name: /发送问题/ }).disabled).toBe(false);
+  expect(fireEvent.keyDown(input, { key: 'Enter', code: 'Enter', keyCode: 13 })).toBe(false);
+  expect(sendChat).toHaveBeenCalledTimes(1);
+});
+
+it.each(['shiftKey', 'ctrlKey', 'altKey', 'metaKey'])('does not send modified Enter (%s)', (modifier) => {
+  const { input, sendChat } = composerFixture();
+  fireEvent.change(input, { target: { value: '公开合成问题' } });
+  expect(fireEvent.keyDown(input, { key: 'Enter', code: 'Enter', [modifier]: true })).toBe(true);
+  expect(sendChat).not.toHaveBeenCalled();
+});
+
+it('confirms Chinese composition without sending, then sends a separate Enter', () => {
+  const { input, sendChat } = composerFixture();
+  fireEvent.compositionStart(input);
+  fireEvent.change(input, { target: { value: '公开合成中文' } });
+  fireEvent.keyDown(input, { key: 'Enter', code: 'Enter', keyCode: 13, isComposing: true });
+  expect(sendChat).not.toHaveBeenCalled();
+  fireEvent.compositionEnd(input, { data: '公开合成中文' });
+  fireEvent.keyDown(input, { key: 'Enter', code: 'Enter', keyCode: 13 });
+  expect(sendChat).toHaveBeenCalledTimes(1);
+});
+
+it.each([{ isComposing: true, keyCode: 13 }, { isComposing: false, keyCode: 229 }])(
+  'does not send native IME confirmation without a compositionstart (%j)', (ime) => {
+    const { input, sendChat } = composerFixture();
+    fireEvent.change(input, { target: { value: '公开合成中文' } });
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter', ...ime });
+    expect(sendChat).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter', keyCode: 13 });
+    expect(sendChat).toHaveBeenCalledTimes(1);
+  },
+);
+
+it('keeps empty and whitespace input unsendable by Enter and click', () => {
+  const { input, sendChat } = composerFixture();
+  for (const value of ['', ' \n ']) {
+    fireEvent.change(input, { target: { value } });
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter', keyCode: 13 });
+    const button = screen.getByRole<HTMLButtonElement>('button', { name: /发送问题/ });
+    expect(button.disabled).toBe(true);
+    fireEvent.click(button);
+  }
+  expect(sendChat).not.toHaveBeenCalled();
+});
+
+it.each([{ pending: true }, { loading: true }, { selected: false },
+  { knowledge: true, maintaining: true }])('keeps keyboard and click behind the existing gate (%j)', (options) => {
+  const { input, sendChat } = composerFixture(options);
+  fireEvent.change(input, { target: { value: '公开合成问题' } });
+  expect(input.disabled).toBe(true);
+  fireEvent.keyDown(input, { key: 'Enter', code: 'Enter', keyCode: 13 });
+  fireEvent.click(screen.getByRole('button', { name: /发送问题/ }));
+  expect(sendChat).not.toHaveBeenCalled();
+});
+
+it.each(['click', 'enter'])('uses the main composer to continue a waiting text task in the same chat (%s)', async (method) => {
   const run: AgentRun = {
     id: 'run', conversation_id: 'chat', message_id: 'message', attempt_id: 'attempt',
     status: 'waiting_input', generation: 1, seq: 3, model_rounds: 1, tool_attempts: 0,
@@ -41,12 +122,14 @@ it('uses the main composer to continue a waiting text task in the same chat', as
   render(<Harness />);
   await screen.findByText('Which location?');
   expect(document.querySelector('.message-scroll .agent-task')).not.toBeNull();
-  expect(document.querySelector('.answer-card .answer-text')?.textContent).toBe('Which location?');
+  await waitFor(() => expect(document.querySelector('.answer-card .answer-text')?.textContent).toBe('Which location?'));
   const input = document.querySelector<HTMLTextAreaElement>('.composer textarea');
   expect(input?.disabled).toBe(false);
   fireEvent.change(input!, { target: { value: 'Hanzhong' } });
-  fireEvent.click(screen.getByRole('button', { name: /补充并继续/ }));
-  fireEvent.click(screen.getByRole('button', { name: /补充并继续/ }));
+  if (method === 'click') fireEvent.click(screen.getByRole('button', { name: /补充并继续/ }));
+  else fireEvent.keyDown(input!, { key: 'Enter', code: 'Enter', keyCode: 13 });
+  if (method === 'click') fireEvent.click(screen.getByRole('button', { name: /补充并继续/ }));
+  else fireEvent.keyDown(input!, { key: 'Enter', code: 'Enter', keyCode: 13 });
   await waitFor(() => expect(resumeAgent).toHaveBeenCalledWith(run, expect.any(String),
     { detail: 'Hanzhong' }));
   expect(resumeAgent).toHaveBeenCalledTimes(1);

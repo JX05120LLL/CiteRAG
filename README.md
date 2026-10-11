@@ -116,6 +116,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\backend\start.ps1 -Rol
 
 打开 [工作台](http://127.0.0.1:5173/)。上述入口关闭语音、Agent、MCP、天气与备份后台任务；普通聊天使用默认 `text` profile，固定库聊天额外需要当前库真实就绪。退出前等待当前文字回答完成，在两个窗口分别按 `Ctrl+C`，Docker 保持运行。只有已授权时才显式启用入库/问答开关。
 
+需要聊天自动查天气时，须已安装 Agent 依赖、初始化检查点并配置天气。显式使用 `-EnableAgent -EnableWeather`（固定库聊天再加 `-Profile knowledge`）；先加 `-CheckOnly` 检查启动条件，缺项不会自动建表。仅 `-EnableWeather` 提供手动天气工具，不启用模型自动选择。完整命令见[启动说明](backend/STARTUP.md#可选自动工具与天气)。地点参数会发送给和风天气并可能计费；默认启动不会因此启用外部服务。
+
 **无业务配置的界面预览、其他系统或需要启用可选能力时**，在 `backend/` 直接使用 `uv run --no-sync --no-env-file uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1 --no-proxy-headers`，前端在 `frontend/` 使用 `pnpm dev`。未配置业务库时创建/发送聊天不可用，不会生成演示资料。独立语音页位于 `/voice.html`，完整语音仍需另行配置。已有本机配置的检测行为见下一段。
 
 打开系统状态页时，已配置的模型与语音能力会自动进行有界实际调用，独立于入库、问答与语音助手开关：模型至多一次 DashScope 请求，TTS 至多一次 MiniMax 请求，ASR 至多一次 MiniMax 合成及一次火山引擎识别请求。检测仅发送固定短提示“只回复 OK”或合成“你好”语音，不发送聊天或资料正文，可能产生供应商费用。结果按配置指纹保留一小时；重复打开页面复用有效结果，点击“刷新系统状态”会重新检测。未配置的能力显示不可用；知识检索目前缺少可证明只读的完整验收路径，因此保持“未检测”，不会伪报可用。本地诊断仍可在状态页单独运行。单项检测成功不代表完整通话或资料问答验收通过。

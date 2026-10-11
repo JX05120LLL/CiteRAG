@@ -96,6 +96,7 @@
 .citerag-app .formal-conversation:has(.agent-task) .composer { position: static; }
 .citerag-app .message-images, .citerag-app .selected-images { display: flex; flex-wrap: wrap; gap: 10px; min-width: 0; } .citerag-app .message-image { width: min(100%,280px); padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: #fff; overflow-wrap: anywhere; }
 .citerag-app .message-image img { display: block; max-width: 100%; max-height: 180px; object-fit: contain; margin: 8px 0; border-radius: 8px; } .citerag-app .message-image p { margin: 8px 0 0; white-space: pre-wrap; }
+.citerag-app .image-observation { margin-top: 8px; font-size: 13px; color: var(--muted); } .citerag-app .image-observation summary { cursor: pointer; line-height: 1.7; padding-block: 3px; color: var(--accent); } .citerag-app .image-observation[open] p { color: var(--ink); }
 .citerag-app .selected-images { margin-bottom: 10px; } .citerag-app .selected-images > span { padding: 6px 8px; background: #fff; border: 1px solid var(--line); border-radius: 8px; overflow-wrap: anywhere; }
 /* Source, memory and tools retain ordinary DOM controls. */
 .formal-source-drawer .ant-drawer-header, .workspace-detail-drawer .ant-drawer-header { padding: 22px 24px; } .formal-source-drawer .ant-drawer-body, .workspace-detail-drawer .ant-drawer-body { padding: 20px 24px; }

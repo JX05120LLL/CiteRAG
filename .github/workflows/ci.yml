@@ -187,9 +187,9 @@ jobs:
         # Tests use temporary synthetic files/keys and mocked DB metadata only.
         # They never start the product or require private data, provider keys or devices.
         run: |
-          uv run --locked --no-sync --no-env-file ruff check app/doctor.py tests/test_startup_doctor.py tests/test_model_setup.py
+          uv run --locked --no-sync --no-env-file ruff check app/doctor.py tests/test_startup_doctor.py tests/test_agent_startup_preflight.py tests/test_model_setup.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          uv run --locked --no-sync --no-env-file pytest -q tests/test_startup_doctor.py tests/test_model_setup.py
+          uv run --locked --no-sync --no-env-file pytest -q tests/test_startup_doctor.py tests/test_agent_startup_preflight.py tests/test_model_setup.py
           exit $LASTEXITCODE
 
   backend:

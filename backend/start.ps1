@@ -1,7 +1,9 @@
 param(
     [ValidateSet('api', 'frontend')][string]$Role = 'api',
     [ValidateSet('text', 'knowledge')][string]$Profile = 'text',
-    [switch]$CheckOnly
+    [switch]$CheckOnly,
+    [switch]$EnableAgent,
+    [switch]$EnableWeather
 )
 
 # Foreground daily startup. No install, migration, Docker control or voice worker.
@@ -56,22 +58,29 @@ try {
     $env:PYTHON_DOTENV_DISABLED = '1'
     $env:CITERAG_VOICE_TRANSPORT_ENABLED = 'false'
     $env:CITERAG_VOICE_ASSISTANT_ENABLED = 'false'
-    $env:CITERAG_AGENT_ENABLED = 'false'
+    $env:CITERAG_AGENT_ENABLED = $EnableAgent.IsPresent.ToString().ToLowerInvariant()
     $env:CITERAG_MCP_ENABLED = 'false'
     $env:CITERAG_BACKUP_ENABLED = 'false'
-    $env:CITERAG_QWEATHER_ENABLED = 'false'
-    $env:CITERAG_QWEATHER_API_HOST = 'startup.qweatherapi.com'
-    $env:CITERAG_QWEATHER_API_KEY = 'unused-local-startup'
+    $env:CITERAG_QWEATHER_ENABLED = $EnableWeather.IsPresent.ToString().ToLowerInvariant()
+    if (-not $EnableWeather) {
+        # Prevent disabled daily startup from loading private weather configuration.
+        $env:CITERAG_QWEATHER_API_HOST = 'startup.qweatherapi.com'
+        $env:CITERAG_QWEATHER_API_KEY = 'unused-local-startup'
+    }
     $env:CITERAG_API_WORKERS = '1'
     $env:WEB_CONCURRENCY = '1'
     # Existing answer/ingestion switches are respected; they default to false.
     Set-Location -LiteralPath $PSScriptRoot
     $startupStage = 'read-only-preflight'
-    & $startupPython -m app.doctor --profile $Profile --database --backend-only
+    $startupCheckArguments = @('-m', 'app.doctor', '--profile', $Profile, '--database', '--backend-only')
+    if ($EnableAgent) { $startupCheckArguments += '--agent' }
+    & $startupPython @startupCheckArguments
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     if ($CheckOnly) { exit 0 }
     Write-Host 'Starting the text API. Startup recovers records and applies retention; it is not read-only.'
     Write-Host 'Answer/ingestion switches are explicit. Supplier requests can charge when enabled or checked in the status page.'
+    if ($EnableAgent) { Write-Host 'Automatic tool planning enabled; only registered tools are available. MCP remains disabled.' }
+    if ($EnableWeather) { Write-Host 'Weather queries enabled when configured. Location parameters are sent to QWeather and may incur fees.' }
     $startupStage = 'api-startup'
     & $startupPython -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1 --no-proxy-headers
     exit $LASTEXITCODE

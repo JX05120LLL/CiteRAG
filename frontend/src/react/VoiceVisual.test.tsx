@@ -68,11 +68,13 @@ it('ignores a late lazy scene load while hidden, then releases the visible scene
   hidden = false;
   document.dispatchEvent(new Event('visibilitychange'));
   await screen.findByTestId('three-echo');
-  expect(scene.mounts).toBe(1);
+  await waitFor(() => expect(scene.mounts).toBe(1));
   hidden = true;
   document.dispatchEvent(new Event('visibilitychange'));
-  await waitFor(() => expect(screen.queryByTestId('three-echo')).toBeNull());
-  expect(scene.releases).toBe(1);
+  await waitFor(() => {
+    expect(screen.queryByTestId('three-echo')).toBeNull();
+    expect(scene.releases).toBe(1);
+  });
   view.unmount();
 });
 
@@ -82,10 +84,13 @@ it('cleans listeners and scene ownership through StrictMode and changing motion 
   const remove = vi.spyOn(document, 'removeEventListener');
   const view = render(<StrictMode><VoiceVisual media={media} levels={[0.4]} /></StrictMode>);
   await screen.findByTestId('three-echo');
+  await waitFor(() => expect(scene.mounts).toBeGreaterThan(0));
   reduced = true;
   preference?.();
-  await waitFor(() => expect(screen.queryByTestId('three-echo')).toBeNull());
-  expect(scene.mounts).toBe(scene.releases);
+  await waitFor(() => {
+    expect(screen.queryByTestId('three-echo')).toBeNull();
+    expect(scene.mounts).toBe(scene.releases);
+  });
   view.unmount();
   expect(add.mock.calls.filter(([type]) => type === 'visibilitychange').length)
     .toBe(remove.mock.calls.filter(([type]) => type === 'visibilitychange').length);
@@ -120,12 +125,14 @@ it('falls back after a context loss notification without resurrecting the scene 
   const view = render(<VoiceVisual media={media} levels={[0.4]} />);
   await screen.findByTestId('three-echo');
   scene.unavailable();
-  await waitFor(() => expect(screen.queryByTestId('three-echo')).toBeNull());
+  await waitFor(() => {
+    expect(screen.queryByTestId('three-echo')).toBeNull();
+    expect(scene.releases).toBe(1);
+  });
   const mounts = scene.mounts;
   view.rerender(<VoiceVisual media={{ ...media, assistantPhase: 'speaking' }} levels={[0.8]} />);
   expect(scene.mounts).toBe(mounts);
   expect(view.container.querySelector('svg')).toBeTruthy();
-  expect(scene.releases).toBe(1);
   scene.firstFrame();
   expect(view.container.querySelector('.voice-echo-3d')).toBeNull();
 });

@@ -83,7 +83,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\backend\start.ps1 -Che
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\backend\start.ps1
 ```
 
-知识库文字工作台使用 `-Profile knowledge`，额外检查 `rag` 依赖及引擎配置文件。两种模式均关闭语音、Agent、MCP、天气和备份后台任务，保持单 API worker；不要用这个文字启动入口验收这些可选能力。
+知识库文字工作台使用 `-Profile knowledge`，额外检查 `rag` 依赖及引擎配置文件。两种模式默认均关闭语音、Agent、MCP、天气和备份后台任务，保持单 API worker；自动工具与天气须显式启用，见下节。语音、MCP 和备份仍使用各自入口。
 
 终端二：
 
@@ -103,6 +103,23 @@ cd backend
 
 无业务库时创建/发送聊天不可用。已有本机配置仍会被应用读取，这不是忽略配置的沙箱。**系统状态页对已配置能力的自动检测可能产生供应商费用**，独立于入库/问答开关；范围见 [主 README](../README.md#-快速开始)。没有费用授权时不要触发该检测。
 
+### 可选自动工具与天气
+
+默认文字回答不会调用工具；在「工具与调用记录」中仍可手动使用已注册的本机工具。关闭 Agent 时，普通回答与普通语音会获得本机当前日期、带时区的时间（未联网校准），不会因此获得实时天气。图片识别详情默认折叠，识别错误与编号确认仍直接可见。
+
+聊天自动查询天气需要 **Agent 和天气同时开启**。先按 [Agent 说明](AGENT.md) 准备锁定的可选依赖与既有检查点，按 [天气说明](QWEATHER.md) 准备受控配置；本启动入口不安装依赖、不初始化检查点，也不迁移数据库。模型及天气请求须有适用的费用和外发授权。关闭自己启动的旧 API 后，在仓库根目录执行：
+
+```powershell
+# 只读检查；不启动应用、不调用模型或天气服务
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\backend\start.ps1 -EnableAgent -EnableWeather -CheckOnly
+# 条件通过且已有调用授权后启动；回答开关仍须显式设置
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\backend\start.ps1 -EnableAgent -EnableWeather
+```
+
+固定库聊天另加 `-Profile knowledge`。`-EnableAgent` 只读检查可选依赖、检查点表、版本与业务角色的运行／清理权限，缺项则在应用恢复前拒绝；不会自动执行 setup 或授权。`-EnableWeather` 保留受控环境或 `.env.weather` 中的 Host/Key，只注册已配置的天气工具，加载/注册不请求供应商。仅启用天气时可手动调用；仅启用 Agent 时只能选择已有目录工具。MCP、语音及备份开关保持关闭。参数只用于 API 入口。
+
+真实验收时提问「今天是几号？北京天气如何？」：日期应与本机时区一致；天气应产生城市搜索和天气调用记录，回答包含真实结果或具体安全失败原因，不把猜测当查询结果。缺配置时天气工具不会出现在目录中。普通聊天保持无知识库引用，天气属于独立外部工具结果。历史错误回答不会被自动改写；重启后新提问或手动重试。
+
 ## 5. 关闭与缺项定位
 
 退出前等待当前文字回答完成（语音应先挂断），再分别在前端、API 窗口按 `Ctrl+C`。当前普通文字流没有独立的“停止回答”按钮；刷新/关闭页面造成断线后，重开并核对持久状态，再决定是否重试。只关闭这两个已知窗口，不停 Docker 或未知 PostgreSQL，不按端口批量杀进程。进程意外退出后旧回答会标记中断，重启读取历史，不自动重发模型请求。
@@ -116,6 +133,7 @@ cd backend
 | `database_owner_invalid` | 核对归属和恢复方案；不自动认领。 |
 | `unfinished_ingestion` | 审查任务状态及付费授权；检查命令不会修改或重试它。 |
 | `model_record` / `rag_record` | 准备对应受控配置；文件检查不验证供应商可用性。 |
+| `agent_dependencies` / `agent_checkpoint*` | 按 Agent 说明核对锁定依赖和检查点；初始化或升级须先另行确认，不自动修复数据库。 |
 | `api-startup` | 查当前启动窗口的安全错误；业务恢复及可选引擎检查仍可能失败。 |
 
 需要进一步定位时，在 `backend/` 中运行 `python -m app.doctor --profile text --database --backend-only`（须已受控注入连接）；结果不会打印连接内容或凭证。诊断退出码 `0` 是本地检查完成、`1` 是缺项阻止、`2` 是尚未检查业务库，均不是模型质量或业务验收结论。

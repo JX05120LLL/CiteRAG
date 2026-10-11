@@ -239,7 +239,7 @@ export function Workbench({ view, api }: { view: AppView; api: ApiClient }) {
     <div className="message-scroll" role="log" aria-label="当前聊天记录" aria-live="polite" aria-busy={busy}>
       {!s.chatMessages.length && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={s.selectedChatId ? s.selectedKbId === null ? '直接提问；本聊天不会检索知识库' : '直接提问，自动区分交流与资料查询' : '新建普通聊天或选择知识库聊天'} />}
       {s.chatMessages.map((m) => {
-        const readable = !m.hidden && !m.stale && (m.route === 'general' || m.route === 'chat' || base?.status === 'ready');
+        const readable = !m.hidden && !m.stale && (s.selectedKbId === null || m.route === 'general' || m.route === 'chat' || base?.status === 'ready');
         const cited = base?.status === 'ready' && displayCitations(m).length > 0;
         const streaming = m.status === 'running' && s.chatStreamAttemptId === m.attempt_id;
         const content = !readable ? unknownKnowledge && !m.hidden && !m.stale
@@ -260,10 +260,13 @@ export function Workbench({ view, api }: { view: AppView; api: ApiClient }) {
               {Date.parse(image.expires_at) > Date.now() ?
                 <img src={api.imageUrl(s.selectedChatId!, image.id)} alt={`提问图片：${image.filename}`} /> :
                 <span className="muted">图片已过期</span>}
-              {image.observation && <p><strong>图片观察：</strong>{image.observation}</p>}
+              {image.observation && <details className="image-observation">
+                <summary>{image.needs_confirmation && !image.confirmed_identifier ? '核对图片识别详情' : '查看图片识别详情'}</summary>
+                <p>{image.observation}</p>
+              </details>}
               {image.observation_status === 'failed' && <p className="failure-reason">图片识别失败，具体原因见下方。排除原因后可重试回答。</p>}
-              {image.needs_confirmation && !image.confirmed_identifier && <Button disabled={busy}
-                onClick={() => void a.confirmChatImage(m.message_id, image.id)}>确认图片编号</Button>}
+              {image.needs_confirmation && !image.confirmed_identifier && <><p className="muted">图片编号需人工确认。</p>
+                <Button disabled={busy} onClick={() => void a.confirmChatImage(m.message_id, image.id)}>确认图片编号</Button></>}
               {image.confirmed_identifier && <p>已确认编号：{image.confirmed_identifier}</p>}
             </div>)}</div>}
           <div className="answer-line"><span className="answer-avatar"><img src={logo} alt="" /></span><div className="answer-card"><div className="answer-heading"><strong>{answerRouteLabel(m.route).split(' · ')[0]}</strong><StateTag value={m.status === 'answered' && !m.saved ? 'uncommitted' : m.status} />
@@ -293,14 +296,17 @@ export function Workbench({ view, api }: { view: AppView; api: ApiClient }) {
       <Sender value={s.chatDraft} onChange={(value) => a.setDraft(value.slice(0, 1000))} onSubmit={() => {
         if (enabled && s.chatDraft.trim()) void (waitingInput ? continueInput() : a.sendChat());
       }}
+      onKeyDown={(event) => {
+        if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return false;
+      }}
       disabled={!enabled} loading={continuing || busy && !waitingInput} autoSize={{ minRows: 2, maxRows: 6 }}
       placeholder={unknownKnowledge && s.selectedChatId ? '当前知识库状态暂不可核实，请刷新后再提问' : waitingInput ? '在此回复补充信息，继续当前任务' : enabled ? s.selectedKbId === null ? '输入问题，直接使用普通回答' : '输入问题，自动识别普通交流或知识库查询'
         : busy && s.selectedChatId ? '当前任务未结束，请先补充、审批或取消' : '先新建或打开聊天'}
-      suffix={false} footer={<div className="composer-controls"><Space wrap><Tooltip title="每条问题最多 2 张 PNG/JPEG，每张 10 MiB"><Button icon={<PictureOutlined />}
+      suffix={false} footer={(_, { components: { SendButton } }) => <div className="composer-controls"><Space wrap><Tooltip title="每条问题最多 2 张 PNG/JPEG，每张 10 MiB"><Button icon={<PictureOutlined />}
         disabled={!enabled || !!waitingInput} onClick={() => imageInput.current?.click()}>添加图片</Button></Tooltip>
         <span className="composer-kb"><BookOutlined />{s.selectedKbId === null ? '普通聊天' : base?.name || '当前聊天固定知识库 · 暂不可读取'}</span></Space>
         <Space wrap><Tooltip title={taskConflict ? '先补充或取消当前任务，也可新建聊天' : undefined}><Button icon={<AudioOutlined />} disabled={busy} onClick={() => a.navigate('voice')}>语音通话</Button></Tooltip>
-          <Button type="primary" loading={continuing || busy && !waitingInput} disabled={!enabled || !s.chatDraft.trim()} onClick={() => void (waitingInput ? continueInput() : a.sendChat())}>{waitingInput ? '补充并继续' : '发送问题 ↑'}</Button></Space></div>} />
+          <SendButton shape="default" icon={null} loading={continuing || busy && !waitingInput} disabled={!enabled || !s.chatDraft.trim()}>{waitingInput ? '补充并继续' : '发送问题 ↑'}</SendButton></Space></div>} />
       <p className="composer-note">{s.selectedKbId === null ? 'Enter 发送 · Shift+Enter 换行。本聊天不会检索知识库。' : 'Enter 发送 · Shift+Enter 换行。资料回答只展示已提交且有原文依据的结果。'}</p></div>
     <Drawer title="原文来源" aria-label="原文来源" rootClassName="formal-source-drawer" focusable={{ focusTriggerAfterClose: false }} open={!!citation} onClose={a.closeCitation} size="min(460px, 100vw)" destroyOnHidden
       footer={citation && <div className="source-drawer-actions"><Button aria-label="下载原文" href={api.originalUrl(citation.document_id)} icon={<FileTextOutlined />}>下载原文</Button><Button type="primary" onClick={a.closeCitation}>关闭来源</Button></div>}>
@@ -333,6 +339,7 @@ export function Workbench({ view, api }: { view: AppView; api: ApiClient }) {
     </Drawer>
     <Drawer title="工具与调用记录" rootClassName="workspace-detail-drawer" open={toolOpen && !!s.selectedChatId} onClose={() => setToolOpen(false)} size="min(460px, 100vw)" destroyOnHidden>
       <p className="muted">工具调用由服务端检查聊天范围，结果单独记录，不作为知识库引用。仅显示已登记工具；历史结果只反映调用当时的状态。</p>
+      {s.agentEnabled === false && <Alert type="info" showIcon title="自动工具未启用，聊天不会自动调用；仍可在此手动调用可用工具。" />}
       {toolError && <Alert type="error" showIcon title={toolError} />}
       <h3>可用工具</h3>
       {visibleTools.map((tool) => <div key={tool.id} className="tool-entry"><strong>{tool.title}</strong>

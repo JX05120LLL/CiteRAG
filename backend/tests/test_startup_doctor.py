@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -199,3 +200,79 @@ def test_frontend_launcher_drops_backend_environment_before_real_node(tmp_path, 
     observed = json.loads(launched.stdout)
     assert observed == {"seenSensitiveKeys": [], "customVariablePreserved": True,
                         "frontendArgumentsCorrect": True}
+
+
+@pytest.mark.parametrize("shell_name", ["powershell.exe", "pwsh.exe"])
+@pytest.mark.parametrize(
+    "flags, agent, weather",
+    [([], False, False), (["-EnableAgent"], True, False),
+     (["-EnableWeather"], False, True), (["-EnableAgent", "-EnableWeather"], True, True)],
+)
+def test_api_launcher_optional_tools_are_explicit(tmp_path, shell_name, flags, agent, weather):
+    if os.name != "nt":
+        pytest.skip("Windows PowerShell startup boundary requires Windows")
+    shell = shutil.which(shell_name)
+    if not shell:
+        pytest.skip("The selected PowerShell edition is required")
+    backend = tmp_path / "backend"
+    backend.mkdir()
+    launcher = backend / "start.ps1"
+    shutil.copyfile(Path(__file__).resolve().parents[1] / "start.ps1", launcher)
+    # Run the real launcher and Python child, replacing only the doctor/server modules.
+    # The temporary application cannot connect a database or start a network server.
+    python = backend / ".venv/Scripts/python.exe"
+    python.parent.mkdir(parents=True)
+    shutil.copyfile(sys.executable, python)
+    shutil.copyfile(Path(sys.prefix) / "pyvenv.cfg", python.parent.parent / "pyvenv.cfg")
+    app = backend / "app"
+    app.mkdir()
+    (app / "__init__.py").write_text("", encoding="utf-8")
+    probe = (
+        "import json, os, sys\n"
+        "print('PUBLIC_PROBE:' + json.dumps({\n"
+        "  'args': sys.argv[1:],\n"
+        "  'agent': os.environ['CITERAG_AGENT_ENABLED'],\n"
+        "  'weather': os.environ['CITERAG_QWEATHER_ENABLED'],\n"
+        "  'weather_config_preserved': "
+        "os.environ['CITERAG_QWEATHER_API_HOST'] == 'synthetic.qweatherapi.com' "
+        "and os.environ['CITERAG_QWEATHER_API_KEY'] == 'public-synthetic',\n"
+        "  'mcp': os.environ['CITERAG_MCP_ENABLED'],\n"
+        "  'voice': os.environ['CITERAG_VOICE_ASSISTANT_ENABLED'],\n"
+        "  'answers': os.environ['CITERAG_ANSWER_ENABLED']\n"
+        "}));\n"
+    )
+    (app / "doctor.py").write_text(probe, encoding="utf-8")
+    (backend / "uvicorn.py").write_text(probe, encoding="utf-8")
+    prefixes = ("CITERAG_", "PG", "POSTGRES", "OPENAI_", "DASHSCOPE_", "ANTHROPIC_",
+                "VOLCENGINE_", "MINIMAX_", "LIVEKIT_", "PYTHON")
+    environment = {name: value for name, value in os.environ.items()
+                   if not name.upper().startswith(prefixes)
+                   and name.upper() not in {"DATABASE_URL", "WEB_CONCURRENCY"}}
+    environment.update({
+        "CITERAG_DATABASE_URL": "postgresql+asyncpg://synthetic@127.0.0.1:1/synthetic",
+        "CITERAG_AGENT_ENABLED": "true", "CITERAG_MCP_ENABLED": "true",
+        "CITERAG_QWEATHER_ENABLED": "true", "CITERAG_VOICE_ASSISTANT_ENABLED": "true",
+        "CITERAG_ANSWER_ENABLED": "false",
+        "CITERAG_QWEATHER_API_HOST": "synthetic.qweatherapi.com",
+        "CITERAG_QWEATHER_API_KEY": "public-synthetic",
+    })
+    launched = subprocess.run(
+        [shell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+         "-File", str(launcher), *flags],
+        env=environment, capture_output=True, text=True, encoding="utf-8",
+        timeout=30, check=False,
+    )
+    assert launched.returncode == 0, launched.stderr
+    observed = [json.loads(line.removeprefix("PUBLIC_PROBE:"))
+                for line in launched.stdout.splitlines() if line.startswith("PUBLIC_PROBE:")]
+    assert len(observed) == 2, "Doctor and synthetic API child must both run"
+    assert observed[0]["args"] == ["--profile", "text", "--database", "--backend-only"] + (
+        ["--agent"] if agent else []
+    )
+    assert observed[1]["args"] == ["app.main:app", "--host", "127.0.0.1", "--port", "8000",
+                                   "--workers", "1", "--no-proxy-headers"]
+    for child in observed:
+        assert child["agent"] == str(agent).lower()
+        assert child["weather"] == str(weather).lower()
+        assert child["weather_config_preserved"] is weather
+        assert child["mcp"] == child["voice"] == child["answers"] == "false"

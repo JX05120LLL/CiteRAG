@@ -291,6 +291,12 @@ export function Workbench({ view, api }: { view: AppView; api: ApiClient }) {
       {!!s.chatImages.length && <div className="selected-images" aria-label="待发送图片">{s.chatImages.map((file, index) =>
         <span key={`${file.name}-${index}`}>{file.name} <Button size="small" disabled={busy}
           onClick={() => a.selectChatImages(s.chatImages.filter((_, item) => item !== index))}>移除</Button></span>)}</div>}
+      {view.agentCapabilityError && !!s.selectedChatId && <Alert type="warning" showIcon
+        title="自动工具状态读取失败，请刷新后重试"
+        action={<Button size="small" disabled={busy || s.loading} onClick={() => void a.refresh()}>刷新工具状态</Button>} />}
+      {!view.agentCapabilityError && s.agentEnabled === false && !!s.selectedChatId && <Alert type="info" showIcon
+        title="自动工具未启用，实时天气等外部信息不会自动查询"
+        action={<Button size="small" onClick={() => setToolOpen(true)}>查看可用工具</Button>} />}
       {continuationError && <Alert type="error" showIcon title={continuationError} />}
       {taskConflict && <Alert type="info" showIcon title="此聊天有未完成任务。请补充信息或点击上方“取消任务”后再使用图片、语音；也可以从左栏新建聊天。" />}
       <Sender value={s.chatDraft} onChange={(value) => a.setDraft(value.slice(0, 1000))} onSubmit={() => {
@@ -339,7 +345,9 @@ export function Workbench({ view, api }: { view: AppView; api: ApiClient }) {
     </Drawer>
     <Drawer title="工具与调用记录" rootClassName="workspace-detail-drawer" open={toolOpen && !!s.selectedChatId} onClose={() => setToolOpen(false)} size="min(460px, 100vw)" destroyOnHidden>
       <p className="muted">工具调用由服务端检查聊天范围，结果单独记录，不作为知识库引用。仅显示已登记工具；历史结果只反映调用当时的状态。</p>
-      {s.agentEnabled === false && <Alert type="info" showIcon title="自动工具未启用，聊天不会自动调用；仍可在此手动调用可用工具。" />}
+      {view.agentCapabilityError && <Alert type="warning" showIcon title="自动工具状态读取失败，请刷新后重试"
+        action={<Button size="small" disabled={busy || s.loading} onClick={() => void a.refresh()}>刷新工具状态</Button>} />}
+      {!view.agentCapabilityError && s.agentEnabled === false && <Alert type="info" showIcon title="自动工具未启用，聊天不会自动调用；仍可在此手动调用可用工具。" />}
       {toolError && <Alert type="error" showIcon title={toolError} />}
       <h3>可用工具</h3>
       {visibleTools.map((tool) => <div key={tool.id} className="tool-entry"><strong>{tool.title}</strong>

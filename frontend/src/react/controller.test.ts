@@ -159,15 +159,18 @@ it('publishes one business state to React, does not mount native UI or start med
   const root = document.createElement('div');
   const views: AppView[] = [];
   const calls: string[] = [];
+  const methods: string[] = [];
   let dispose = () => {};
-  await mountApp(root, createApi(async (url) => {
+  await mountApp(root, createApi(async (url, init) => {
+    methods.push(init?.method ?? 'GET');
     calls.push(String(url)); return json({ items: [] });
   }), undefined, 'workbench', { render: (view) => views.push(view), onDispose: (fn) => { dispose = fn; } });
   expect(root.childNodes).toHaveLength(0);
   expect(views.at(-1)?.state.loading).toBe(false);
   views.at(-1)!.actions.setDraft('待发送');
   expect(views.at(-1)?.state.chatDraft).toBe('待发送');
-  expect(calls).toEqual(['/api/knowledge-bases', '/api/conversations?limit=20&offset=0', '/api/agent/capability']);
+  expect([...calls].sort()).toEqual(['/api/agent/capability', '/api/conversations?limit=20&offset=0', '/api/knowledge-bases']);
+  expect(methods).toEqual(['GET', 'GET', 'GET']);
   dispose();
 });
 

@@ -32,6 +32,8 @@
 
 先核对端口与进程归属。以下只适用于新空库或另行授权迁移的环境。敏感连接信息由受控后端进程环境注入，不写入 Git。
 
+`0012_agent_runs` 业务迁移只准备检查点命名空间，不自动创建 LangGraph 的 `checkpoint_migrations`、`checkpoints`、`checkpoint_blobs`、`checkpoint_writes` 四张表及配套索引。业务版本正确仍可能报 `agent_checkpoint_tables_missing`。已有库须停写并核对活动任务，先备份、取得对应初始化授权，再使用锁定依赖执行显式 setup；不要为此重建业务库。归档目录可读取不等于完整恢复已验证，恢复演练须另在授权的环境完成。
+
 ```powershell
 # backend 目录；可选依赖按需要安装
 uv sync --locked --extra rag --extra voice --extra agent --extra mcp

@@ -1,7 +1,7 @@
 import { StrictMode } from 'react';
 import { webcrypto } from 'node:crypto';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createApi } from '../api/client';
 import type { AgentRun } from '../api/client';
 import { CiteRagApp, StandaloneVoice } from './App';
@@ -400,6 +400,94 @@ it('settles a pending request id when approval happens after a remount', async (
   const requests = calls.filter((call) => call.path.endsWith('/tools/calls') && call.method === 'POST');
   expect(JSON.parse(String(requests[1].body)).request_id).not.toBe(JSON.parse(String(requests[0].body)).request_id);
   expect(recordCount()).toBe(2);
+}, 20000);
+
+it.each([false, true])('shows disabled automatic tools before sending and opens existing manual tools (%s knowledge)', async (knowledge) => {
+  const chat = { ...sampleChats[0], kb_id: knowledge ? sampleBases[0].id : null };
+  sessionStorage.setItem('citerag.workbench.selection', JSON.stringify({ kbId: chat.kb_id, chatId: chat.id }));
+  const { api, calls } = fixture(undefined, [chat]);
+  render(<CiteRagApp api={{ ...api, agentCapability: async () => ({ enabled: false }) }} />);
+  const notice = await screen.findByText('自动工具未启用，实时天气等外部信息不会自动查询');
+  expect(document.querySelector('.composer')?.contains(notice)).toBe(true);
+  fireEvent.click(screen.getByRole('button', { name: '查看可用工具' }));
+  const drawer = await screen.findByRole('dialog');
+  await within(drawer).findByRole('button', { name: '调用工具：本机当前时间' });
+  expect(calls.some((call) => call.path.endsWith('/tools'))).toBe(true);
+  expect(calls.every((call) => call.method === 'GET')).toBe(true);
+}, 20000);
+
+it('does not report disabled automatic tools when the assistant is enabled', async () => {
+  const { api } = fixture();
+  render(<CiteRagApp api={{ ...api, agentCapability: async () => ({ enabled: true }), agentRuns: async () => [] }} />);
+  await screen.findByRole('button', { name: '工具与调用记录' });
+  await waitFor(() => expect(document.querySelector('.agent-tasks')).toBeTruthy());
+  expect(screen.queryByText('自动工具未启用，实时天气等外部信息不会自动查询')).toBeNull();
+  expect(screen.queryByRole('button', { name: '查看可用工具' })).toBeNull();
+}, 20000);
+
+it('waits for the actual automatic tool capability before showing the disabled notice', async () => {
+  const { api, calls } = fixture();
+  let resolveCapability!: (value: { enabled: boolean }) => void;
+  const capability = new Promise<{ enabled: boolean }>((resolve) => { resolveCapability = resolve; });
+  render(<CiteRagApp api={{ ...api, agentCapability: () => capability }} />);
+  await screen.findByRole('button', { name: '工具与调用记录' });
+  expect(screen.queryByText('自动工具未启用，实时天气等外部信息不会自动查询')).toBeNull();
+  expect(screen.queryByRole('button', { name: '查看可用工具' })).toBeNull();
+  resolveCapability({ enabled: false });
+  await screen.findByText('自动工具未启用，实时天气等外部信息不会自动查询');
+  expect(calls.every((call) => call.method === 'GET')).toBe(true);
+}, 20000);
+
+it('does not offer manual tool invocation before a chat is selected', async () => {
+  const { api } = fixture(undefined, []);
+  render(<CiteRagApp api={{ ...api, agentCapability: async () => ({ enabled: false }) }} />);
+  await screen.findByPlaceholderText('先新建或打开聊天');
+  expect(screen.queryByText('自动工具未启用，实时天气等外部信息不会自动查询')).toBeNull();
+  expect(screen.queryByRole('button', { name: '查看可用工具' })).toBeNull();
+}, 20000);
+
+it.each([false, true])('distinguishes failed tool capability and refreshes to confirmed %s without writes', async (enabled) => {
+  const { api, calls } = fixture();
+  const capability = vi.fn().mockRejectedValueOnce(new TypeError('synthetic capability unavailable'))
+    .mockResolvedValue({ enabled });
+  render(<CiteRagApp api={{ ...api, agentCapability: capability, agentRuns: async () => [] }} />);
+  const failure = await screen.findByText('自动工具状态读取失败，请刷新后重试');
+  const composer = document.querySelector('.composer') as HTMLElement;
+  expect(composer.contains(failure)).toBe(true);
+  expect(screen.queryByText('自动工具未启用，实时天气等外部信息不会自动查询')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: '工具与调用记录' }));
+  const drawer = await screen.findByRole('dialog');
+  expect(within(drawer).getByText('自动工具状态读取失败，请刷新后重试')).toBeTruthy();
+  expect(within(drawer).queryByText('自动工具未启用，聊天不会自动调用；仍可在此手动调用可用工具。')).toBeNull();
+  fireEvent.click(within(composer).getByRole('button', { name: '刷新工具状态' }));
+  await waitFor(() => expect(capability).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(screen.queryAllByText('自动工具状态读取失败，请刷新后重试')).toHaveLength(0));
+  if (enabled) {
+    await waitFor(() => expect(document.querySelector('.agent-tasks')).toBeTruthy());
+    expect(screen.queryByText('自动工具未启用，实时天气等外部信息不会自动查询')).toBeNull();
+    expect(within(drawer).queryByText('自动工具未启用，聊天不会自动调用；仍可在此手动调用可用工具。')).toBeNull();
+  } else {
+    expect(screen.getByText('自动工具未启用，实时天气等外部信息不会自动查询')).toBeTruthy();
+    expect(within(drawer).getByText('自动工具未启用，聊天不会自动调用；仍可在此手动调用可用工具。')).toBeTruthy();
+  }
+  expect(calls.every((call) => call.method === 'GET')).toBe(true);
+  expect(document.body.textContent).not.toContain('synthetic capability unavailable');
+}, 20000);
+
+it('does not let an older failed capability read overwrite a successful refresh', async () => {
+  const { api, calls } = fixture();
+  let rejectInitial!: (error: Error) => void;
+  const initial = new Promise<{ enabled: boolean }>((_, reject) => { rejectInitial = reject; });
+  const capability = vi.fn().mockReturnValueOnce(initial).mockResolvedValue({ enabled: true });
+  render(<CiteRagApp api={{ ...api, agentCapability: capability, agentRuns: async () => [] }} />);
+  fireEvent.click(await screen.findByRole('button', { name: '刷新工作台' }));
+  await waitFor(() => expect(capability).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(document.querySelector('.agent-tasks')).toBeTruthy());
+  await act(async () => rejectInitial(new TypeError('synthetic late capability failure')));
+  expect(screen.queryByText('自动工具状态读取失败，请刷新后重试')).toBeNull();
+  expect(screen.queryByText('自动工具未启用，实时天气等外部信息不会自动查询')).toBeNull();
+  expect(document.querySelector('.agent-tasks')).toBeTruthy();
+  expect(calls.every((call) => call.method === 'GET')).toBe(true);
 }, 20000);
 
 it('submits explicit weather coordinates and only shows an attributed result after approval', async () => {

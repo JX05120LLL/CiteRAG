@@ -18,6 +18,7 @@ import type { VoiceActions, VoiceContext } from './pages/voice';
 
 export interface AppView {
   state: AppState; hasMoreChats: boolean; documents: ReturnType<typeof createDocumentsPanel>;
+  agentCapabilityError?: boolean;
   archivedChats: Conversation[]; hasMoreArchivedChats: boolean; archivedChatLoading: boolean; archivedChatError: ApiError | null;
   voice: { context: VoiceContext; actions: VoiceActions; levels: readonly number[] };
   actions: {
@@ -70,6 +71,8 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
   let healthGeneration = 0;
   let chatGeneration = 0;
   let agentMessageRead = 0;
+  let agentCapabilityGeneration = 0;
+  let agentCapabilityError = false;
   let hasMoreChats = false;
   let archivedChats: Conversation[] = [];
   let archivedChatOffset = 0;
@@ -89,7 +92,7 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
   const onPageHide = () => { ++voiceGeneration; voiceChecking = false; void voice.hangup(); };
   window.addEventListener('pagehide', onPageHide);
   options.onDispose?.(() => {
-    disposed = true; ++generation; ++chatGeneration; ++healthGeneration; ++voiceGeneration;
+    disposed = true; ++generation; ++chatGeneration; ++healthGeneration; ++voiceGeneration; ++agentCapabilityGeneration;
     window.removeEventListener('pagehide', onPageHide); documentsPanel.dispose(); void voice.hangup();
   });
   async function loadVoiceCapability() {
@@ -128,8 +131,24 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
     state.createDraft.error = reason instanceof ApiError ? reason : new ApiError('local-storage');
   }
 
+  async function loadAgentCapability() {
+    const current = ++agentCapabilityGeneration;
+    try {
+      const capability = await api.agentCapability?.();
+      if (disposed || current !== agentCapabilityGeneration) return;
+      state.agentEnabled = capability?.enabled === true;
+      agentCapabilityError = false;
+    } catch {
+      if (disposed || current !== agentCapabilityGeneration) return;
+      state.agentEnabled = false;
+      agentCapabilityError = true;
+    }
+    render();
+  }
+
   async function refresh() {
     if (isKnowledgePending(state)) return;
+    void loadAgentCapability();
     const currentGeneration = ++generation;
     const currentChatGeneration = ++chatGeneration;
     Object.assign(state, { loading: true, basesError: null, chatsError: null, bases: null, chats: null });
@@ -650,7 +669,7 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
     if (options.render) {
       const base = state.bases?.find((item) => item.id === state.selectedKbId);
       options.render({ state: { ...state, createDraft: { ...state.createDraft }, renameDraft: state.renameDraft ? { ...state.renameDraft } : null },
-        hasMoreChats, archivedChats: [...archivedChats], hasMoreArchivedChats, archivedChatLoading, archivedChatError,
+        agentCapabilityError, hasMoreChats, archivedChats: [...archivedChats], hasMoreArchivedChats, archivedChatLoading, archivedChatError,
         documents: documentsPanel,
         voice: { context: { chatId: state.selectedChatId,
           chatTitle: state.chats?.find((item) => item.id === state.selectedChatId)?.title ?? '',
@@ -764,9 +783,6 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
     }
   }
   const initialRefresh = refresh();
-  try { state.agentEnabled = (await api.agentCapability?.())?.enabled === true; }
-  catch { state.agentEnabled = false; }
-  if (!disposed) render();
   await initialRefresh;
   if (initialPage === 'status') await loadHealth();
 }

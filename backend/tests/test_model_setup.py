@@ -2,6 +2,8 @@
 
 DPAPI and Windows ACL round trips are skipped on Linux rather than represented
 as supplier or Windows verification. Public CI can run this file on Windows.
+Elevated runners set only each synthetic child process's TokenOwner to its user
+SID, matching ordinary Windows creation without relaxing production ACL checks.
 """
 
 import os
@@ -23,6 +25,61 @@ EXPECTED_MODELS = {
     "embedding": "text-embedding-v4",
     "rerank": "qwen3-vl-rerank",
 }
+
+# Windows hosted runners are elevated: their default TokenOwner is normally the
+# Administrators group. Normalize only the temporary PowerShell process before
+# it creates fixtures. Identity, DPAPI, privileges and existing objects stay as
+# they were; no parent token or real configuration changes are made.
+# https://learn.microsoft.com/en-us/windows/win32/secauthz/owner-of-a-new-object
+NORMAL_USER_OWNER = r"""
+Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Security.Principal;
+
+public static class SyntheticProcessOwner {
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr GetCurrentProcess();
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool CloseHandle(IntPtr handle);
+    [DllImport("advapi32.dll", SetLastError = true)]
+    private static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
+    [DllImport("advapi32.dll", SetLastError = true)]
+    private static extern bool SetTokenInformation(
+        IntPtr token, int informationClass, IntPtr information, int length);
+
+    public static void Set(SecurityIdentifier sid) {
+        IntPtr token = IntPtr.Zero, sidBuffer = IntPtr.Zero, ownerBuffer = IntPtr.Zero;
+        try {
+            // TOKEN_QUERY | TOKEN_ADJUST_DEFAULT; no ownership/security privilege.
+            if (!OpenProcessToken(GetCurrentProcess(), 0x0088, out token))
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            byte[] bytes = new byte[sid.BinaryLength];
+            sid.GetBinaryForm(bytes, 0);
+            sidBuffer = Marshal.AllocHGlobal(bytes.Length);
+            Marshal.Copy(bytes, 0, sidBuffer, bytes.Length);
+            ownerBuffer = Marshal.AllocHGlobal(IntPtr.Size);
+            Marshal.WriteIntPtr(ownerBuffer, sidBuffer);
+            // TokenOwner = 4; TOKEN_OWNER contains one SID pointer.
+            if (!SetTokenInformation(token, 4, ownerBuffer, IntPtr.Size))
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+        } finally {
+            if (ownerBuffer != IntPtr.Zero) Marshal.FreeHGlobal(ownerBuffer);
+            if (sidBuffer != IntPtr.Zero) Marshal.FreeHGlobal(sidBuffer);
+            if (token != IntPtr.Zero) CloseHandle(token);
+        }
+    }
+}
+'@
+$syntheticIdentity = [Security.Principal.WindowsIdentity]::GetCurrent()
+$syntheticOriginalOwner = $syntheticIdentity.Owner
+$syntheticUser = $syntheticIdentity.User
+[SyntheticProcessOwner]::Set($syntheticUser)
+if ([Security.Principal.WindowsIdentity]::GetCurrent().Owner.Value -ne $syntheticUser.Value) {
+    throw 'Synthetic process default owner was not normalized.'
+}
+"""
 
 
 def ps_literal(value: str | Path) -> str:
@@ -54,6 +111,7 @@ def run_script(powershell, project, body):
     harness.write_text(
         "$ErrorActionPreference = 'Stop'\n"
         + "[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)\n"
+        + NORMAL_USER_OWNER
         + f". {ps_literal(project / 'backend' / SETUP.name)} -LibraryOnly\n"
         + body,
         encoding="utf-8-sig",
@@ -81,6 +139,42 @@ def save_body(project, workspace="synthetic_workspace", key=SYNTHETIC_KEY):
         f"-WorkspaceId {ps_literal(workspace)} -ApiKey $key\n"
         "} finally { $key.Dispose() }\n"
     )
+
+
+def test_harness_creates_user_owned_files_without_changing_identity(powershell, project):
+    directory = project / "synthetic owner probe"
+    target = directory / "probe.txt"
+    body = (
+        f"New-Item -ItemType Directory -Path {ps_literal(directory)} | Out-Null\n"
+        f"[IO.File]::WriteAllText({ps_literal(target)}, 'synthetic owner probe')\n"
+        f"foreach ($path in @({ps_literal(directory)}, {ps_literal(target)})) {{\n"
+        "  $owner = (Get-Acl -LiteralPath $path).GetOwner("
+        "[Security.Principal.SecurityIdentifier]).Value\n"
+        "  if ($owner -ne $syntheticUser.Value) { throw 'Incorrect synthetic owner.' }\n"
+        "}\n"
+        "if ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value -ne "
+        "$syntheticIdentity.User.Value) { throw 'Synthetic identity changed.' }\n"
+        "Write-Output 'synthetic creation owner verified'\n"
+    )
+    result = run_script(powershell, project, body)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.strip() == "synthetic creation owner verified"
+
+
+def test_elevated_group_owned_configuration_still_fails(powershell, project):
+    body = (
+        "if ($syntheticOriginalOwner.Value -eq $syntheticUser.Value) {\n"
+        "  Write-Output 'owner mismatch fixture unavailable'; exit 0\n"
+        "}\n"
+        "[SyntheticProcessOwner]::Set($syntheticOriginalOwner)\n"
+        + save_body(project)
+    )
+    result = run_script(powershell, project, body)
+    if result.stdout.strip() == "owner mismatch fixture unavailable":
+        pytest.skip("An elevated runner with a group TokenOwner is required for this negative case")
+    assert result.returncode != 0
+    assert "configuration was not saved" in result.stdout + result.stderr
+    assert not (project / ".local/runtime/models/dashscope.credential.xml").exists()
 
 
 def test_first_time_record_is_private_dpapi_and_exact_loader_compatible(powershell, project):

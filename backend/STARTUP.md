@@ -56,6 +56,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\backend\configure-mode
 
 `-CheckOnly` 只检查文件元信息，不解密或联系供应商。已有模型记录无需重新配置；当前公开模型加载器依赖 Windows DPAPI，其他系统尚无完整的公开模型配置入口，可运行无模型 API/界面预览。字段与加载格式见 [模型配置](app/credentials.py)。知识库模式还需要独立的引擎数据库配置，见 [后端说明](README.md)。凭证不得进入前端、日志或 Git。
 
+在未提升权限的当前用户 PowerShell 中完成首次配置。提升的管理员终端可能把新文件归属设为 Administrators，正式配置入口和加载器会拒绝此类记录，不会自动接管既有文件；不要放宽归属或 ACL 门禁。Windows CI 仅将合成 PowerShell 子进程的默认 `TokenOwner` 设为当前用户，仍使用真实 DPAPI 和 DACL，并校验新建文件归属；它不修改现有文件、用户身份、父进程或正式配置。
+
 入库和问答默认关闭。只有已确认发送内容、费用及操作范围后，在**启动 API 的终端**显式启用：
 
 ```powershell

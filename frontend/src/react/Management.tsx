@@ -193,7 +193,7 @@ export function Tasks({ view }: { view: AppView }) {
         key: 'history', label: `已结束任务 · ${d.jobPage.total} 项`, children: <>{rows(d.jobPage.items)}
           <nav aria-label="历史任务分页"><Pagination current={Math.floor(d.jobOffset / 10) + 1} total={d.jobPage.total} pageSize={10} showSizeChanger={false}
             disabled={d.busy || d.loading} onChange={(page) => panel.movePage('history', (page - 1) * 10)} /></nav>
-          <p className="muted task-history-note">历史任务保留当次结果；后续成功不会覆盖旧失败记录。</p></>,
+          <p className="muted task-history-note">列表显示各任务当前状态；按原任务重试会更新该任务状态。</p></>,
       }]} />}
       {!d.loading && d.jobPage && !d.jobPage.active_items.length && !d.jobPage.items.length && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无任务" />}
       </section>

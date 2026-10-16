@@ -220,6 +220,27 @@ describe('managed ingestion', () => {
     expect(root.textContent).not.toContain('private diagnostic');
   });
 
+  it.each([
+    ['embedding_input_limit', '向量化文本超过本地安全预算'],
+    ['engine_unavailable', '索引服务暂不可用'],
+    ['engine_incomplete', '索引处理尚未完成'],
+  ])('shows an actionable %s reason without claiming an uncertain index was untouched', async (code, reason) => {
+    const failedJob = { ...job, status: 'failed', stage: 'indexing', error_code: code,
+      engine_mutated: true, can_retry: true, message: 'private SDK diagnostic' };
+    const root = await page(async (url) => {
+      if (String(url) === '/api/jobs/job-docs') return json(failedJob);
+      return json({ items: String(url).endsWith('/documents')
+        ? [{ ...doc, status: 'failed', error_code: code }] : [failedJob] });
+    });
+    expect(root.querySelector('.document-description')?.textContent).toContain(reason);
+    expect(root.querySelector('.ingestion-job')?.textContent).toContain(reason);
+    expect(root.textContent).not.toContain('资料未入库');
+    button(root, '查看任务详情').click();
+    await vi.waitFor(() => expect(root.querySelector('.job-details')?.textContent).toContain(reason));
+    expect(root.querySelector('.job-details')?.textContent).toContain('已发生');
+    expect(root.textContent).not.toContain('private SDK diagnostic');
+  });
+
   it('does not echo an unexpected diagnostic string as an error code', async () => {
     const unsafeCode = 'https://provider.invalid/?key=private-value';
     const root = await page(async (url) => json({ items: String(url).endsWith('/documents')

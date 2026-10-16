@@ -12,6 +12,15 @@ from app.models import Document, IngestionJob, KnowledgeBase, ParsedBlockRecord
 from app.rag.ingestion_adapter import EngineDocument, IngestionError
 from app.services.errors import ServiceError
 
+_ENGINE_FAILURE_MESSAGES = {
+    "embedding_input_limit": (
+        "向量化文本超过本地安全预算，请拆分或简化资料后重试；"
+        "已修改的索引须核对或从原文重建"
+    ),
+    "engine_unavailable": "索引服务暂不可用，本次未通过入库核验；请检查模型与服务状态",
+    "engine_incomplete": "索引处理尚未完成，本次未通过入库核验；请检查任务后重试或重建",
+}
+
 
 class IngestionRunner:
     def __init__(self, database, store, adapter, assert_owned, *, enabled: bool,
@@ -161,7 +170,9 @@ class IngestionRunner:
         except ServiceError as error:
             await self._fail(identifier, error.code, error.message)
         except IngestionError as error:
-            await self._fail(identifier, error.category, "引擎核验未通过，请重试或从原文重建")
+            await self._fail(identifier, error.category, _ENGINE_FAILURE_MESSAGES.get(
+                error.category, "引擎核验未通过，请重试或从原文重建",
+            ))
         except Exception:
             # Persist a conservative safe failure at the external parser/SDK boundary.
             await self._fail(identifier, "index_failed", "处理未完成，未确认入库；请重试或重建")

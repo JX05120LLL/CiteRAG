@@ -74,6 +74,8 @@ it('keeps task history collapsible, paginated and separate from the actual activ
   const { view, panel } = fixture({ jobPage: { items: sampleJobs.slice(0, 3), total: 12, active_items: [active], failed_count: 2 } });
   render(<Theme><Tasks view={view} /></Theme>);
   expect(screen.getByText('共 13 项任务')).toBeTruthy();
+  expect(screen.getByText('列表显示各任务当前状态；按原任务重试会更新该任务状态。')).toBeTruthy();
+  expect(screen.queryByText('历史任务保留当次结果；后续成功不会覆盖旧失败记录。')).toBeNull();
   expect(within(screen.getByRole('region', { name: '进行中的任务' })).getByText('正在建立索引')).toBeTruthy();
   const history = screen.getByRole('navigation', { name: '历史任务分页' });
   fireEvent.click(within(history).getByTitle('2'));

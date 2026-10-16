@@ -48,6 +48,7 @@ def test_engine_factory_chunks_unicode_without_corrupting_original(
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("PYTHON_DOTENV_DISABLED", "1")
+    monkeypatch.setenv("EMBEDDING_BATCH_NUM", "25")
     monkeypatch.setattr(sdk, "_verified_tokenizer", lambda: tokenizer)
     monkeypatch.setitem(sys.modules, "lightrag", SimpleNamespace(
         LightRAG=lambda **options: options,
@@ -60,6 +61,7 @@ def test_engine_factory_chunks_unicode_without_corrupting_original(
         llm_model_func=no_provider, embedding_func=no_provider, rerank_model_func=no_provider,
     )
     options = factory("kb_00000000000040008000000000000001", tmp_path / "engine")
+    assert options["embedding_batch_num"] == 10
     chunks = options["chunking_func"](
         tokenizer, content, chunk_token_size=1200, chunk_overlap_token_size=overlap,
     )

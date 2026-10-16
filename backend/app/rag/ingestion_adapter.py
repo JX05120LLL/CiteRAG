@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 from uuid import UUID
 
+from app.rag.embedding_guard import capture_embedding_failures
+
 
 @dataclass(frozen=True, repr=False)
 class EngineDocument:
@@ -113,19 +115,27 @@ class LightRAGIngestionAdapter:
         documents: Sequence[EngineDocument],
         job_id: UUID,
     ) -> None:
-        try:
-            manifest = _manifest(documents)
-            if not isinstance(job_id, UUID):
-                raise IngestionError("invalid_document")
-            engine = await self._runtime.get_for_workspace(kb_id, workspace)
-            _assert_workspace(engine, workspace)
-            await self._insert(engine, manifest, job_id)
-        except IngestionError:
-            raise
-        except Exception:
-            # SDK/provider exceptions may include request bodies or workspace IDs.
-            # Cancellation remains a BaseException and reaches the durable worker.
-            raise IngestionError("engine_unavailable") from None
+        with capture_embedding_failures() as failure:
+            try:
+                manifest = _manifest(documents)
+                if not isinstance(job_id, UUID):
+                    raise IngestionError("invalid_document")
+                engine = await self._runtime.get_for_workspace(kb_id, workspace)
+                _assert_workspace(engine, workspace)
+                await self._insert(engine, manifest, job_id)
+                if failure.input_limit_exceeded:
+                    raise IngestionError("embedding_input_limit")
+            except IngestionError:
+                if failure.input_limit_exceeded:
+                    raise IngestionError("embedding_input_limit") from None
+                raise
+            except Exception:
+                # SDK/provider exceptions may include request bodies or workspace IDs.
+                # Cancellation remains a BaseException and reaches the durable worker.
+                category = "embedding_input_limit" if failure.input_limit_exceeded else (
+                    "engine_unavailable"
+                )
+                raise IngestionError(category) from None
 
     @staticmethod
     async def _insert(
@@ -190,15 +200,24 @@ class LightRAGIngestionAdapter:
         Uses one bounded naive retrieval probe, with reranking and answer generation
         disabled. In production this still incurs one embedding provider request.
         """
-        try:
-            manifest = _manifest(documents)
-            engine = await self._runtime.get_for_workspace(kb_id, workspace)
-            _assert_workspace(engine, workspace)
-            return await self._verify(engine, manifest)
-        except IngestionError:
-            raise
-        except Exception:
-            raise IngestionError("verification_failed") from None
+        with capture_embedding_failures() as failure:
+            try:
+                manifest = _manifest(documents)
+                engine = await self._runtime.get_for_workspace(kb_id, workspace)
+                _assert_workspace(engine, workspace)
+                result = await self._verify(engine, manifest)
+                if failure.input_limit_exceeded:
+                    raise IngestionError("embedding_input_limit")
+                return result
+            except IngestionError:
+                if failure.input_limit_exceeded:
+                    raise IngestionError("embedding_input_limit") from None
+                raise
+            except Exception:
+                category = "embedding_input_limit" if failure.input_limit_exceeded else (
+                    "verification_failed"
+                )
+                raise IngestionError(category) from None
 
     @staticmethod
     async def _verify(

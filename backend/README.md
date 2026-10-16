@@ -33,6 +33,8 @@ uv run --no-sync --no-env-file uvicorn app.main:app --host 127.0.0.1 --port 8000
 
 ## 主要模块
 
+资料格式、资源限制、向量化长度守卫、失败处理及可重复的合成问答资料见[入库与质量回归](INGESTION.md)。本地长度预算不等于供应商精确token计数，真实Embedding超长输入边界仍待单独验收。
+
 | 位置 | 职责 |
 | --- | --- |
 | `app/api/` | HTTP/SSE 协议、输入校验与本地访问边界 |

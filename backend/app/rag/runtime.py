@@ -24,8 +24,14 @@ from app.rag.database import (
     load_rag_database_settings,
     probe_rag_database,
 )
+from app.rag.embedding_guard import raise_embedding_input_limit
 from app.rag.engine import Engine, EngineManager, assert_isolated_configuration, workspace_for
-from app.rag.sdk import sdk_factory, verify_sdk_revision
+from app.rag.sdk import (
+    EMBEDDING_BATCH_SIZE,
+    EMBEDDING_INPUT_BUDGET,
+    sdk_factory,
+    verify_sdk_revision,
+)
 from app.services.token_budget import (
     ANSWER_INPUT_TOKENS,
     EVIDENCE_TOKENS,
@@ -36,6 +42,7 @@ from app.services.token_budget import (
     VERIFY_INPUT_TOKENS,
     TokenBudgetExceeded,
     estimate_json_tokens,
+    estimate_text_tokens,
     fit_chat_messages,
     require_messages,
 )
@@ -137,10 +144,18 @@ def build_sdk_factory(
     ) -> np.ndarray:
         if embedding_dim != 1024:
             raise ValueError("LightRAG embedding dimension must be 1024")
+        if not texts or any(not isinstance(text, str) or not text for text in texts):
+            raise ValueError("embedding input must contain non-empty strings")
+        if len(texts) > EMBEDDING_BATCH_SIZE:
+            raise ValueError("embedding batch cannot exceed 10 inputs")
         if max_provider_input_chars is not None and (
             sum(len(text) for text in texts) > max_provider_input_chars
         ):
             raise ValueError("RAG provider input limit exceeded")
+        if any(estimate_text_tokens(text) > EMBEDDING_INPUT_BUDGET for text in texts):
+            # RAW chunks use the same conservative budget. Entity/relation/query
+            # inputs that cannot fit fail intact; never truncate or pool vectors.
+            raise_embedding_input_limit()
         batch = await client.embed(texts)
         if on_provider_result is not None:
             on_provider_result(batch.model, batch.request_id, batch.usage)
@@ -171,7 +186,7 @@ def build_sdk_factory(
 
     embedding_func = EmbeddingFunc(
         embedding_dim=1024,
-        max_token_size=8192,
+        max_token_size=EMBEDDING_INPUT_BUDGET,
         model_name="text-embedding-v4",
         send_dimensions=True,
         func=embed_for_lightrag,

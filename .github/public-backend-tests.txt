@@ -7,11 +7,14 @@ tests/test_agent_mcp.py
 tests/test_agent_persistence.py
 tests/test_agent_semantic_prompt.py
 tests/test_agent_startup_preflight.py
+tests/test_answer_quality_regression.py
 tests/test_article_evidence_selection.py
 tests/test_conversation_modes.py
+tests/test_embedding_boundaries.py
 tests/test_functional_checks.py
 tests/test_ingestion_jobs.py
 tests/test_ingestion_lifecycle.py
+tests/test_ingestion_parsing.py
 tests/test_local_calculator.py
 tests/test_m13_answer_api.py
 tests/test_m13_exact_api.py

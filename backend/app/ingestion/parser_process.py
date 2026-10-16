@@ -21,6 +21,12 @@ class ParseFailure(ValueError):
     pass
 
 
+class _NoDoctypeTreeBuilder(ElementTree.TreeBuilder):
+    def doctype(self, name: str, pubid: str | None, system: str | None) -> None:
+        # XML parser events cover UTF-16 too, before any entity expansion.
+        raise ParseFailure("unsupported_document")
+
+
 def _limit_resources():
     if os.name != "nt":
         import resource
@@ -192,12 +198,12 @@ def _check_docx_archive(path: Path) -> None:
     with ZipFile(path) as archive:
         entries = archive.infolist()
         names = {entry.filename for entry in entries}
+        if len(entries) > 2000 or sum(entry.file_size for entry in entries) > 80 * 1024 * 1024:
+            raise ParseFailure("parse_limit")
         if (
-            len(entries) > 2000
-            or len(names) != len(entries)
+            len(names) != len(entries)
             or "[Content_Types].xml" not in names
             or "word/document.xml" not in names
-            or sum(entry.file_size for entry in entries) > 80 * 1024 * 1024
         ):
             raise ParseFailure("invalid_document")
         for entry in entries:
@@ -215,8 +221,10 @@ def _check_docx_archive(path: Path) -> None:
                 data = archive.read(entry)
                 if b"<!DOCTYPE" in data or b"<!ENTITY" in data:
                     raise ParseFailure("unsupported_document")
+                root = ElementTree.fromstring(
+                    data, parser=ElementTree.XMLParser(target=_NoDoctypeTreeBuilder())
+                )
                 if entry.filename.startswith(("word/header", "word/footer")):
-                    root = ElementTree.fromstring(data)
                     for element in root.iter():
                         tag = element.tag.rsplit("}", 1)[-1]
                         if (tag == "t" and (element.text or "").strip()) or tag in {

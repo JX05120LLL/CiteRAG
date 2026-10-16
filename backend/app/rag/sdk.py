@@ -5,16 +5,44 @@ import json
 import os
 from collections.abc import Callable
 from importlib.metadata import PackageNotFoundError, distribution
+from math import ceil
 from pathlib import Path
 from typing import Any
 
 from app.config import PROJECT_ROOT
+from app.rag.embedding_guard import raise_embedding_input_limit
 from app.rag.engine import assert_isolated_configuration
+from app.services.token_budget import estimate_text_tokens
 
 LIGHTRAG_COMMIT = '59af311307c7417b342f44850b097648d47e83bd'
 TOKENIZER_SHA256 = '446a9538cb6c348e3516120d7c08b09f57c36495e2acfffe59a5bf8b0cfb1a2d'
 TOKENIZER_SOURCE = PROJECT_ROOT / '.local/runtime/tokenizer/o200k_base.tiktoken'
 _TOKENIZER_URL = 'https://openaipublic.blob.core.windows.net/encodings/o200k_base.tiktoken'
+# This is a conservative local UTF-8 budget, not a Qwen tokenizer count or
+# evidence that the live supplier enforces an exact 8192-token boundary.
+EMBEDDING_INPUT_BUDGET = 8192
+EMBEDDING_BATCH_SIZE = 10
+
+
+def _split_with_embedding_budget(
+    tokenizer: Any, content: str, chunk_token_size: int, overlap: int,
+) -> list[str]:
+    from lightrag.utils import Tokenizer
+
+    class BudgetEncoding:
+        def encode(self, value: str) -> range:
+            # Normalize two independent limits into budget units for the SDK's
+            # source-span splitter. These units are never saved as token counts.
+            token_units = ceil(len(tokenizer.encode(value)) * EMBEDDING_INPUT_BUDGET
+                               / chunk_token_size)
+            return range(max(token_units, estimate_text_tokens(value)))
+
+    bounded = Tokenizer('citerag_embedding_budget_units', BudgetEncoding())
+    spans = bounded.split_by_token_limit(
+        content, EMBEDDING_INPUT_BUDGET,
+        ceil(overlap * EMBEDDING_INPUT_BUDGET / chunk_token_size),
+    )
+    return [content[span.start:span.end] for span in spans]
 
 
 def chunking_by_source_span(
@@ -25,11 +53,12 @@ def chunking_by_source_span(
     chunk_overlap_token_size: int = 100,
     chunk_token_size: int = 1200,
 ) -> list[dict[str, Any]]:
-    """Pinned SDK callback: slice original characters, never decode token windows.
+    """Pinned SDK callback: original spans under token and local UTF-8 budgets.
 
     Byte-level BPE windows can split a Chinese character and introduce U+FFFD.
     The SDK's safe span API verifies token budgets on complete source substrings.
-    Keep the legacy six-argument callback contract used by RAW ingestion.
+    Keep the legacy six-argument callback contract used by RAW ingestion. Highly
+    compressible spans may need more chunks to fit the separate byte preflight.
     """
     if chunk_token_size <= 0 or not 0 <= chunk_overlap_token_size < chunk_token_size:
         raise ValueError('Invalid chunk token size or overlap')
@@ -43,12 +72,19 @@ def chunking_by_source_span(
             if token_count > chunk_token_size:
                 # No private preview is attached to errors crossing this boundary.
                 raise ChunkTokenLimitExceededError(token_count, chunk_token_size)
+            if estimate_text_tokens(segment) > EMBEDDING_INPUT_BUDGET:
+                # The explicit delimiter-only contract prohibits splitting it.
+                raise_embedding_input_limit()
             parts = [segment]
         else:
             spans = tokenizer.split_by_token_limit(
                 segment, chunk_token_size, chunk_overlap_token_size,
             )
             parts = [segment[span.start:span.end] for span in spans]
+            if any(estimate_text_tokens(part) > EMBEDDING_INPUT_BUDGET for part in parts):
+                parts = _split_with_embedding_budget(
+                    tokenizer, segment, chunk_token_size, chunk_overlap_token_size,
+                )
         for part in parts:
             # Preserve the verified substring, including boundary whitespace:
             # stripping can change BPE merges and exceed the checked token budget.
@@ -149,6 +185,7 @@ def sdk_factory(
             doc_status_storage='PGDocStatusStorage',
             chunk_token_size=1200,
             chunk_overlap_token_size=100,
+            embedding_batch_num=EMBEDDING_BATCH_SIZE,
             chunking_func=chunking_by_source_span,
             tokenizer=tokenizer,
             llm_model_name=llm_model_name,

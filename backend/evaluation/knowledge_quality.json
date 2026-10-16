@@ -1,0 +1,91 @@
+{
+  "schema_version": 1,
+  "notice": "公开合成验收资料。不是实际业务数据。离线回归使用脚本化路由、检索和模型替身，不能证明真实模型路由或回答质量。",
+  "corpora": [
+    {
+      "id": "equipment",
+      "knowledge_base": "公开合成：设备维护",
+      "documents": [
+        {
+          "filename": "synthetic-equipment.txt",
+          "doc_code": "EQ-17",
+          "text": "EQ-17 维护规范：仅在停机并断电后更换滤芯，每 90 天检查一次。\n\nEQ-17 温度限制：连续运行温度上限为 42 摄氏度，不适用于启动测试。"
+        },
+        {
+          "filename": "synthetic-equipment-near-code.txt",
+          "doc_code": "EQ-170",
+          "text": "EQ-170 维护规范：每 30 天检查一次滤芯，连续运行温度上限为 58 摄氏度。"
+        }
+      ],
+      "exact_question": "EQ-17 的维护要求是什么？",
+      "exact_quote": "EQ-17 维护规范：仅在停机并断电后更换滤芯，每 90 天检查一次。",
+      "summary_question": "总结 EQ-17 的维护要求和温度限制。",
+      "summary_answer": "EQ-17 每 90 天检查滤芯，更换前须停机断电；连续运行上限为 42 摄氏度，该限制不适用于启动测试。",
+      "followup_question": "那它运行时最高能到多少？",
+      "followup_query": "EQ-17 的连续运行温度上限与适用条件",
+      "unsupported_question": "EQ-17 在雨天的防水等级是多少？",
+      "false_answer": "EQ-17 连续运行温度上限是 58 摄氏度。",
+      "conflicting_quote": "EQ-17 连续运行温度上限为 47 摄氏度；此记录未说明版本或生效日期。"
+    },
+    {
+      "id": "event",
+      "knowledge_base": "公开合成：社区活动",
+      "documents": [
+        {
+          "filename": "synthetic-event.txt",
+          "doc_code": "EV-26",
+          "text": "EV-26 读书会安排：周六 14:30 在青松社区二楼开始，单场最多 24 人。\n\nEV-26 报名规则：参加者须提前一天登记；未成年人须由监护人陪同。"
+        },
+        {
+          "filename": "synthetic-event-near-code.txt",
+          "doc_code": "EV-260",
+          "text": "EV-260 手工课安排：周日 10:00 在青松社区一楼开始，单场最多 40 人。"
+        }
+      ],
+      "exact_question": "EV-26 的活动安排是什么？",
+      "exact_quote": "EV-26 读书会安排：周六 14:30 在青松社区二楼开始，单场最多 24 人。",
+      "summary_question": "总结 EV-26 的时间地点、人数和报名要求。",
+      "summary_answer": "EV-26 周六 14:30 在青松社区二楼开始，最多 24 人；须提前一天登记，未成年人须有监护人陪同。",
+      "followup_question": "那它报名有什么要求？",
+      "followup_query": "EV-26 的报名提前时间与未成年人陪同要求",
+      "unsupported_question": "EV-26 的报名费用是多少？",
+      "false_answer": "EV-26 读书会最多允许 40 人参加。",
+      "conflicting_quote": "EV-26 单场最多 36 人；此记录未说明版本或生效日期。"
+    },
+    {
+      "id": "garden",
+      "knowledge_base": "公开合成：阳台种植",
+      "documents": [
+        {
+          "filename": "synthetic-garden.txt",
+          "doc_code": "PL-08",
+          "text": "PL-08 罗勒观察：本批盆土表面干燥后浇水，每次 120 毫升，避免叶面持续积水。\n\nPL-08 光照记录：本批每天接受 4 小时上午直射光；该记录不是所有品种的统一养护标准。"
+        },
+        {
+          "filename": "synthetic-garden-near-code.txt",
+          "doc_code": "PL-080",
+          "text": "PL-080 薄荷观察：本批每次浇水 200 毫升，每天接受 2 小时上午直射光。"
+        }
+      ],
+      "exact_question": "PL-08 的浇水记录是什么？",
+      "exact_quote": "PL-08 罗勒观察：本批盆土表面干燥后浇水，每次 120 毫升，避免叶面持续积水。",
+      "summary_question": "总结 PL-08 这批罗勒的浇水和光照记录。",
+      "summary_answer": "这批 PL-08 罗勒在盆土表面干燥后每次浇水 120 毫升，避免叶面积水；每天有 4 小时上午直射光，不能据此推成所有品种的标准。",
+      "followup_question": "它每天要晒多久？",
+      "followup_query": "PL-08 本批罗勒的每日光照时长与记录适用范围",
+      "unsupported_question": "PL-08 的肥料品牌是什么？",
+      "false_answer": "PL-08 罗勒每次应浇水 200 毫升。",
+      "conflicting_quote": "PL-08 本批每次浇水 160 毫升；此记录未说明版本或生效日期。"
+    }
+  ],
+  "manual_checks": [
+    {"case": "ordinary", "question": "你好，今天想聊点轻松的。", "expected": "普通回答，无知识库引用；不得据此算知识库路由质量通过。"},
+    {"case": "general", "question": "什么是检索增强生成？", "expected": "普通回答，明确未检索知识库，无资料引用。"},
+    {"case": "exact_question", "expected": "从已确认 doc_code 的对应资料定位，不能把近似编号的数据混入。"},
+    {"case": "summary_question", "expected": "涵盖原文数字、对象与条件；每个引用都能回查当前库原文。"},
+    {"case": "followup_question", "expected": "紧接 summary_question 提问，以近期上下文解指代，资料事实重新检索。"},
+    {"case": "unsupported_question", "expected": "明确证据不足，不用常识补造该资料的事实，不悄悄切换普通回答。"},
+    {"case": "false_answer", "expected": "离线故障注入使用，错误数字不得通过独立事实核验；真实模型是否能识别须另行验收。"},
+    {"case": "conflicting_quote", "expected": "单独新增为同库资料后测试冲突；未说明版本时不得擅自选一个值。离线仅验证冲突状态协议。"}
+  ]
+}

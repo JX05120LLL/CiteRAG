@@ -45,6 +45,8 @@ class FakeAdapter:
                 raise IngestionError("rebuild_required")
             if self.failure == "transient_insert":
                 raise IngestionError("engine_unavailable")
+            if self.failure == "embedding_input_limit":
+                raise IngestionError("embedding_input_limit")
             self.writes.setdefault((kb_id, workspace), {}).update(
                 {document.id: document for document in documents}
             )
@@ -174,6 +176,23 @@ async def test_explicit_retry_can_recover_verified_engine_failure(environment):
     retried = await api.post(f"/api/jobs/{job['id']}/retry")
     assert (await finished(api, retried))["status"] == "succeeded"
     assert await status(api, kb) == "ready"
+
+
+async def test_embedding_budget_failure_keeps_its_reason_and_conservative_index_state(environment):
+    api, database, _, adapter = environment
+    adapter.failure = "embedding_input_limit"
+    kb = await new_kb(api)
+    job = await finished(api, await upload(api, kb))
+    assert job["status"] == "failed" and job["stage"] == "indexing"
+    assert job["engine_mutated"] and job["error_code"] == "embedding_input_limit"
+    assert "向量化" in job["message"] and "拆分" in job["message"]
+    assert "引擎核验未通过" not in job["message"]
+    assert await status(api, kb) == "blocked"
+    assert (await api.post("/api/conversations", json={"kb_id": kb})).status_code == 409
+    async with database.engine.connect() as connection:
+        error_code = await connection.scalar(text("SELECT error_code FROM documents"))
+        assert error_code == "embedding_input_limit"
+    assert adapter.insert_count == 1
 
 
 async def test_preflight_error_leaves_existing_ready_library_unchanged(environment):

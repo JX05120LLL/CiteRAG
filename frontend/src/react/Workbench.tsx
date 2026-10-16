@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Alert, Button, Drawer, Empty, Input, Popconfirm, Select, Space, Tag, Tooltip } from 'antd';
 import { Bubble, Sender } from '@ant-design/x';
 import { AudioOutlined, BookOutlined, FileTextOutlined, PictureOutlined } from '@ant-design/icons';
@@ -89,6 +89,51 @@ export function Workbench({ view, api }: { view: AppView; api: ApiClient }) {
   const sourceMessage = base?.status === 'ready' ? s.chatMessages.find((item) => item.message_id === s.selectedCitation?.messageId && displayCitations(item).length > 0) : undefined;
   const citation = sourceMessage?.citations.find((item) => item.evidence_id === s.selectedCitation?.evidenceId);
   const root = useRef<HTMLDivElement>(null);
+  const messageScroll = useRef<HTMLDivElement>(null);
+  const historyRequest = useRef<{ chatId: string } | null>(null);
+  const [historyRequestChat, setHistoryRequestChat] = useState<string | null>(null);
+  const historyAnchor = useRef<{ chatId: string; firstMessageId: string | undefined;
+    element: Element; height: number; top: number; message: HTMLElement | null; messageY: number } | null>(null);
+  const stopRequested = useRef(false);
+  const firstMessageId = s.chatMessages[0]?.message_id;
+  const historyLoading = view.messageHistory?.loading || !!s.selectedChatId && historyRequestChat === s.selectedChatId;
+  useLayoutEffect(() => {
+    const anchor = historyAnchor.current;
+    if (!anchor) return;
+    if (anchor.chatId !== s.selectedChatId) { historyAnchor.current = null; return; }
+    if (anchor.firstMessageId !== firstMessageId) {
+      anchor.element.scrollTop = anchor.message?.isConnected
+        ? anchor.element.scrollTop + anchor.message.getBoundingClientRect().top - anchor.messageY
+        : anchor.top + anchor.element.scrollHeight - anchor.height;
+      historyAnchor.current = null;
+    } else if (historyRequestChat !== s.selectedChatId) historyAnchor.current = null;
+  }, [s.selectedChatId, firstMessageId, historyRequestChat]);
+  useEffect(() => { stopRequested.current = false; }, [s.selectedChatId, s.chatStreamAttemptId, view.textAnswer?.canStop]);
+  async function loadEarlierMessages() {
+    const chatId = s.selectedChatId;
+    if (!chatId || !view.messageHistory?.hasMore || historyLoading || historyRequest.current?.chatId === chatId || !a.loadMoreMessages) return;
+    const request = { chatId };
+    historyRequest.current = request;
+    let element: Element | null = messageScroll.current;
+    while (element && element !== document.body && !/(auto|scroll)/.test(getComputedStyle(element).overflowY)) element = element.parentElement;
+    element = element && element !== document.body ? element : document.scrollingElement ?? document.documentElement;
+    const message = messageScroll.current?.querySelector<HTMLElement>('.message-pair') ?? null;
+    historyAnchor.current = { chatId, firstMessageId, element, height: element.scrollHeight, top: element.scrollTop,
+      message, messageY: message?.getBoundingClientRect().top ?? 0 };
+    setHistoryRequestChat(chatId);
+    try { await a.loadMoreMessages(); }
+    finally {
+      if (historyRequest.current === request) {
+        historyRequest.current = null;
+        setHistoryRequestChat(null);
+      }
+    }
+  }
+  function stopTextAnswer() {
+    if (!view.textAnswer?.canStop || view.textAnswer.stopping || stopRequested.current || !a.stopChat) return;
+    stopRequested.current = true;
+    a.stopChat();
+  }
   const imageInput = useRef<HTMLInputElement>(null);
   const trigger = useRef('');
   const [memoryOpen, setMemoryOpen] = useState(false);
@@ -236,7 +281,15 @@ export function Workbench({ view, api }: { view: AppView; api: ApiClient }) {
         <Button size="small" onClick={() => setToolOpen(true)}>工具与调用记录</Button></Space>
     </div>}
     {s.chatError && <Alert showIcon type="error" title={s.chatError.message} />}
-    <div className="message-scroll" role="log" aria-label="当前聊天记录" aria-live="polite" aria-busy={busy}>
+    <div ref={messageScroll} className="message-scroll" role="log" aria-label="当前聊天记录" aria-live="polite" aria-busy={busy}>
+      {s.selectedChatId && view.messageHistory && <div className="message-history">
+        <div className="message-history-controls"><span className="muted">已加载 {view.messageHistory.totalLoaded} 条消息</span>
+          {view.messageHistory.hasMore && a.loadMoreMessages && <Button size="small" aria-label="加载更早消息"
+            loading={historyLoading} disabled={historyLoading} onClick={() => void loadEarlierMessages()}>
+            {historyLoading ? '正在加载…' : '加载更早消息'}</Button>}</div>
+        {view.messageHistory.error && <Alert type="error" showIcon title={view.messageHistory.error.message} />}
+        {view.messageHistory.notice && <Alert type="info" showIcon title={view.messageHistory.notice} />}
+      </div>}
       {!s.chatMessages.length && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={s.selectedChatId ? s.selectedKbId === null ? '直接提问；本聊天不会检索知识库' : '直接提问，自动区分交流与资料查询' : '新建普通聊天或选择知识库聊天'} />}
       {s.chatMessages.map((m) => {
         const readable = !m.hidden && !m.stale && (s.selectedKbId === null || m.route === 'general' || m.route === 'chat' || base?.status === 'ready');
@@ -312,7 +365,10 @@ export function Workbench({ view, api }: { view: AppView; api: ApiClient }) {
         disabled={!enabled || !!waitingInput} onClick={() => imageInput.current?.click()}>添加图片</Button></Tooltip>
         <span className="composer-kb"><BookOutlined />{s.selectedKbId === null ? '普通聊天' : base?.name || '当前聊天固定知识库 · 暂不可读取'}</span></Space>
         <Space wrap><Tooltip title={taskConflict ? '先补充或取消当前任务，也可新建聊天' : undefined}><Button icon={<AudioOutlined />} disabled={busy} onClick={() => a.navigate('voice')}>语音通话</Button></Tooltip>
+          {view.textAnswer?.canStop && a.stopChat && <Button aria-label={view.textAnswer.stopping ? '正在停止…' : '停止回答'} disabled={view.textAnswer.stopping}
+            loading={view.textAnswer.stopping} onClick={stopTextAnswer}>{view.textAnswer.stopping ? '正在停止…' : '停止回答'}</Button>}
           <SendButton shape="default" icon={null} loading={continuing || busy && !waitingInput} disabled={!enabled || !s.chatDraft.trim()}>{waitingInput ? '补充并继续' : '发送问题 ↑'}</SendButton></Space></div>} />
+      {view.textAnswer?.notice && <p className="composer-note" role="status">{view.textAnswer.notice}</p>}
       <p className="composer-note">{s.selectedKbId === null ? 'Enter 发送 · Shift+Enter 换行。本聊天不会检索知识库。' : 'Enter 发送 · Shift+Enter 换行。资料回答只展示已提交且有原文依据的结果。'}</p></div>
     <Drawer title="原文来源" aria-label="原文来源" rootClassName="formal-source-drawer" focusable={{ focusTriggerAfterClose: false }} open={!!citation} onClose={a.closeCitation} size="min(460px, 100vw)" destroyOnHidden
       footer={citation && <div className="source-drawer-actions"><Button aria-label="下载原文" href={api.originalUrl(citation.document_id)} icon={<FileTextOutlined />}>下载原文</Button><Button type="primary" onClick={a.closeCitation}>关闭来源</Button></div>}>

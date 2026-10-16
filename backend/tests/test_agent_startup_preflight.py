@@ -249,6 +249,19 @@ async def test_missing_namespace_is_actionable_without_database_writes(monkeypat
     engine.dispose.assert_awaited_once()
 
 
+@pytest.mark.parametrize("code", [
+    "agent_dependencies_missing", "agent_checkpoint_namespace_missing",
+    "agent_checkpoint_tables_missing", "agent_checkpoint_version_mismatch",
+    "agent_checkpoint_permissions_missing",
+])
+def test_agent_blocked_report_points_to_explicit_preparation_without_migration(code):
+    output = doctor.Report("text", [doctor.Check(code, "blocked", "synthetic")]).render()
+    assert "Get-Content -LiteralPath .\\backend\\AGENT.md" in output
+    assert "uv sync --locked --extra agent" in output
+    assert "授权" in output and "备份" in output
+    assert "alembic upgrade" not in output and "python -m app.agent.checkpoints" not in output
+
+
 @pytest.mark.parametrize("version", [None, 1, 3])
 async def test_checkpoint_version_must_match_installed_saver_migrations(monkeypatch, version):
     fake_optional_packages(monkeypatch)

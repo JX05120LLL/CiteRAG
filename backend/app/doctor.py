@@ -56,6 +56,60 @@ class Report:
     def render(self) -> str:
         rows = [f"CiteRAG [{self.profile}] — {self.summary}"]
         rows.extend(f"[{item.state}] {item.code}: {item.detail}" for item in self.checks)
+        blocked = {item.code for item in self.checks if item.state == "blocked"}
+        if blocked:
+            rows.append("下一步（从仓库根目录执行；以下命令仅供手动选择，本诊断不会执行）：")
+            install = "uv sync --locked"
+            if self.profile == "knowledge":
+                install += " --extra rag"
+            if any(item.code.startswith("agent_") for item in self.checks):
+                install += " --extra agent"
+            advice = {
+                "python": "先准备 Python 3.12 和 uv；后端环境使用下方显式安装步骤。",
+                "backend_dependencies": (
+                    "显式安装（保留需要的可选 extras）：\n"
+                    f"  Set-Location .\\backend\n  {install}\n  Set-Location .."
+                ),
+                "frontend_dependencies": (
+                    "显式安装前端依赖：\n  Set-Location .\\frontend\n"
+                    "  pnpm install --frozen-lockfile\n  Set-Location .."
+                ),
+                "node": "先安装 Node.js 22.12+，再运行 node --version 核对。",
+                "database_not_configured": (
+                    "先准备独立业务库与受控 CITERAG_DATABASE_URL，"
+                    "不在命令参数中粘贴连接或密码。查看准备步骤：\n"
+                    "  Get-Content -LiteralPath .\\backend\\STARTUP.md"
+                ),
+                "model_record": (
+                    "先检查保存状态：\n  powershell.exe -NoProfile -ExecutionPolicy Bypass "
+                    "-File .\\backend\\configure-model.ps1 -CheckOnly\n"
+                    "  首次缺记录时按启动文档使用 "
+                    "-WorkspaceId YOUR_DASHSCOPE_WORKSPACE_ID；须替换为真实北京地域工作空间 ID，"
+                    "交互输入 Key；不覆盖已有记录。"
+                ),
+                "rag_record": (
+                    "核对独立引擎库配置：\n  Get-Content -LiteralPath .\\backend\\README.md"
+                ),
+                "database_schema_mismatch": (
+                    "先停写并成套备份、确认升级授权与恢复方案，不绕过 schema 门禁。核对步骤：\n"
+                    "  Get-Content -LiteralPath .\\backend\\STARTUP.md"
+                ),
+                "unfinished_ingestion": "先审查未完成任务及费用授权；诊断不恢复、重试或修改任务。",
+            }
+            for code, detail in advice.items():
+                if code in blocked:
+                    rows.append(f"- {detail}")
+            if any(code.startswith("agent_") for code in blocked):
+                rows.append(
+                    "- Agent 检查点初始化/升级须先停写、备份并取得授权，不自动 setup 或迁移。"
+                    "核对步骤：\n  Get-Content -LiteralPath .\\backend\\AGENT.md\n"
+                    "  仅缺依赖时，在 backend 中显式安装：\n  " + install
+                )
+            profile = "knowledge" if self.profile == "knowledge" else "text"
+            rows.append(
+                "- 查看只读配置说明：\n  powershell.exe -NoProfile -ExecutionPolicy Bypass "
+                f"-File .\\backend\\start.ps1 -Profile {profile} -Guide"
+            )
         return "\n".join(rows)
 
 

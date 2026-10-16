@@ -6,6 +6,16 @@ Python 3.12、FastAPI、SQLAlchemy/Alembic、PostgreSQL 和可选的 LightRAG/�
 
 Windows 日常文字入口、只读诊断、受控配置和退出步骤见 [启动与配置](STARTUP.md)。入口复用现有 `.venv`，不自动安装、迁移或要求语音服务。
 
+首次可使用 `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\start.ps1 -Guide` 查看纯说明引导（命令从 `backend/` 执行；引导给出的后续命令以仓库根目录为起点）。已授权真实调用时，日常 API 入口支持显式 `-EnableAnswer/-EnableIngestion`，未传时仍兼容受控环境值；`-CheckOnly` 始终只做诊断。
+
+### 文字历史与停止协议
+
+- `GET /api/conversations/{id}/messages` 保持最近 50 个问题、各取最新回答尝试；追加可选 `limit=1..50` 与 `before_message_id`，返回 `items/has_more/next_before_message_id/history_version`。`items` 时间正序，游标按问题 `(created_at,id)` 严格向前；跨聊天或不存在游标安全返回 404。`history_version` 是不含正文的历史可见性标记；知识库维护／修订／空间／隐藏阈值或全聊天图片到期边界改变时更新，客户端丢弃不兼容旧页。旧客户端继续只读取 `items`。
+- 新增 `POST /api/conversations/{id}/messages/{message_id}/retry/stream`，请求仍为 `{attempt_id}`，事件与原提问 SSE 一致；原 JSON 重试接口保留。重试的 `client_message_id` 保持原问题标识，新 `attempt_id` 单独核对。
+- 初次提问与流式重试均在连接断开时取消生产协程，并复用既有中断/部分保存逻辑；客户端核对持久结果后展示状态，不把断开连接等同于已保存或撤销费用。
+
+本轮无需 schema 变更或迁移；聊天、摘要、来源门禁及保留期限沿用已有规则。
+
 在本目录运行以下命令，可启动无数据库配置的 API 并查看真实缺项：
 
 ```powershell

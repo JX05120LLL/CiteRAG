@@ -4,6 +4,15 @@
 
 ## 1. 首次安装依赖
 
+不确定从哪里开始时，在仓库根目录先查看纯说明引导：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\backend\start.ps1 -Profile knowledge -Guide
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\backend\start.ps1 -Role frontend -Guide
+```
+
+`-Guide` 不要求现有 Python 环境或数据库，不加载凭证、不检查数据库、不安装依赖、不创建服务；只打印可手动选择的下一步。默认 `text` 面向普通聊天，`knowledge` 追加知识库依赖说明。Agent/Weather 选项会带入对应的诊断和启动命令，启用条件仍须单独准备。
+
 需要 Python 3.12、uv、Node.js 22.12+、pnpm 10.33.0。在仓库根目录执行：
 
 ```powershell
@@ -64,6 +73,15 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\backend\configure-mode
 $env:CITERAG_ANSWER_ENABLED = 'true'
 $env:CITERAG_INGESTION_ENABLED = 'true'
 ```
+
+也可使用本次启动的显式选项，避免在多个终端之间误认开关状态：
+
+```powershell
+# 仅在已有真实问答/入库授权时使用；不会初始化或迁移数据库
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\backend\start.ps1 -Profile knowledge -EnableAnswer -EnableIngestion
+```
+
+`-EnableAnswer` 和 `-EnableIngestion` 分别允许模型回答和文档索引；未传时保留已有合法环境值，否则默认关闭。入口显示规范化的 Profile/Answer/Ingestion/Agent/Weather 状态；非法布尔值在启动 Python 前安全拒绝，不回显原值。需要诊断时追加 `-CheckOnly`，不会因此触发付费请求。
 
 普通聊天只需要业务库和回答模型；知识库聊天还需要资料真实入库、当前库就绪及检索配置。没有这些条件时显示缺项或安全失败，不提供伪造来源。
 
@@ -132,7 +150,9 @@ Invoke-RestMethod http://127.0.0.1:8000/api/agent/capability
 
 ## 5. 关闭与缺项定位
 
-退出前等待当前文字回答完成（语音应先挂断），再分别在前端、API 窗口按 `Ctrl+C`。当前普通文字流没有独立的“停止回答”按钮；刷新/关闭页面造成断线后，重开并核对持久状态，再决定是否重试。只关闭这两个已知窗口，不停 Docker 或未知 PostgreSQL，不按端口批量杀进程。进程意外退出后旧回答会标记中断，重启读取历史，不自动重发模型请求。
+退出前结束当前回答（语音应先挂断），再分别在前端、API 窗口按 `Ctrl+C`。非 Agent 的文字生成和重试可点击“停止回答”：浏览器中止实际请求并释放 SSE reader，服务端取消对应生成协程，再读取持久状态。停止与提交竞争时保留已提交回答；部分文本仅按实际保存的 `partial` 展示。未确认状态时明确提示刷新核对，不伪报停止成功。Agent 使用任务卡片的现有取消入口，语音沿用通话内停止/挂断。已经发出的供应商请求与费用不能通过停止撤销。
+
+只关闭已知项目窗口，不停 Docker 或未知 PostgreSQL，不按端口批量杀进程。进程意外退出后旧回答会标记中断，重启读取历史，不自动重发模型请求。
 
 | 诊断阶段/错误码 | 操作 |
 | --- | --- |

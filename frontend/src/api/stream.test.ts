@@ -21,6 +21,73 @@ function wire(chunks: string[]): Response {
 
 const event = (name: string, data: unknown): string => `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`;
 
+it.each(['not-a-version', null, 123])('rejects malformed history visibility versions: %s', async (history_version) => {
+  const api = createApi(async () => new Response(JSON.stringify({ items: [final], has_more: false,
+    next_before_message_id: null, history_version }), { headers: { 'Content-Type': 'application/json' } }));
+  await expect(api.conversationMessagePage('chat')).rejects.toMatchObject({ kind: 'invalid-response' });
+});
+
+it('reads an older history page and keeps legacy item-only responses compatible', async () => {
+  const paths: string[] = [];
+  const api = createApi(async (url) => {
+    paths.push(String(url));
+    return new Response(JSON.stringify({ items: [final], has_more: true, next_before_message_id: 'm' }),
+      { headers: { 'Content-Type': 'application/json' } });
+  });
+  expect(await api.conversationMessagePage('chat', 'older-message')).toEqual({
+    items: [final], has_more: true, next_before_message_id: 'm',
+  });
+  expect(paths).toEqual(['/api/conversations/chat/messages?before_message_id=older-message']);
+  const legacy = createApi(async () => new Response(JSON.stringify({ items: [final] })));
+  expect(await legacy.conversationMessagePage('chat')).toEqual({ items: [final], has_more: false, next_before_message_id: null });
+});
+
+it('rejects history pagination metadata that could loop or skip the oldest message', async () => {
+  for (const value of [{ items: [final], has_more: true, next_before_message_id: 'other' },
+    { items: [], has_more: true, next_before_message_id: 'm' },
+    { items: [final], has_more: false, next_before_message_id: 'm' }]) {
+    const api = createApi(async () => new Response(JSON.stringify(value)));
+    await expect(api.conversationMessagePage('chat')).rejects.toMatchObject({ kind: 'invalid-response' });
+  }
+});
+
+it('aborts the actual pending answer reader and rejects late progress', async () => {
+  const stop = new AbortController();
+  const cancel = vi.fn();
+  let source!: ReadableStreamDefaultController<Uint8Array>;
+  let ready!: () => void;
+  const accepted = new Promise<void>((resolve) => { ready = resolve; });
+  const stream = new ReadableStream<Uint8Array>({ start(controller) {
+    source = controller;
+    controller.enqueue(new TextEncoder().encode(event('accepted', { ...final, status: 'running', text: '', saved: false })));
+  }, cancel });
+  const api = createApi(async () => new Response(stream, { headers: { 'Content-Type': 'text/event-stream' } }));
+  const progress = vi.fn(() => ready());
+  const result = api.askMessageStream('chat', '问题', 'key', 'semantic', undefined, progress, [], stop.signal);
+  const settled = result.catch((error: unknown) => error);
+  try {
+    await accepted;
+    stop.abort();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(await settled).toMatchObject({ kind: 'cancelled' });
+    expect(progress).toHaveBeenCalledTimes(1);
+    expect(stream.locked).toBe(false);
+  } finally { try { source.close(); } catch { /* The successful cancellation already closed it. */ } }
+});
+
+it('does not submit an already cancelled answer and streams retries using the attempt identity', async () => {
+  const fetcher = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) => wire([event('accepted', { ...final, attempt_id: 'retry', status: 'running', text: '', saved: false }),
+    event('saved', { ...final, attempt_id: 'retry' })]));
+  const api = createApi(fetcher);
+  const stop = new AbortController(); stop.abort();
+  await expect(api.askMessageStream('chat', '问题', 'key', 'semantic', undefined, undefined, [], stop.signal))
+    .rejects.toMatchObject({ kind: 'cancelled' });
+  expect(fetcher).not.toHaveBeenCalled();
+  await expect(api.retryAnswerStream('chat', 'm', 'retry')).resolves.toMatchObject({ attempt_id: 'retry', client_message_id: 'key' });
+  expect(fetcher.mock.calls[0][0]).toBe('/api/conversations/chat/messages/m/retry/stream');
+});
+
 describe('checked answer stream', () => {
   it('releases a still-open response body after receiving a committed final answer', async () => {
     const cancel = vi.fn();

@@ -35,6 +35,36 @@ def test_missing_database_has_actionable_non_destructive_advice(monkeypatch, tmp
     assert "未初始化" in report.render()
 
 
+@pytest.mark.parametrize("code,expected", [
+    ("backend_dependencies", "uv sync --locked"),
+    ("database_not_configured", "Get-Content -LiteralPath .\\backend\\STARTUP.md"),
+    ("model_record", ".\\backend\\configure-model.ps1 -CheckOnly"),
+    ("rag_record", "Get-Content -LiteralPath .\\backend\\README.md"),
+    ("database_schema_mismatch", "停写"),
+    ("unfinished_ingestion", "审查"),
+])
+def test_blocked_report_gives_safe_next_steps_without_automatic_repairs(code, expected):
+    report = doctor.Report("knowledge", [doctor.Check(code, "blocked", "synthetic missing item")])
+    output = report.render()
+    assert "下一步" in output and expected in output
+    assert "alembic upgrade" not in output and "stamp" not in output
+    assert "从仓库根目录" in output
+
+
+def test_unverified_model_presence_does_not_recommend_overwriting_configuration():
+    output = doctor.Report("text", [doctor.Check("model_record", "unverified", "exists")]).render()
+    assert "configure-model.ps1" not in output
+
+
+def test_model_next_step_command_can_be_copied_without_prose_or_punctuation():
+    output = doctor.Report("text", [doctor.Check("model_record", "blocked", "missing")]).render()
+    command = (
+        "  powershell.exe -NoProfile -ExecutionPolicy Bypass "
+        "-File .\\backend\\configure-model.ps1 -CheckOnly"
+    )
+    assert command in output.splitlines()
+
+
 @pytest.mark.parametrize(
     "url",
     [
@@ -204,11 +234,27 @@ def test_frontend_launcher_drops_backend_environment_before_real_node(tmp_path, 
 
 @pytest.mark.parametrize("shell_name", ["powershell.exe", "pwsh.exe"])
 @pytest.mark.parametrize(
-    "flags, agent, weather",
-    [([], False, False), (["-EnableAgent"], True, False),
-     (["-EnableWeather"], False, True), (["-EnableAgent", "-EnableWeather"], True, True)],
+    "flags,agent,weather,answer,ingestion,inherited",
+    [([], False, False, "false", "false", {}),
+     (["-EnableAgent"], True, False, "false", "false", {}),
+     (["-EnableWeather"], False, True, "false", "false", {}),
+     (["-EnableAgent", "-EnableWeather"], True, True, "false", "false", {}),
+     (["-EnableAnswer"], False, False, "true", "false", {}),
+     (["-EnableIngestion"], False, False, "false", "true", {}),
+     (["-EnableAnswer", "-EnableIngestion", "-EnableAgent", "-EnableWeather"],
+      True, True, "true", "true", {}),
+     (["-CheckOnly", "-EnableAnswer", "-EnableIngestion", "-EnableAgent", "-EnableWeather"],
+      True, True, "true", "true", {}),
+     ([], False, False, "true", "true",
+      {"CITERAG_ANSWER_ENABLED": "true", "CITERAG_INGESTION_ENABLED": "true"}),
+     ([], False, False, "yes", "1",
+      {"CITERAG_ANSWER_ENABLED": "yes", "CITERAG_INGESTION_ENABLED": "1"}),
+     ([], False, False, "PRIVATE_TEST_BOOL", "false",
+      {"CITERAG_ANSWER_ENABLED": "PRIVATE_TEST_BOOL"})],
 )
-def test_api_launcher_optional_tools_are_explicit(tmp_path, shell_name, flags, agent, weather):
+def test_api_launcher_optional_features_are_explicit(
+    tmp_path, shell_name, flags, agent, weather, answer, ingestion, inherited,
+):
     if os.name != "nt":
         pytest.skip("Windows PowerShell startup boundary requires Windows")
     shell = shutil.which(shell_name)
@@ -238,7 +284,8 @@ def test_api_launcher_optional_tools_are_explicit(tmp_path, shell_name, flags, a
         "and os.environ['CITERAG_QWEATHER_API_KEY'] == 'public-synthetic',\n"
         "  'mcp': os.environ['CITERAG_MCP_ENABLED'],\n"
         "  'voice': os.environ['CITERAG_VOICE_ASSISTANT_ENABLED'],\n"
-        "  'answers': os.environ['CITERAG_ANSWER_ENABLED']\n"
+        f"  'answers_preserved': os.environ['CITERAG_ANSWER_ENABLED'] == {answer!r},\n"
+        f"  'ingestion_preserved': os.environ['CITERAG_INGESTION_ENABLED'] == {ingestion!r}\n"
         "}));\n"
     )
     (app / "doctor.py").write_text(probe, encoding="utf-8")
@@ -252,9 +299,9 @@ def test_api_launcher_optional_tools_are_explicit(tmp_path, shell_name, flags, a
         "CITERAG_DATABASE_URL": "postgresql+asyncpg://synthetic@127.0.0.1:1/synthetic",
         "CITERAG_AGENT_ENABLED": "true", "CITERAG_MCP_ENABLED": "true",
         "CITERAG_QWEATHER_ENABLED": "true", "CITERAG_VOICE_ASSISTANT_ENABLED": "true",
-        "CITERAG_ANSWER_ENABLED": "false",
         "CITERAG_QWEATHER_API_HOST": "synthetic.qweatherapi.com",
         "CITERAG_QWEATHER_API_KEY": "public-synthetic",
+        **inherited,
     })
     launched = subprocess.run(
         [shell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
@@ -262,17 +309,95 @@ def test_api_launcher_optional_tools_are_explicit(tmp_path, shell_name, flags, a
         env=environment, capture_output=True, text=True, encoding="utf-8",
         timeout=30, check=False,
     )
-    assert launched.returncode == 0, launched.stderr
+    invalid = answer == "PRIVATE_TEST_BOOL"
+    assert launched.returncode == (1 if invalid else 0), launched.stderr
     observed = [json.loads(line.removeprefix("PUBLIC_PROBE:"))
                 for line in launched.stdout.splitlines() if line.startswith("PUBLIC_PROBE:")]
-    assert len(observed) == 2, "Doctor and synthetic API child must both run"
-    assert observed[0]["args"] == ["--profile", "text", "--database", "--backend-only"] + (
-        ["--agent"] if agent else []
-    )
-    assert observed[1]["args"] == ["app.main:app", "--host", "127.0.0.1", "--port", "8000",
-                                   "--workers", "1", "--no-proxy-headers"]
+    assert len(observed) == (0 if invalid else (1 if "-CheckOnly" in flags else 2))
+    if not invalid:
+        assert observed[0]["args"] == ["--profile", "text", "--database", "--backend-only"] + (
+            ["--agent"] if agent else []
+        )
+    if not invalid and "-CheckOnly" not in flags:
+        assert observed[1]["args"] == ["app.main:app", "--host", "127.0.0.1", "--port", "8000",
+                                       "--workers", "1", "--no-proxy-headers"]
     for child in observed:
         assert child["agent"] == str(agent).lower()
         assert child["weather"] == str(weather).lower()
         assert child["weather_config_preserved"] is weather
-        assert child["mcp"] == child["voice"] == child["answers"] == "false"
+        assert child["mcp"] == child["voice"] == "false"
+        assert child["answers_preserved"] and child["ingestion_preserved"]
+    answer_state = "true" if answer in {"true", "yes", "1"} else (
+        "false" if answer == "false" else "invalid (value hidden)"
+    )
+    ingestion_state = "true" if ingestion in {"true", "yes", "1"} else "false"
+    assert f"Answer={answer_state}; Ingestion={ingestion_state}" in launched.stdout
+    assert "PRIVATE_TEST_BOOL" not in launched.stdout + launched.stderr
+
+
+@pytest.mark.parametrize("shell_name", ["powershell.exe", "pwsh.exe"])
+@pytest.mark.parametrize("role", ["api", "frontend"])
+def test_guide_works_before_dependencies_without_loading_configuration(tmp_path, shell_name, role):
+    if os.name != "nt":
+        pytest.skip("Windows PowerShell startup boundary requires Windows")
+    shell = shutil.which(shell_name)
+    if not shell:
+        pytest.skip("The selected PowerShell edition is required")
+    backend = tmp_path / "backend"
+    backend.mkdir()
+    launcher = backend / "start.ps1"
+    shutil.copyfile(Path(__file__).resolve().parents[1] / "start.ps1", launcher)
+    # Both configuration libraries fail if loaded; no Python/Node dependency is installed.
+    (backend / "business-config.ps1").write_text("throw 'PRIVATE_TEST_SENTINEL'", encoding="utf-8")
+    (backend / "configure-model.ps1").write_text("throw 'PRIVATE_TEST_SENTINEL'", encoding="utf-8")
+    private = tmp_path / ".local/runtime/models/dashscope.credential.xml"
+    private.parent.mkdir(parents=True)
+    private.write_bytes(b"PRIVATE_TEST_SENTINEL")
+    before = {str(path.relative_to(tmp_path)): path.read_bytes()
+              for path in tmp_path.rglob("*") if path.is_file()}
+    environment = {name: value for name, value in os.environ.items()
+                   if not name.upper().startswith(("CITERAG_", "PYTHON"))}
+    environment["CITERAG_DATABASE_URL"] = "PRIVATE_TEST_SENTINEL"
+    launched = subprocess.run(
+        [shell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+         "-File", str(launcher), "-Guide", "-Role", role, "-Profile", "knowledge",
+         "-EnableAgent", "-EnableWeather", "-EnableAnswer", "-EnableIngestion"],
+        env=environment, capture_output=True, text=True, encoding="utf-8",
+        timeout=30, check=False,
+    )
+    assert launched.returncode == 0, launched.stderr
+    assert "No configuration was read" in launched.stdout
+    assert "-CheckOnly" in launched.stdout and "-Guide" in launched.stdout
+    assert "PRIVATE_TEST_SENTINEL" not in launched.stdout + launched.stderr
+    if role == "api":
+        assert "uv sync --locked --extra rag --extra agent" in launched.stdout
+        assert "YOUR_DASHSCOPE_WORKSPACE_ID" in launched.stdout
+        assert "-EnableAnswer" in launched.stdout and "-EnableIngestion" in launched.stdout
+        assert "backup" in launched.stdout and "authorization" in launched.stdout
+    else:
+        assert "pnpm install --frozen-lockfile" in launched.stdout
+    after = {str(path.relative_to(tmp_path)): path.read_bytes()
+             for path in tmp_path.rglob("*") if path.is_file()}
+    assert after == before
+
+
+@pytest.mark.parametrize("shell_name", ["powershell.exe", "pwsh.exe"])
+def test_missing_environment_failure_has_safe_actionable_guide(tmp_path, shell_name):
+    if os.name != "nt":
+        pytest.skip("Windows PowerShell startup boundary requires Windows")
+    shell = shutil.which(shell_name)
+    if not shell:
+        pytest.skip("The selected PowerShell edition is required")
+    backend = tmp_path / "backend"
+    backend.mkdir()
+    launcher = backend / "start.ps1"
+    shutil.copyfile(Path(__file__).resolve().parents[1] / "start.ps1", launcher)
+    result = subprocess.run(
+        [shell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+         "-File", str(launcher)],
+        capture_output=True, text=True, encoding="utf-8", timeout=30, check=False,
+    )
+    assert result.returncode == 1
+    assert "blocked at dependencies" in result.stdout
+    assert ".\\backend\\start.ps1" in result.stdout and "-Guide" in result.stdout
+    assert "uv sync --locked" in result.stdout

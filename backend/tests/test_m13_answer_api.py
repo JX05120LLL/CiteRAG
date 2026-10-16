@@ -1,27 +1,36 @@
 """M1-3 slice: real isolated business DB, synthetic indexed source, fake model."""
 
 import asyncio
+import re
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID, uuid4
 
 import pytest
 import pytest_asyncio
+from fastapi import FastAPI
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy import func, select, text
 from test_ingestion_lifecycle import FakeAdapter, application, finished, new_kb, upload
 from test_postgres_local import migrate
 
+from app.api.answers import router as answer_router
+from app.api.dependencies import database_session, local_owner
 from app.models import (
     AnswerAttempt,
     Conversation,
     ConversationMessage,
     ConversationSummary,
+    ImageAttachment,
     KnowledgeBase,
+    LocalProfile,
+    MessageImage,
     ToolCall,
 )
 from app.rag.answer_adapter import AnswerError
 from app.rag.query_adapter import QueryError, RetrievedChunk
 from app.services.answers import AnswerService
+from app.services.errors import ServiceError
 
 pytest_plugins = ["test_postgres_local"]
 pytestmark = pytest.mark.postgres
@@ -41,6 +50,66 @@ async def m13_environment(schema_database, tmp_path):
     adapter = FakeAdapter()
     async with application(database, settings, tmp_path / "sources", adapter) as (api, app):
         yield api, database, app, adapter
+
+
+@pytest_asyncio.fixture
+async def history_route(monkeypatch):
+    """Exercise HTTP validation and forwarding without a DB or model runtime."""
+    owner, session = uuid4(), object()
+    page = {"items": [], "has_more": False, "next_before_message_id": None}
+    service = MagicMock()
+    service.list_messages = AsyncMock(return_value=[])
+    service.list_messages_page = AsyncMock(return_value=page)
+    monkeypatch.setattr("app.api.answers.AnswerService", lambda *_args, **_kwargs: service)
+    app = FastAPI()
+    app.include_router(answer_router)
+    app.state.image_store = None
+    app.dependency_overrides[database_session] = lambda: session
+    app.dependency_overrides[local_owner] = lambda: owner
+    async with AsyncClient(transport=ASGITransport(app), base_url="http://test") as api:
+        yield api, service, owner
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limit", [None, 1, 50])
+async def test_history_route_returns_page_and_forwards_cursor(history_route, limit):
+    api, service, owner = history_route
+    chat, cursor = uuid4(), uuid4()
+    params = {"before_message_id": str(cursor)}
+    if limit is not None:
+        params["limit"] = limit
+    response = await api.get(f"/api/conversations/{chat}/messages", params=params)
+    assert response.status_code == 200
+    assert response.json() == {
+        "items": [], "has_more": False, "next_before_message_id": None,
+    }
+    service.list_messages_page.assert_awaited_once_with(
+        owner, chat, limit=50 if limit is None else limit, before_message_id=cursor,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("params", [
+    {"limit": 0}, {"limit": -1}, {"limit": 51}, {"limit": "bad"}, {"limit": "1.5"},
+    {"before_message_id": "not-a-uuid"},
+])
+async def test_history_route_rejects_invalid_page_parameters(history_route, params):
+    api, service, _ = history_route
+    response = await api.get(f"/api/conversations/{uuid4()}/messages", params=params)
+    assert response.status_code == 422
+    service.list_messages_page.assert_not_awaited()
+    service.list_messages.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_history_page_exposes_opaque_visibility_version_without_database():
+    session = MagicMock()
+    session.execute = AsyncMock(return_value=[])
+    service = AnswerService(session)
+    service._owned_conversation = AsyncMock(return_value=(None, None))
+    service._expired_image_at = AsyncMock(return_value=None)
+    page = await service.list_messages_page(uuid4(), uuid4())
+    assert re.fullmatch(r"[0-9a-f]{64}", page["history_version"])
 
 
 class Query:
@@ -439,21 +508,27 @@ async def test_server_restart_marks_durable_running_attempt_interrupted(schema_d
 
 
 @pytest.mark.asyncio
-async def test_history_limits_messages_instead_of_retry_attempts(m13_environment):
+async def test_history_pages_messages_stably_without_retry_or_new_message_displacement(
+    m13_environment,
+):
     api, db, _, _ = m13_environment
     chat = (await api.post("/api/conversations", json={"kb_id": None})).json()["id"]
     start = datetime.now(UTC) - timedelta(hours=1)
+    message_id_base = (uuid4().int >> 16) << 16
     attempt_id_base = (uuid4().int >> 16) << 16
     async with db.sessions() as session:
-        for index in range(51):
+        for index in range(121):
             message = ConversationMessage(
-                id=uuid4(), conversation_id=chat, client_message_id=uuid4(),
+                id=UUID(int=message_id_base + index),
+                conversation_id=chat, client_message_id=uuid4(),
                 content=f"Synthetic question {index}", mode="auto",
-                query_filter={"mode": "general"}, created_at=start + timedelta(minutes=index),
+                query_filter={"mode": "general"},
+                # Several messages share timestamps, including both page boundaries.
+                created_at=start + timedelta(minutes=index // 4),
             )
             session.add(message)
             await session.flush()
-            count = 60 if index == 50 else 1
+            count = 60 if index == 120 else 1
             for attempt_index in range(count):
                 session.add(AnswerAttempt(
                     id=UUID(int=attempt_id_base + index * 100 + attempt_index),
@@ -465,13 +540,242 @@ async def test_history_limits_messages_instead_of_retry_attempts(m13_environment
                     created_at=message.created_at,
                 ))
         await session.commit()
-    history = (await api.get(f"/api/conversations/{chat}/messages")).json()["items"]
+    path = f"/api/conversations/{chat}/messages"
+    first = (await api.get(path)).json()
+    history = first["items"]
     assert len(history) == 50
     assert [item["question"] for item in history] == [
-        f"Synthetic question {index}" for index in range(1, 51)
+        f"Synthetic question {index}" for index in range(71, 121)
     ]
     assert history[-1]["status"] == "answered"
-    assert history[-1]["text"] == "Synthetic answer 50/59"
+    assert history[-1]["text"] == "Synthetic answer 120/59"
+    assert first["has_more"] and first["next_before_message_id"] == history[0]["message_id"]
+    async with db.sessions() as session:
+        owner = await session.scalar(select(LocalProfile.id))
+        assert [str(item["message_id"]) for item in await AnswerService(session).list_messages(
+            owner, UUID(chat),
+        )] == [item["message_id"] for item in history]
+        newest = ConversationMessage(
+            id=uuid4(), conversation_id=chat, client_message_id=uuid4(),
+            content="Synthetic appended question", mode="auto",
+            created_at=datetime.now(UTC),
+        )
+        session.add(newest)
+        await session.flush()
+        session.add(AnswerAttempt(
+            conversation_id=chat, message_id=newest.id, status="answered",
+            text="Synthetic appended answer", citations=[], kb_revision=0, workspace="ordinary",
+        ))
+        await session.commit()
+    second = (await api.get(path, params={
+        "before_message_id": first["next_before_message_id"],
+    })).json()
+    assert second["history_version"] == first["history_version"]
+    assert second["has_more"] and len(second["items"]) == 50
+    assert second["next_before_message_id"] == second["items"][0]["message_id"]
+    last = (await api.get(path, params={
+        "before_message_id": second["next_before_message_id"],
+    })).json()
+    assert not last["has_more"] and last["next_before_message_id"] is None
+    assert last["history_version"] == first["history_version"]
+    combined = last["items"] + second["items"] + history
+    assert [item["question"] for item in combined] == [
+        f"Synthetic question {index}" for index in range(121)
+    ]
+    assert len({item["message_id"] for item in combined}) == 121
+    empty = (await api.get(path, params={
+        "before_message_id": combined[0]["message_id"], "limit": 1,
+    })).json()
+    assert empty == {"items": [], "has_more": False, "next_before_message_id": None,
+                     "history_version": first["history_version"]}
+
+
+@pytest.mark.asyncio
+async def test_history_version_remains_stable_across_ordinary_retry_and_new_question(
+    m13_environment,
+):
+    api, db, app, _ = m13_environment
+    chat = (await api.post("/api/conversations", json={"kb_id": None})).json()["id"]
+    message_id = uuid4()
+    async with db.sessions() as session:
+        session.add(ConversationMessage(
+            id=message_id, conversation_id=chat, client_message_id=uuid4(),
+            content="Synthetic question", mode="auto", query_filter={"mode": "general"},
+        ))
+        await session.flush()
+        session.add(AnswerAttempt(
+            conversation_id=chat, message_id=message_id, status="failed", text=None,
+            citations=[], kb_revision=0, workspace="ordinary",
+        ))
+        await session.commit()
+    path = f"/api/conversations/{chat}/messages"
+    before = (await api.get(path)).json()
+    assert re.fullmatch(r"[0-9a-f]{64}", before["history_version"])
+
+    class GeneralAnswer:
+        async def general_answer(self, _question, _context):
+            return '{"text":"Synthetic ordinary answer"}'
+
+    app.state.answer_enabled = True
+    app.state.answer_adapter = GeneralAnswer()
+    retried = await api.post(f"{path}/{message_id}/retry", json={"attempt_id": str(uuid4())})
+    assert retried.status_code == 200 and retried.json()["status"] == "answered"
+    assert (await api.get(path)).json()["history_version"] == before["history_version"]
+    appended = await api.post(path, json={
+        "client_message_id": str(uuid4()), "text": "Synthetic next question", "mode": "auto",
+    })
+    assert appended.status_code == 200 and appended.json()["status"] == "answered"
+    latest = (await api.get(path, params={"limit": 1})).json()
+    older = (await api.get(path, params={
+        "limit": 1, "before_message_id": latest["next_before_message_id"],
+    })).json()
+    assert latest["history_version"] == older["history_version"] == before["history_version"]
+
+
+@pytest.mark.asyncio
+async def test_history_version_changes_for_each_knowledge_visibility_field(m13_environment):
+    api, db, _, _ = m13_environment
+    kb_id = await new_kb(api)
+    async with db.sessions() as session:
+        kb = await session.get(KnowledgeBase, kb_id)
+        kb.status = "ready"
+        await session.commit()
+    chat = (await api.post("/api/conversations", json={"kb_id": kb_id})).json()["id"]
+    path = f"/api/conversations/{chat}/messages"
+    version = (await api.get(path)).json()["history_version"]
+    for field, value in (
+        ("revision", 7), ("status", "maintaining"),
+        ("active_workspace", f"kb_{UUID(kb_id).hex}_r_{uuid4().hex}"),
+        ("hide_history_before_revision", 7),
+    ):
+        async with db.sessions() as session:
+            kb = await session.get(KnowledgeBase, kb_id)
+            setattr(kb, field, value)
+            await session.commit()
+        current = (await api.get(path)).json()["history_version"]
+        assert re.fullmatch(r"[0-9a-f]{64}", current)
+        assert current != version, field
+        version = current
+
+
+@pytest.mark.asyncio
+async def test_history_cursor_rejects_other_chat_missing_message_and_wrong_owner(m13_environment):
+    api, db, _, _ = m13_environment
+    chats = [(await api.post("/api/conversations", json={"kb_id": None})).json()["id"]
+             for _ in range(2)]
+    async with db.sessions() as session:
+        message = ConversationMessage(
+            id=uuid4(), conversation_id=chats[1], client_message_id=uuid4(),
+            content="Synthetic private question", mode="auto",
+        )
+        session.add(message)
+        await session.flush()
+        session.add(AnswerAttempt(
+            conversation_id=chats[1], message_id=message.id, status="answered",
+            text="Synthetic private answer", citations=[], kb_revision=0, workspace="ordinary",
+        ))
+        await session.commit()
+        message_id = message.id
+    path = f"/api/conversations/{chats[0]}/messages"
+    for cursor in (message_id, uuid4()):
+        response = await api.get(path, params={"before_message_id": str(cursor)})
+        assert response.status_code == 404
+        assert response.json()["detail"]["code"] == "message_not_found"
+        assert "Synthetic private" not in response.text
+    async with db.sessions() as session:
+        with pytest.raises(ServiceError) as forbidden:
+            await AnswerService(session).list_messages_page(
+                uuid4(), UUID(chats[1]), before_message_id=message_id,
+            )
+        assert forbidden.value.status == 404
+        assert forbidden.value.code == "conversation_not_found"
+        chat = await session.get(Conversation, UUID(chats[1]))
+        chat.owner_id = None
+        await session.commit()
+    unowned = await api.get(f"/api/conversations/{chats[1]}/messages", params={
+        "before_message_id": str(message_id),
+    })
+    assert unowned.status_code == 404
+    assert unowned.json()["detail"]["code"] == "conversation_not_found"
+
+
+@pytest.mark.asyncio
+async def test_history_pages_preserve_revision_and_global_expired_image_visibility(m13_environment):
+    api, db, _, _ = m13_environment
+    kb_id = await new_kb(api)
+    async with db.sessions() as session:
+        kb = await session.get(KnowledgeBase, kb_id)
+        kb.status = "ready"
+        await session.commit()
+    chat = (await api.post("/api/conversations", json={"kb_id": kb_id})).json()["id"]
+    start = datetime.now(UTC) - timedelta(hours=1)
+    messages, images = [], []
+    async with db.sessions() as session:
+        owner = await session.scalar(select(LocalProfile.id))
+        kb = await session.get(KnowledgeBase, kb_id)
+        for index in range(4):
+            message = ConversationMessage(
+                id=uuid4(), conversation_id=chat, client_message_id=uuid4(),
+                content=f"Synthetic image question {index}", mode="auto",
+                created_at=start + timedelta(minutes=index),
+            )
+            session.add(message)
+            await session.flush()
+            messages.append(str(message.id))
+            session.add(AnswerAttempt(
+                conversation_id=chat, message_id=message.id, status="answered",
+                text=f"Synthetic answer {index}", citations=[{"id": "synthetic"}],
+                kb_revision=kb.revision, workspace=kb.active_workspace,
+            ))
+            if index < 2:
+                image = ImageAttachment(
+                    id=uuid4(), owner_id=owner, conversation_id=chat,
+                    storage_key=uuid4().hex, filename="synthetic.png", mime_type="image/png",
+                    size=10, sha256="0" * 64, width=1, height=1,
+                    observation="Synthetic observation", observation_status="ready",
+                    expires_at=datetime.now(UTC) + timedelta(days=1),
+                )
+                session.add(image)
+                await session.flush()
+                session.add(MessageImage(message_id=message.id, attachment_id=image.id))
+                images.append(image.id)
+        kb.revision += 1
+        await session.commit()
+    path = f"/api/conversations/{chat}/messages"
+    latest = (await api.get(path, params={"limit": 2})).json()
+    older_params = {"limit": 2, "before_message_id": latest["next_before_message_id"]}
+    older = (await api.get(path, params=older_params)).json()
+    assert latest["history_version"] == older["history_version"]
+    visible_version = latest["history_version"]
+    assert [item["message_id"] for item in older["items"] + latest["items"]] == messages
+    assert all(item["stale"] and not item["hidden"]
+               for item in older["items"] + latest["items"])
+    assert str(older["items"][0]["images"][0]["id"]) == str(images[0])
+    async with db.sessions() as session:
+        kb = await session.get(KnowledgeBase, kb_id)
+        kb.hide_history_before_revision = kb.revision
+        await session.commit()
+    hidden_page = (await api.get(path, params=older_params)).json()
+    assert hidden_page["history_version"] != visible_version
+    hidden = hidden_page["items"]
+    assert all(item["hidden"] and item["stale"] and item["text"] == ""
+               and item["citations"] == [] and item["images"] == [] for item in hidden)
+    async with db.sessions() as session:
+        kb = await session.get(KnowledgeBase, kb_id)
+        kb.hide_history_before_revision = 0
+        image = await session.get(ImageAttachment, images[1])
+        image.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        await session.commit()
+    # The expired image belongs to an older page but still redacts all later answers.
+    latest = (await api.get(path, params={"limit": 2})).json()
+    assert latest["history_version"] not in {visible_version, hidden_page["history_version"]}
+    assert all(item["hidden"] and item["text"] == "" and item["citations"] == []
+               and item["images"] == [] for item in latest["items"])
+    older = (await api.get(path, params=older_params)).json()
+    assert older["history_version"] == latest["history_version"]
+    assert not older["items"][0]["hidden"] and older["items"][0]["images"]
+    assert older["items"][1]["hidden"] and older["items"][1]["images"] == []
+    assert not older["has_more"] and older["next_before_message_id"] is None
 
 
 @pytest.mark.asyncio

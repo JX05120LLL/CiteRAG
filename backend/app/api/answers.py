@@ -2,12 +2,13 @@
 
 import asyncio
 import json
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from typing import Annotated, Literal
 from unicodedata import category
 from uuid import UUID
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
 from pydantic import (
@@ -116,6 +117,20 @@ def _event(name: str, value: dict) -> str:
 @router.post("/conversations/{conversation_id}/messages/stream")
 async def ask_stream(conversation_id: UUID, body: AskRequest, request: Request,
                      owner: LocalOwner):
+    async def generate(service, retriever, answerer, accepted, preview):
+        return await service.ask(
+            owner, conversation_id, body.client_message_id, body.text,
+            retriever, answerer, mode=body.mode,
+            exact=body.exact.model_dump(exclude_none=True) if body.exact else None,
+            image_ids=body.image_ids, on_accepted=accepted, on_preview=preview,
+        )
+
+    return _stream_answer_response(conversation_id, request, generate)
+
+
+def _stream_answer_response(
+    conversation_id: UUID, request: Request, generate: Callable[..., Awaitable[dict]],
+) -> StreamingResponse:
     request.app.state.voice_runtime.registry.require_text(conversation_id)
     if not request.app.state.answer_enabled:
         raise ServiceError(503, "answer_disabled", "文字检索与模型回答尚未启用")
@@ -140,15 +155,12 @@ async def ask_stream(conversation_id: UUID, body: AskRequest, request: Request,
         async def produce():
             try:
                 async with database.sessions() as session:
-                    view = await AnswerService(session,
+                    service = AnswerService(session,
                         admission=request.app.state.voice_runtime.registry.require_text,
                         image_store=request.app.state.image_store,
-                        image_observer=request.app.state.image_observer or runtime).ask(
-                        owner, conversation_id, body.client_message_id, body.text,
-                        retriever, answerer, mode=body.mode,
-                        exact=body.exact.model_dump(exclude_none=True) if body.exact else None,
-                        image_ids=body.image_ids,
-                        on_accepted=accepted, on_preview=preview,
+                        image_observer=request.app.state.image_observer or runtime)
+                    view = await generate(
+                        service, retriever, answerer, accepted, preview,
                     )
                 if view["status"] == "running":
                     await queue.put(("pending", view))
@@ -190,9 +202,13 @@ async def ask_stream(conversation_id: UUID, body: AskRequest, request: Request,
 
 @router.get("/conversations/{conversation_id}/messages")
 async def list_messages(conversation_id: UUID, request: Request,
-                        owner: LocalOwner, session: Session):
-    return {"items": await AnswerService(session,
-        image_store=request.app.state.image_store).list_messages(owner, conversation_id)}
+                        owner: LocalOwner, session: Session,
+                        limit: Annotated[int, Query(ge=1, le=50)] = 50,
+                        before_message_id: UUID | None = None):
+    return await AnswerService(session,
+        image_store=request.app.state.image_store).list_messages_page(
+            owner, conversation_id, limit=limit, before_message_id=before_message_id,
+        )
 
 
 @router.post("/conversations/{conversation_id}/messages/{message_id}/retry")
@@ -210,3 +226,15 @@ async def retry_answer(conversation_id: UUID, message_id: UUID, body: RetryReque
         image_observer=request.app.state.image_observer or runtime).retry(
                                               owner, conversation_id, message_id,
                                               body.attempt_id, retriever, answerer)
+
+
+@router.post("/conversations/{conversation_id}/messages/{message_id}/retry/stream")
+async def retry_answer_stream(conversation_id: UUID, message_id: UUID, body: RetryRequest,
+                              request: Request, owner: LocalOwner):
+    async def generate(service, retriever, answerer, accepted, preview):
+        return await service.retry(
+            owner, conversation_id, message_id, body.attempt_id, retriever, answerer,
+            on_accepted=accepted, on_preview=preview,
+        )
+
+    return _stream_answer_response(conversation_id, request, generate)

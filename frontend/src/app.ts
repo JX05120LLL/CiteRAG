@@ -1,5 +1,5 @@
 import { ApiError } from './api/client';
-import type { ApiClient, Conversation, KnowledgeBase, VoiceCapability } from './api/client';
+import type { AnswerProgress, ApiClient, ChatMessage, ChatMessagePage, Conversation, KnowledgeBase, VoiceCapability } from './api/client';
 import { renderKnowledge } from './pages/knowledge';
 import { createDocumentsPanel } from './pages/documents';
 import { renderStatus } from './pages/status';
@@ -19,6 +19,8 @@ import type { VoiceActions, VoiceContext } from './pages/voice';
 export interface AppView {
   state: AppState; hasMoreChats: boolean; documents: ReturnType<typeof createDocumentsPanel>;
   agentCapabilityError?: boolean;
+  messageHistory?: { hasMore: boolean; loading: boolean; error: ApiError | null; totalLoaded: number; notice?: string | null };
+  textAnswer?: { canStop: boolean; stopping: boolean; notice: string | null };
   archivedChats: Conversation[]; hasMoreArchivedChats: boolean; archivedChatLoading: boolean; archivedChatError: ApiError | null;
   voice: { context: VoiceContext; actions: VoiceActions; levels: readonly number[] };
   actions: {
@@ -28,6 +30,7 @@ export interface AppView {
     loadArchivedChats: (reset?: boolean) => Promise<void>; setChatArchived: (id: string, archived: boolean) => Promise<void>;
     sendChat: () => Promise<void>; retryChat: (id: string) => Promise<void>; setDraft: (text: string) => void;
     refreshAgentMessages?: (chatId: string) => Promise<void>;
+    loadMoreMessages?: () => Promise<void>; stopChat?: () => void;
     selectChatImages: (files: File[]) => void; confirmChatImage: (messageId: string, imageId: string) => Promise<void>;
     selectKb: (id: string) => void; selectCitation: (messageId: string, evidenceId: string) => void; closeCitation: () => void;
     createKnowledgeBase: () => Promise<void>; beginRename: (id: string) => void;
@@ -73,6 +76,19 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
   let agentMessageRead = 0;
   let agentCapabilityGeneration = 0;
   let agentCapabilityError = false;
+  let historyCursor: string | null = null;
+  let historyHasMore = false;
+  let historyLoading = false;
+  let historyError: ApiError | null = null;
+  let historyVersion: string | null = null;
+  let historyNotice: string | null = null;
+  let historyGeneration = 0;
+  let messageMutation = 0;
+  let olderHistoryLoaded = false;
+  let textNotice: string | null = null;
+  type TextRequest = { controller: AbortController; chatId: string; generation: number;
+    stopped: boolean; messageId?: string; attemptId?: string };
+  let textRequest: TextRequest | null = null;
   let hasMoreChats = false;
   let archivedChats: Conversation[] = [];
   let archivedChatOffset = 0;
@@ -89,10 +105,11 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
   let voiceView: ReturnType<typeof createVoiceView> | null = null;
   const voice = new VoiceController(api, () => { if (state.page === 'voice') render(); }, roomFactory,
     (value) => { if (!disposed && state.page === 'voice') { levels = value; if (options.render) render(); else voiceView?.levels(value); } });
-  const onPageHide = () => { ++voiceGeneration; voiceChecking = false; void voice.hangup(); };
+  const onPageHide = () => { stopChat(); ++voiceGeneration; voiceChecking = false; void voice.hangup(); };
   window.addEventListener('pagehide', onPageHide);
   options.onDispose?.(() => {
     disposed = true; ++generation; ++chatGeneration; ++healthGeneration; ++voiceGeneration; ++agentCapabilityGeneration;
+    ++historyGeneration; textRequest?.controller.abort();
     window.removeEventListener('pagehide', onPageHide); documentsPanel.dispose(); void voice.hangup();
   });
   async function loadVoiceCapability() {
@@ -131,6 +148,158 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
     state.createDraft.error = reason instanceof ApiError ? reason : new ApiError('local-storage');
   }
 
+  function resetHistory() {
+    ++historyGeneration;
+    historyCursor = null; historyHasMore = false; historyLoading = false;
+    historyError = null; olderHistoryLoaded = false; historyVersion = null; historyNotice = null;
+  }
+
+  function mergeMessages(items: ChatMessage[], local = false) {
+    if (local) ++messageMutation;
+    const incoming = new Map(items.map((item) => [item.message_id, item]));
+    const messages = state.chatMessages.map((item) => incoming.get(item.message_id) ?? item);
+    const known = new Set(messages.map((item) => item.message_id));
+    state.chatMessages = [...messages, ...items.filter((item) => !known.has(item.message_id))];
+  }
+
+  function acceptLatestPage(page: ChatMessagePage) {
+    if (historyVersion !== null && historyVersion !== page.history_version) {
+      resetHistory();
+      historyNotice = '资料或图片上下文已变化，已重新读取最近消息。';
+    }
+    historyVersion = page.history_version ?? null;
+    if (olderHistoryLoaded || historyLoading) mergeMessages(page.items);
+    else {
+      state.chatMessages = page.items;
+      historyHasMore = page.has_more; historyCursor = page.next_before_message_id;
+    }
+  }
+
+  async function refreshChangedHistory(page: ChatMessagePage, chatId: string) {
+    if (historyVersion === null || historyVersion === page.history_version) {
+      historyVersion = page.history_version ?? null;
+      return false;
+    }
+    const current = chatGeneration;
+    resetHistory();
+    historyVersion = page.history_version ?? null;
+    historyNotice = '资料或图片上下文已变化，正在重新读取最近消息。';
+    state.chatMessages = [];
+    render();
+    try {
+      await readLatestMessages(chatId);
+      if (!disposed && current === chatGeneration && state.selectedChatId === chatId)
+        historyNotice = '资料或图片上下文已变化，已重新读取最近消息。';
+    } catch (error) {
+      if (!disposed && current === chatGeneration && state.selectedChatId === chatId) {
+        historyError = error instanceof ApiError ? error : new ApiError('http');
+        historyNotice = '资料或图片上下文已变化，请刷新工作台重新读取消息。';
+      }
+    }
+    render();
+    return true;
+  }
+
+  async function readLatestMessages(chatId: string, stillCurrent = () => true) {
+    const current = chatGeneration;
+    const history = historyGeneration;
+    // A saved SSE result wins over a snapshot taken before it was committed.
+    for (let read = 0; read < 3; read++) {
+      const mutation = messageMutation;
+      const page = await api.conversationMessagePage(chatId);
+      if (disposed || current !== chatGeneration || history !== historyGeneration ||
+          state.selectedChatId !== chatId || !stillCurrent()) return;
+      if (mutation !== messageMutation) continue;
+      acceptLatestPage(page);
+      return;
+    }
+    throw new ApiError('conflict');
+  }
+
+  async function loadMoreMessages() {
+    const chatId = state.selectedChatId;
+    if (!chatId || !historyHasMore || !historyCursor || historyLoading || state.loading) return;
+    const current = historyGeneration;
+    const before = historyCursor;
+    historyLoading = true; historyError = null; render();
+    try {
+      const page = await api.conversationMessagePage(chatId, before);
+      if (disposed || current !== historyGeneration || state.selectedChatId !== chatId) return;
+      if (await refreshChangedHistory(page, chatId)) return;
+      if (disposed || current !== historyGeneration || state.selectedChatId !== chatId) return;
+      const known = new Set(state.chatMessages.map((item) => item.message_id));
+      if (page.next_before_message_id === before || page.items.some((item) => known.has(item.message_id)))
+        throw new ApiError('invalid-response');
+      state.chatMessages = [...page.items, ...state.chatMessages];
+      olderHistoryLoaded = true;
+      historyHasMore = page.has_more; historyCursor = page.next_before_message_id;
+    } catch (error) {
+      if (!disposed && current === historyGeneration && state.selectedChatId === chatId)
+        historyError = error instanceof ApiError ? error : new ApiError('http');
+    } finally {
+      if (current === historyGeneration) { historyLoading = false; render(); }
+    }
+  }
+
+  function beginTextRequest(chatId: string): TextRequest {
+    textNotice = null;
+    const operation = { controller: new AbortController(), chatId, generation: chatGeneration, stopped: false };
+    textRequest = operation; render(); return operation;
+  }
+
+  function textProgress(operation: TextRequest) {
+    return (progress: AnswerProgress) => {
+      if (disposed || textRequest !== operation || operation.stopped || operation.generation !== chatGeneration) return;
+      if (progress.type === 'accepted') {
+        operation.messageId = progress.message.message_id;
+        operation.attemptId = progress.message.attempt_id;
+        mergeMessages([progress.message], true);
+        state.chatStreamAttemptId = progress.message.attempt_id;
+        state.chatStreamText = ''; state.chatStreamSaved = false;
+      } else if (state.chatStreamAttemptId) {
+        state.chatStreamText = (state.chatStreamText ?? '') + progress.text;
+        state.chatStreamSaved = progress.saved;
+      }
+      render();
+    };
+  }
+
+  function stopChat() {
+    if (!textRequest || textRequest.stopped) return;
+    textRequest.stopped = true;
+    textNotice = '已请求停止，正在核对保存状态。';
+    textRequest.controller.abort(); render();
+  }
+
+  async function recoverTextRequest(operation: TextRequest, requestKey: string, messageId?: string) {
+    const targetId = messageId ?? operation.messageId;
+    const index = state.chatMessages.findIndex((item) => item.message_id === targetId);
+    const before = index >= 0 ? state.chatMessages[index + 1]?.message_id : undefined;
+    const history = historyGeneration;
+    const mutation = messageMutation;
+    const page = await api.conversationMessagePage(operation.chatId, before);
+    if (disposed || operation.generation !== chatGeneration || history !== historyGeneration || mutation !== messageMutation) return;
+    if (before) {
+      if (!await refreshChangedHistory(page, operation.chatId)) {
+        if (disposed || operation.generation !== chatGeneration || history !== historyGeneration ||
+            mutation !== messageMutation || state.selectedChatId !== operation.chatId) return;
+        const known = new Set(state.chatMessages.map((item) => item.message_id));
+        mergeMessages(page.items.filter((item) => known.has(item.message_id)));
+      }
+    } else acceptLatestPage(page);
+    const saved = state.chatMessages.find((item) => (targetId ? item.message_id === targetId : item.client_message_id === requestKey)
+      && (!operation.attemptId || item.attempt_id === operation.attemptId));
+    if (operation.stopped) {
+      state.chatError = null;
+      textNotice = saved && saved.status !== 'running'
+        ? saved.status === 'answered' ? '回答已完成并保存，停止请求未改写结果。'
+          : ['interrupted', 'partial'].includes(saved.status) ? '回答已停止，已核对保存状态。' : '回答已结束，请查看保存状态。'
+        : '已发送停止请求，保存状态尚未确认；请刷新工作台核对。';
+    }
+    if (saved?.status === 'running') void followSavedAnswer(operation.chatId, saved.message_id, operation.generation, before, operation.attemptId);
+    return saved;
+  }
+
   async function loadAgentCapability() {
     const current = ++agentCapabilityGeneration;
     try {
@@ -147,7 +316,8 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
   }
 
   async function refresh() {
-    if (isKnowledgePending(state)) return;
+    if (isKnowledgePending(state) || textRequest) return;
+    resetHistory(); textNotice = null;
     void loadAgentCapability();
     const currentGeneration = ++generation;
     const currentChatGeneration = ++chatGeneration;
@@ -208,10 +378,9 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
     const selectedChatId = state.selectedChatId;
     if (selectedChatId) {
       try {
-        const messages = await api.conversationMessages(selectedChatId);
+        await readLatestMessages(selectedChatId, () => currentGeneration === generation);
         if (currentGeneration === generation && currentChatGeneration === chatGeneration &&
             state.selectedChatId === selectedChatId) {
-          state.chatMessages = messages;
           state.chatError = null;
         }
       } catch (error) {
@@ -228,6 +397,7 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
     if (!chat || state.chatPending) return;
     discardDraftImages();
     const currentChatGeneration = ++chatGeneration;
+    resetHistory(); textNotice = null;
     state.navigationOpen = false;
     state.selectedKbId = chat.kb_id;
     state.selectedChatId = chat.id;
@@ -239,8 +409,7 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
     state.selectedCitation = null;
     render();
     try {
-      const messages = await api.conversationMessages(id);
-      if (currentChatGeneration === chatGeneration && state.selectedChatId === id) state.chatMessages = messages;
+      await readLatestMessages(id);
     } catch (error) {
       if (currentChatGeneration === chatGeneration && state.selectedChatId === id)
         state.chatError = error instanceof ApiError ? error : new ApiError('http');
@@ -314,6 +483,7 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
       state.selectedKbId = chat.kb_id;
       rememberSelection();
       state.chatMessages = [];
+      resetHistory(); textNotice = null;
       state.chatDraft = '';
       state.chatRequestKey = state.chatRequestText = null;
     } catch (error) {
@@ -371,7 +541,8 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
   }
 
   async function sendChat() {
-    if (!state.selectedChatId || state.chatPending ||
+    const chatId = state.selectedChatId;
+    if (!chatId || state.chatPending ||
         state.chatMessages.some((item) => item.status === 'running')) return;
     const question = state.chatDraft.trim();
     if (!question || question.length > 1000) return;
@@ -382,48 +553,46 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
     state.chatPending = true;
     state.chatError = null;
     render();
+    let operation: TextRequest | null = null;
     try {
       for (const file of state.chatImages.slice(state.chatUploadedImages.length)) {
-        state.chatUploadedImages.push(await api.uploadImage(state.selectedChatId, file));
+        state.chatUploadedImages.push(await api.uploadImage(chatId, file));
         render();
       }
       if (state.agentEnabled) {
-        await api.startAgent(state.selectedChatId, question, state.chatRequestKey,
+        await api.startAgent(chatId, question, state.chatRequestKey,
           state.chatUploadedImages.map((image) => image.id));
-        state.chatMessages = await api.conversationMessages(state.selectedChatId);
+        await readLatestMessages(chatId);
         state.chatDraft = ''; state.chatRequestKey = state.chatRequestText = null;
         state.chatImages = []; state.chatUploadedImages = [];
         return;
       }
-      const message = await api.askMessageStream(state.selectedChatId, question, state.chatRequestKey,
-        'auto', undefined, (progress) => {
-          if (progress.type === 'accepted') {
-            state.chatMessages = [...state.chatMessages.filter((item) =>
-              item.message_id !== progress.message.message_id), progress.message];
-            state.chatStreamAttemptId = progress.message.attempt_id;
-            state.chatStreamText = '';
-            state.chatStreamSaved = false;
-          } else if (state.chatStreamAttemptId) {
-            state.chatStreamText = (state.chatStreamText ?? '') + progress.text;
-            state.chatStreamSaved = progress.saved;
-          }
-          render();
-        }, state.chatUploadedImages.map((image) => image.id));
-      state.chatMessages = [...state.chatMessages.filter((item) => item.message_id !== message.message_id), message];
+      operation = beginTextRequest(chatId);
+      const message = await api.askMessageStream(chatId, question, state.chatRequestKey,
+        'auto', undefined, textProgress(operation), state.chatUploadedImages.map((image) => image.id), operation.controller.signal);
+      if (disposed || operation.generation !== chatGeneration) return;
+      mergeMessages([message], true);
+      if (operation.stopped) textNotice = message.status === 'answered'
+        ? '回答已完成并保存，停止请求未改写结果。' : '回答已结束，请查看保存状态。';
       state.chatDraft = '';
       state.chatRequestKey = null;
       state.chatRequestText = null;
       state.chatImages = [];
       state.chatUploadedImages = [];
     } catch (error) {
+      if (disposed) return;
       state.chatError = error instanceof ApiError ? error : new ApiError('http');
-      try { state.chatMessages = await api.conversationMessages(state.selectedChatId); }
-      catch { /* Keep the original network error visible; an uncertain write may have committed. */ }
+      try {
+        if (operation) await recoverTextRequest(operation, state.chatRequestKey!);
+        else await readLatestMessages(chatId);
+      } catch {
+        if (operation?.stopped) textNotice = '停止状态核对失败，请刷新工作台后核对；不要重复提交问题。';
+      }
       const savedInput = state.chatMessages.find((item) =>
         item.client_message_id === state.chatRequestKey);
       if (savedInput) {
-        if (savedInput.status === 'running')
-          void followSavedAnswer(state.selectedChatId, savedInput.message_id, chatGeneration);
+        if (savedInput.status === 'running' && !operation)
+          void followSavedAnswer(chatId, savedInput.message_id, chatGeneration);
         state.chatDraft = '';
         state.chatRequestKey = null;
         state.chatRequestText = null;
@@ -431,6 +600,7 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
         state.chatUploadedImages = [];
       }
     } finally {
+      if (operation && textRequest === operation) textRequest = null;
       state.chatStreamText = '';
       state.chatStreamSaved = false;
       state.chatStreamAttemptId = null;
@@ -472,24 +642,42 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
     if (!identifier) return;
     state.chatPending = true; state.chatError = null; render();
     try {
-      await api.confirmImage(chatId, imageId, identifier);
-      state.chatMessages = await api.conversationMessages(chatId);
+      const confirmed = await api.confirmImage(chatId, imageId, identifier);
+      ++messageMutation;
+      state.chatMessages = state.chatMessages.map((item) => item.message_id === messageId
+        ? { ...item, images: item.images?.map((image) => image.id === imageId ? confirmed : image) } : item);
+      await readLatestMessages(chatId);
     } catch (error) {
       state.chatError = error instanceof ApiError ? error : new ApiError('http');
     } finally { state.chatPending = false; render(); }
     if (!state.chatError) await retryChat(messageId);
   }
 
-  async function followSavedAnswer(chatId: string, messageId: string, expectedGeneration: number) {
+  async function followSavedAnswer(chatId: string, messageId: string, expectedGeneration: number, before?: string, expectedAttemptId?: string) {
     for (let attempt = 0; attempt < 30; attempt++) {
       await new Promise<void>((resolve) => { window.setTimeout(resolve, 1000); });
-      if (expectedGeneration !== chatGeneration || state.selectedChatId !== chatId) return;
+      if (disposed || expectedGeneration !== chatGeneration || state.selectedChatId !== chatId) return;
       try {
-        const messages = await api.conversationMessages(chatId);
-        if (expectedGeneration !== chatGeneration || state.selectedChatId !== chatId) return;
-        state.chatMessages = messages;
-        if (messages.some((item) => item.message_id === messageId && item.status !== 'running')) {
+        const history = historyGeneration;
+        const mutation = messageMutation;
+        const page = await api.conversationMessagePage(chatId, before);
+        if (disposed || expectedGeneration !== chatGeneration || history !== historyGeneration || state.selectedChatId !== chatId) return;
+        if (mutation !== messageMutation) continue;
+        if (before) {
+          if (await refreshChangedHistory(page, chatId)) return;
+          if (disposed || expectedGeneration !== chatGeneration || history !== historyGeneration ||
+              mutation !== messageMutation || state.selectedChatId !== chatId) return;
+          const known = new Set(state.chatMessages.map((item) => item.message_id));
+          mergeMessages(page.items.filter((item) => known.has(item.message_id)));
+        } else acceptLatestPage(page);
+        const target = page.items.find((item) => item.message_id === messageId);
+        if (target && expectedAttemptId && target.attempt_id !== expectedAttemptId) return;
+        const settled = target?.status !== 'running' ? target : undefined;
+        if (settled) {
           state.chatError = null;
+          if (textNotice) textNotice = settled.status === 'answered' ? '回答已完成并保存。'
+            : ['interrupted', 'partial'].includes(settled.status) ? '回答已停止，已核对保存状态。'
+              : '回答已结束，请查看保存状态。';
           render();
           return;
         }
@@ -511,23 +699,38 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
     state.chatPending = true;
     state.chatError = null;
     render();
+    let operation: TextRequest | null = null;
     try {
       if (state.agentEnabled) {
         await api.retryAgent(chatId, messageId, key);
-        state.chatMessages = await api.conversationMessages(chatId);
+        await readLatestMessages(chatId);
         retryKeys.delete(messageId);
         return;
       }
-      const message = await api.retryAnswer(chatId, messageId, key);
-      state.chatMessages = state.chatMessages.map((item) => item.message_id === messageId ? message : item);
+      operation = beginTextRequest(chatId);
+      operation.messageId = messageId;
+      operation.attemptId = key;
+      const message = await api.retryAnswerStream(chatId, messageId, key, textProgress(operation), operation.controller.signal);
+      if (disposed || operation.generation !== chatGeneration) return;
+      mergeMessages([message], true);
+      if (operation.stopped) textNotice = message.status === 'answered'
+        ? '回答已完成并保存，停止请求未改写结果。' : '回答已结束，请查看保存状态。';
       retryKeys.delete(messageId);
     } catch (error) {
+      if (disposed) return;
       state.chatError = error instanceof ApiError ? error : new ApiError('http');
       try {
-        state.chatMessages = await api.conversationMessages(chatId);
+        if (operation) await recoverTextRequest(operation, key, messageId);
+        else await readLatestMessages(chatId);
         if (state.chatMessages.some((item) => item.attempt_id === key)) retryKeys.delete(messageId);
-      } catch { /* Retain the key until the committed state is known. */ }
-    } finally { state.chatPending = false; render(); }
+      } catch {
+        if (operation?.stopped) textNotice = '停止状态核对失败，请刷新工作台后核对。';
+      }
+    } finally {
+      if (operation && textRequest === operation) textRequest = null;
+      state.chatStreamText = ''; state.chatStreamAttemptId = null; state.chatStreamSaved = false;
+      state.chatPending = false; render();
+    }
   }
 
   function acceptKnowledgeBase(base: KnowledgeBase) {
@@ -669,6 +872,8 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
     if (options.render) {
       const base = state.bases?.find((item) => item.id === state.selectedKbId);
       options.render({ state: { ...state, createDraft: { ...state.createDraft }, renameDraft: state.renameDraft ? { ...state.renameDraft } : null },
+        messageHistory: { hasMore: historyHasMore, loading: historyLoading, error: historyError, totalLoaded: state.chatMessages.length, notice: historyNotice },
+        textAnswer: { canStop: !!textRequest, stopping: !!textRequest?.stopped, notice: textNotice },
         agentCapabilityError, hasMoreChats, archivedChats: [...archivedChats], hasMoreArchivedChats, archivedChatLoading, archivedChatError,
         documents: documentsPanel,
         voice: { context: { chatId: state.selectedChatId,
@@ -684,7 +889,7 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
             originalUrl: api.originalUrl,
             back: async () => { await voice.hangup(); navigate('workbench'); }, status: async () => { await voice.hangup(); navigate('status'); } } },
         actions: { navigate, refresh, loadHealth, selectChat, createChat, renameChat, deleteChat, loadMoreChats,
-          loadArchivedChats, setChatArchived, sendChat, retryChat,
+          loadArchivedChats, setChatArchived, sendChat, retryChat, loadMoreMessages, stopChat,
           selectChatImages, confirmChatImage, refreshAgentMessages,
           selectKb: (id) => { if (disposed || state.chatPending || documentsPanel.snapshot.busy ||
             (id && !state.bases?.some((item) => item.id === id))) return;
@@ -777,9 +982,9 @@ export async function mountApp(root: HTMLElement, api: ApiClient, roomFactory: R
   async function refreshAgentMessages(chatId: string) {
     const current = chatGeneration;
     const reading = ++agentMessageRead;
-    const messages = await api.conversationMessages(chatId);
+    await readLatestMessages(chatId, () => reading === agentMessageRead);
     if (!disposed && reading === agentMessageRead && current === chatGeneration && state.selectedChatId === chatId) {
-      state.chatMessages = messages; render();
+      render();
     }
   }
   const initialRefresh = refresh();

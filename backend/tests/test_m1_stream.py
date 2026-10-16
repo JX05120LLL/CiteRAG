@@ -5,12 +5,17 @@
 
 import asyncio
 import json
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
+from fastapi import FastAPI
 from test_ingestion_lifecycle import finished, new_kb, upload
 from test_m13_answer_api import Answer, Query, m13_environment, no_provider_access
 
+from app.api.answers import router as answer_router
+from app.api.dependencies import local_owner
 from app.models import AnswerAttempt, ConversationMessage, KnowledgeBase
 from app.rag.answer_adapter import AnswerError, checked_answer
 from app.rag.query_adapter import RetrievedChunk
@@ -20,6 +25,252 @@ from app.services.errors import ServiceError
 
 pytest_plugins = ["test_postgres_local"]
 pytestmark = pytest.mark.postgres
+
+
+async def disconnect_stream(app, path, body, *, after="accepted", generation_ready=None):
+    """Send a real ASGI disconnect after one event, without buffering the SSE response."""
+    requested = asyncio.Event()
+    sent, first_request = [], True
+    scope = {
+        "type": "http", "asgi": {"version": "3.0", "spec_version": "2.0"},
+        "method": "POST", "scheme": "http", "path": path,
+        "raw_path": path.encode(), "query_string": b"", "root_path": "",
+        "http_version": "1.1", "server": ("127.0.0.1", 5173),
+        "client": ("127.0.0.1", 12345),
+        "headers": [(b"host", b"127.0.0.1:5173"),
+                    (b"origin", b"http://127.0.0.1:5173"),
+                    (b"content-type", b"application/json")],
+    }
+
+    async def receive():
+        nonlocal first_request
+        if first_request:
+            first_request = False
+            return {"type": "http.request", "body": json.dumps(body).encode(),
+                    "more_body": False}
+        await requested.wait()
+        if generation_ready is not None:
+            await generation_ready.wait()
+        return {"type": "http.disconnect"}
+
+    async def send(event):
+        sent.append(event)
+        if event["type"] == "http.response.body" and (
+            f"event: {after}\n".encode() in event.get("body", b"")
+        ):
+            requested.set()
+
+    await asyncio.wait_for(app(scope, receive, send), 5)
+    status = next(event["status"] for event in sent if event["type"] == "http.response.start")
+    stream = b"".join(event.get("body", b"") for event in sent).decode()
+    return status, events(SimpleNamespace(text=stream)) if status == 200 and stream else []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["ask", "retry"])
+@pytest.mark.parametrize("with_preview", [False, True])
+@pytest.mark.parametrize("late_result", [False, True])
+async def test_stream_disconnect_cancels_generation_and_closes_session(
+    monkeypatch, operation, with_preview, late_result,
+):
+    owner, chat, message, attempt = uuid4(), uuid4(), uuid4(), uuid4()
+    running = {"message_id": str(message), "attempt_id": str(attempt),
+               "status": "running", "text": "", "saved": False}
+    generation_ready, cancelled, closed = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    cleanup_order = []
+
+    @asynccontextmanager
+    async def sessions():
+        try:
+            yield object()
+        finally:
+            cleanup_order.append("session_closed")
+            closed.set()
+
+    async def generate(*args, on_accepted, on_preview, **kwargs):
+        assert args[:2] == (owner, chat)
+        if operation == "retry":
+            assert args[2:4] == (message, attempt)
+        await on_accepted(running)
+        if with_preview:
+            await on_preview(attempt, "Synthetic verified prefix")
+        generation_ready.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            cleanup_order.append("generation_cleanup_finished")
+            if late_result:
+                # Some providers finish while cancellation is propagating. Their
+                # late result must never become a saved event on the closed stream.
+                return {**running, "status": "answered", "text": "Late answer", "saved": True}
+            raise
+
+    service = SimpleNamespace(ask=generate, retry=generate)
+    monkeypatch.setattr("app.api.answers.AnswerService", lambda *_args, **_kwargs: service)
+    app = FastAPI()
+    app.include_router(answer_router)
+    app.dependency_overrides[local_owner] = lambda: owner
+    app.state.database = SimpleNamespace(sessions=sessions)
+    app.state.answer_enabled = True
+    app.state.voice_runtime = SimpleNamespace(registry=SimpleNamespace(require_text=lambda _: None))
+    app.state.rag_runtime = object()
+    app.state.query_adapter = object()
+    app.state.answer_adapter = object()
+    app.state.image_store = app.state.image_observer = None
+    path = (f"/api/conversations/{chat}/messages/stream" if operation == "ask" else
+            f"/api/conversations/{chat}/messages/{message}/retry/stream")
+    body = ({"client_message_id": str(uuid4()), "text": "Synthetic question"}
+            if operation == "ask" else {"attempt_id": str(attempt)})
+    status, received = await disconnect_stream(
+        app, path, body, after="delta" if with_preview else "accepted",
+        generation_ready=generation_ready,
+    )
+    assert status == 200
+    assert cancelled.is_set(), "Disconnect left the generation coroutine running"
+    assert closed.is_set()
+    assert cleanup_order == ["generation_cleanup_finished", "session_closed"]
+    assert [name for name, _ in received] == (["accepted", "delta"] if with_preview
+                                            else ["accepted"])
+    assert not any(name == "saved" for name, _ in received)
+
+
+async def seed_retry(m13_environment, previous_status):
+    api, db, app, _ = m13_environment
+    kb = await new_kb(api)
+    job = await finished(api, await upload(api, kb, data=b"The safe limit is 42 C.\n"))
+    chat = (await api.post("/api/conversations", json={"kb_id": kb})).json()
+    app.state.answer_enabled = True
+    app.state.query_adapter = Query([RetrievedChunk(
+        "chunk_a", "source_" + job["document_ids"][0].replace("-", ""),
+        "The safe limit is 42 C.",
+    )])
+    async with db.sessions() as session:
+        base = await session.get(KnowledgeBase, UUID(kb))
+        message = ConversationMessage(
+            id=uuid4(), conversation_id=UUID(chat["id"]), client_message_id=uuid4(),
+            content="What is the limit?", mode="semantic",
+        )
+        session.add(message)
+        await session.flush()
+        previous = AnswerAttempt(
+            id=uuid4(), conversation_id=UUID(chat["id"]), message_id=message.id,
+            status=previous_status, text="The safe" if previous_status == "partial" else None,
+            citations=[], kb_revision=base.revision, workspace=base.active_workspace,
+        )
+        session.add(previous)
+        await session.commit()
+    return chat, message, previous
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("previous_status", ["failed", "interrupted", "partial"])
+async def test_retry_stream_accepts_saved_attempt_then_returns_answer_and_replays(
+    m13_environment, previous_status,
+):
+    api, db, app, _ = m13_environment
+    chat, message, previous = await seed_retry(m13_environment, previous_status)
+    attempt_id = uuid4()
+
+    class DurableAnswer(Answer):
+        async def answer(self, question, evidence):
+            async with db.sessions() as session:
+                running = await session.get(AnswerAttempt, attempt_id)
+                assert running is not None and running.status == "running"
+                assert running.message_id == message.id
+            return await super().answer(question, evidence)
+
+    app.state.answer_adapter = DurableAnswer()
+    path = f"/api/conversations/{chat['id']}/messages/{message.id}/retry/stream"
+    body = {"attempt_id": str(attempt_id)}
+    response = await api.post(path, json=body)
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    received = events(response)
+    assert received[0][0] == "accepted" and not received[0][1]["saved"]
+    assert received[0][1]["message_id"] == str(message.id)
+    assert received[0][1]["attempt_id"] == str(attempt_id)
+    assert received[0][1]["client_message_id"] == str(message.client_message_id)
+    assert received[-1][0] == "saved" and received[-1][1]["status"] == "answered"
+    assert received[-1][1]["attempt_id"] == str(attempt_id)
+    assert received[-1][1]["citations"][0]["locator"]["line_start"] == 1
+    async with db.sessions() as session:
+        original = await session.get(AnswerAttempt, previous.id)
+        final = await session.get(AnswerAttempt, attempt_id)
+        assert original.status == previous_status
+        assert final.status == "answered" and final.message_id == message.id
+    replay = events(await api.post(path, json=body))
+    assert replay[-1] == received[-1]
+    assert not any(name == "accepted" for name, _ in replay)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_preview", [False, True])
+async def test_retry_stream_disconnect_persists_interruption_and_allows_retry(
+    m13_environment, with_preview,
+):
+    api, db, app, _ = m13_environment
+    chat, message, _ = await seed_retry(m13_environment, "failed")
+    attempt_id = uuid4()
+    generation_ready, cancelled = asyncio.Event(), asyncio.Event()
+
+    class HangingAnswer(Answer):
+        async def stream_with_context(self, question, evidence, context):
+            try:
+                if with_preview:
+                    yield '{"status":"answered","text":"The safe limit'
+                generation_ready.set()
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+
+    app.state.answer_adapter = HangingAnswer()
+    path = f"/api/conversations/{chat['id']}/messages/{message.id}/retry/stream"
+    status, received = await disconnect_stream(
+        app, path, {"attempt_id": str(attempt_id)},
+        after="delta" if with_preview else "accepted", generation_ready=generation_ready,
+    )
+    assert status == 200 and cancelled.is_set()
+    assert [name for name, _ in received] == (["accepted", "delta"] if with_preview
+                                            else ["accepted"])
+    async with db.sessions() as session:
+        attempt = await session.get(AnswerAttempt, attempt_id)
+        assert attempt.status == ("partial" if with_preview else "interrupted")
+        assert attempt.text == ("The safe limit" if with_preview else None)
+        assert attempt.citations == [] and attempt.error_code == "request_interrupted"
+    app.state.answer_adapter = Answer()
+    new_id = uuid4()
+    resumed = events(await api.post(path, json={"attempt_id": str(new_id)}))
+    assert resumed[0][0] == "accepted" and resumed[0][1]["attempt_id"] == str(new_id)
+    assert resumed[-1][0] == "saved" and resumed[-1][1]["status"] == "answered"
+
+
+@pytest.mark.asyncio
+async def test_retry_stream_preserves_partial_preview_when_provider_fails(m13_environment):
+    api, db, app, _ = m13_environment
+    chat, message, _ = await seed_retry(m13_environment, "partial")
+    attempt_id = uuid4()
+
+    class FailingStream(Answer):
+        async def stream_with_context(self, question, evidence, context):
+            yield '{"status":"answered","text":"The safe limit'
+            raise RuntimeError("synthetic stream failure")
+
+    app.state.answer_adapter = FailingStream()
+    response = await api.post(
+        f"/api/conversations/{chat['id']}/messages/{message.id}/retry/stream",
+        json={"attempt_id": str(attempt_id)},
+    )
+    assert response.status_code == 200
+    received = events(response)
+    assert [name for name, _ in received] == ["accepted", "delta", "saved"]
+    assert received[1][1]["saved"] is False
+    assert received[-1][1]["status"] == "partial"
+    assert received[-1][1]["text"] == "The safe limit" and received[-1][1]["citations"] == []
+    async with db.sessions() as session:
+        stored = await session.get(AnswerAttempt, attempt_id)
+        assert stored.status == "partial" and stored.text == "The safe limit"
 
 
 @pytest.mark.asyncio

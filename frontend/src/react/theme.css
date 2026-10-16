@@ -77,6 +77,8 @@
 .citerag-app .formal-conversation { min-width: 0; display: flex; flex-direction: column; padding: 0; }
 .citerag-app .shared-memory-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; padding-bottom: 18px; border-bottom: 1px solid var(--line); margin-bottom: 0; color: var(--muted); font-size: 13px; } .citerag-app .shared-memory-toolbar > span { overflow-wrap: anywhere; min-width: 0; }
 .citerag-app .message-scroll { min-height: 280px; padding: 28px 0 12px; }
+.citerag-app .message-history { margin-bottom: 20px; }
+.citerag-app .message-history-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
 .citerag-app .message-pair { display: flex; flex-direction: column; gap: 20px; margin-bottom: 34px; }
 .citerag-app .question-line { align-self: flex-end; max-width: min(84%,680px); min-width: 0; } .citerag-app .question-bubble { max-width: 100%; overflow-wrap: anywhere; }
 .citerag-app .question-bubble .ant-bubble-content { background: #e8efdf; border-radius: 12px; color: #1c3028; font-size: 15px; line-height: 1.8; }

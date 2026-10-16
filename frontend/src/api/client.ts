@@ -185,6 +185,13 @@ export interface ChatImage {
   expires_at: string;
 }
 
+export interface ChatMessagePage {
+  items: ChatMessage[];
+  has_more: boolean;
+  next_before_message_id: string | null;
+  history_version?: string;
+}
+
 export type AnswerProgress = { type: 'accepted'; message: ChatMessage } |
   { type: 'delta'; text: string; saved: boolean };
 
@@ -321,7 +328,7 @@ export interface RagInfo {
   last_verified_at?: string;
 }
 
-export type ErrorKind = 'forbidden' | 'unavailable' | 'http' | 'network' | 'invalid-response' | 'validation' | 'conflict' | 'not-found' | 'local-storage';
+export type ErrorKind = 'forbidden' | 'unavailable' | 'http' | 'network' | 'invalid-response' | 'validation' | 'conflict' | 'not-found' | 'local-storage' | 'cancelled';
 
 export const nameValidationMessage = '名称须为 1–120 个字符，不能仅含空白或包含控制字符。';
 
@@ -330,6 +337,7 @@ const errorMessages: Record<ErrorKind, string> = {
   unavailable: '服务暂不可用，请检查服务状态后重试。',
   http: '请求未完成，请稍后重试。',
   network: '无法连接服务，请检查服务是否启动及网络连接。',
+  cancelled: '已请求停止回答，正在核对保存状态。',
   'invalid-response': '服务返回的数据不完整，请稍后重试。',
   validation: nameValidationMessage,
   conflict: '操作与当前资料状态冲突，请刷新列表后重试。',
@@ -529,19 +537,27 @@ export function createApi(fetcher: typeof fetch = globalThis.fetch) {
     } finally { clearTimeout(timeout); }
   }
 
-  async function askMessageStream(id: string, text: string, key: string,
-      mode: 'semantic' | 'exact' | 'auto' = 'semantic', exact?: ExactFilter,
-      onProgress?: (progress: AnswerProgress) => void, imageIds: string[] = []): Promise<ChatMessage> {
+  async function answerStream(path: string, body: object, matches: (message: ChatMessage) => boolean,
+      onProgress?: (progress: AnswerProgress) => void, signal?: AbortSignal): Promise<ChatMessage> {
+    if (signal?.aborted) throw new ApiError('cancelled');
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 120000);
     let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+    const abort = () => {
+      controller.abort();
+      void reader?.cancel().catch(() => {});
+    };
+    signal?.addEventListener('abort', abort, { once: true });
     try {
-      const response = await fetcher(`/api/conversations/${encodeURIComponent(id)}/messages/stream`, {
+      const response = await fetcher(path, {
         method: 'POST', credentials: 'omit',
         headers: { Accept: 'text/event-stream', 'Content-Type': 'application/json' },
-        body: JSON.stringify({ client_message_id: key, text, mode, image_ids: imageIds,
-          ...(mode === 'exact' ? { exact } : {}) }), signal: controller.signal,
+        body: JSON.stringify(body), signal: controller.signal,
       });
+      if (signal?.aborted) {
+        await response.body?.cancel().catch(() => {});
+        throw new ApiError('cancelled');
+      }
       if (!response.ok) {
         let value: unknown = null;
         try { value = await response.json(); } catch { /* Failed responses may have no JSON body. */ }
@@ -562,11 +578,13 @@ export function createApi(fetcher: typeof fetch = globalThis.fetch) {
       let result: ChatMessage | null = null;
       while (true) {
         const chunk = await reader.read();
+        if (signal?.aborted) throw new ApiError('cancelled');
         buffer += chunk.done ? decoder.decode() : decoder.decode(chunk.value, { stream: true });
         buffer = buffer.replaceAll('\r\n', '\n');
         if (buffer.length > 65536) throw new ApiError('invalid-response');
         let boundary: number;
         while ((boundary = buffer.indexOf('\n\n')) >= 0) {
+          if (signal?.aborted) throw new ApiError('cancelled');
           const frame = buffer.slice(0, boundary);
           buffer = buffer.slice(boundary + 2);
           if (frame.startsWith(':')) continue;
@@ -579,7 +597,7 @@ export function createApi(fetcher: typeof fetch = globalThis.fetch) {
           if (event === 'accepted') {
             const message = chatMessage(data);
             if (accepted || message.status !== 'running' || message.saved ||
-                message.client_message_id !== key) throw new ApiError('invalid-response');
+                !matches(message)) throw new ApiError('invalid-response');
             accepted = message;
             onProgress?.({ type: 'accepted', message });
           } else if (event === 'delta') {
@@ -593,7 +611,7 @@ export function createApi(fetcher: typeof fetch = globalThis.fetch) {
             onProgress?.({ type: 'delta', text: data.text, saved: data.saved });
           } else if (event === 'saved') {
             const final = chatMessage(data);
-            if (!final.saved || final.status === 'running' || final.client_message_id !== key ||
+            if (!final.saved || final.status === 'running' || !matches(final) ||
                 (accepted && final.attempt_id !== accepted.attempt_id) ||
                 (!accepted && sequence > 0) ||
                 (sequence > 0 && !provisional && streamed !== final.text) ||
@@ -613,15 +631,25 @@ export function createApi(fetcher: typeof fetch = globalThis.fetch) {
         if (chunk.done) throw new ApiError('network');
       }
     } catch (error) {
+      if (signal?.aborted) throw new ApiError('cancelled');
       if (error instanceof ApiError) throw error;
       throw new ApiError('network');
     } finally {
+      signal?.removeEventListener('abort', abort);
       clearTimeout(timeout);
       if (reader) {
         await reader.cancel().catch(() => { /* Cleanup must preserve the saved result or original error. */ });
         reader.releaseLock();
       }
     }
+  }
+
+  function askMessageStream(id: string, text: string, key: string,
+      mode: 'semantic' | 'exact' | 'auto' = 'semantic', exact?: ExactFilter,
+      onProgress?: (progress: AnswerProgress) => void, imageIds: string[] = [], signal?: AbortSignal): Promise<ChatMessage> {
+    return answerStream(`/api/conversations/${encodeURIComponent(id)}/messages/stream`,
+      { client_message_id: key, text, mode, image_ids: imageIds, ...(mode === 'exact' ? { exact } : {}) },
+      (message) => message.client_message_id === key, onProgress, signal);
   }
 
   return {
@@ -773,6 +801,25 @@ export function createApi(fetcher: typeof fetch = globalThis.fetch) {
     conversationMessages: async (id: string): Promise<ChatMessage[]> =>
       collection<Record<string, unknown>>(await request(`/api/conversations/${encodeURIComponent(id)}/messages`),
         () => true).map(chatMessage),
+    conversationMessagePage: async (id: string, beforeMessageId?: string): Promise<ChatMessagePage> => {
+      const value = await request(`/api/conversations/${encodeURIComponent(id)}/messages${
+        beforeMessageId ? `?before_message_id=${encodeURIComponent(beforeMessageId)}` : ''}`);
+      const items = collection<Record<string, unknown>>(value, () => true).map(chatMessage);
+      if (!isRecord(value)) throw new ApiError('invalid-response');
+      if (value.history_version !== undefined &&
+          (typeof value.history_version !== 'string' || !/^[0-9a-f]{64}$/.test(value.history_version)))
+        throw new ApiError('invalid-response');
+      const version = value.history_version === undefined ? {} : { history_version: value.history_version as string };
+      // Older servers expose only items; do not invent a cursor they cannot follow.
+      if (value.has_more === undefined && value.next_before_message_id === undefined)
+        return { items, has_more: false, next_before_message_id: null, ...version };
+      if (typeof value.has_more !== 'boolean' || items.length > 50 ||
+          (value.has_more ? !items.length || value.next_before_message_id !== items[0].message_id
+            : value.next_before_message_id !== null) ||
+          new Set(items.map((item) => item.message_id)).size !== items.length)
+        throw new ApiError('invalid-response');
+      return { items, has_more: value.has_more, next_before_message_id: value.next_before_message_id as string | null, ...version };
+    },
     imageUrl: (chatId: string, imageId: string): string =>
       `/api/conversations/${encodeURIComponent(chatId)}/attachments/${encodeURIComponent(imageId)}`,
     uploadImage: async (chatId: string, file: File): Promise<ChatImage> => {
@@ -796,6 +843,11 @@ export function createApi(fetcher: typeof fetch = globalThis.fetch) {
       chatMessage(await request(`/api/conversations/${encodeURIComponent(id)}/messages`, 'POST',
         { client_message_id: key, text, mode, ...(mode === 'exact' ? { exact } : {}) }, 60000)),
     askMessageStream,
+    retryAnswerStream: (chatId: string, messageId: string, attemptId: string,
+      onProgress?: (progress: AnswerProgress) => void, signal?: AbortSignal): Promise<ChatMessage> =>
+      answerStream(`/api/conversations/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}/retry/stream`,
+        { attempt_id: attemptId }, (message) => message.message_id === messageId && message.attempt_id === attemptId,
+        onProgress, signal),
     retryAnswer: async (chatId: string, messageId: string, attemptId: string): Promise<ChatMessage> =>
       chatMessage(await request(`/api/conversations/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}/retry`,
         'POST', { attempt_id: attemptId }, 60000)),

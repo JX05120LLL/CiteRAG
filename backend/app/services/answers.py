@@ -1,6 +1,7 @@
 """Durable single-conversation answers with source and revision gates."""
 
 import asyncio
+import hashlib
 import json
 import re
 from collections.abc import Awaitable, Callable
@@ -9,7 +10,7 @@ from typing import Any, Protocol
 from unicodedata import category
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.errors import AgentError, AgentPaused
@@ -217,25 +218,64 @@ class AnswerService:
                                         kb, await self._expired_image_at(conversation_id))
 
     async def list_messages(self, owner: UUID, conversation_id: UUID) -> list[dict]:
+        return (await self.list_messages_page(owner, conversation_id))["items"]
+
+    async def list_messages_page(
+        self, owner: UUID, conversation_id: UUID, *, limit: int = 50,
+        before_message_id: UUID | None = None,
+    ) -> dict:
         _, kb = await self._owned_conversation(owner, conversation_id)
+        if not 1 <= limit <= 50:
+            raise ServiceError(422, "invalid_message_limit", "每页消息数量必须在 1 到 50 之间")
+        before = None
+        if before_message_id is not None:
+            before = await self.session.scalar(select(ConversationMessage).where(
+                ConversationMessage.id == before_message_id,
+                ConversationMessage.conversation_id == conversation_id,
+            ))
+            if before is None:
+                raise ServiceError(404, "message_not_found", "消息不存在或不可访问")
         expired_image_at = await self._expired_image_at(conversation_id)
+        visibility = {
+            "kb": None if kb is None else {
+                "status": kb.status, "revision": kb.revision,
+                "hide_history_before_revision": kb.hide_history_before_revision,
+                "active_workspace": kb.active_workspace,
+            },
+            "expired_image_at": expired_image_at.isoformat() if expired_image_at else None,
+        }
+        history_version = hashlib.sha256(json.dumps(
+            visibility, sort_keys=True, separators=(",", ":"),
+        ).encode("utf-8")).hexdigest()
         latest_attempt = (select(AnswerAttempt.id).where(
             AnswerAttempt.message_id == ConversationMessage.id,
         ).order_by(AnswerAttempt.created_at.desc(), AnswerAttempt.id.desc())
             .limit(1).correlate(ConversationMessage).scalar_subquery())
-        rows = await self.session.execute(
+        query = (
             select(ConversationMessage, AnswerAttempt)
             .join(AnswerAttempt, AnswerAttempt.id == latest_attempt)
             .where(ConversationMessage.conversation_id == conversation_id)
             .order_by(ConversationMessage.created_at.desc(), ConversationMessage.id.desc())
-            .limit(50)
+            .limit(limit + 1)
         )
-        messages: dict[UUID, dict] = {}
-        for message, attempt in rows:
+        if before is not None:
+            query = query.where(
+                tuple_(ConversationMessage.created_at, ConversationMessage.id)
+                < tuple_(before.created_at, before.id)
+            )
+        rows = list(await self.session.execute(query))
+        has_more = len(rows) > limit
+        messages = []
+        for message, attempt in rows[:limit]:
             view = await self._view(message, attempt)
             self._history_visibility(view, message, attempt, kb, expired_image_at)
-            messages.setdefault(message.id, view)
-        return list(reversed(list(messages.values())))
+            messages.append(view)
+        return {
+            "items": list(reversed(messages)),
+            "has_more": has_more,
+            "next_before_message_id": messages[-1]["message_id"] if has_more else None,
+            "history_version": history_version,
+        }
 
     async def ask(
         self, owner: UUID, conversation_id: UUID, request_id: UUID, question: str,
@@ -316,6 +356,7 @@ class AnswerService:
     async def retry(self, owner: UUID, conversation_id: UUID, message_id: UUID,
                     retry_id: UUID, retriever: Retriever, answerer: Answerer, *,
                     on_accepted: Callable[[dict], Awaitable[None]] | None = None,
+                    on_preview: Callable[[UUID, str], Awaitable[None]] | None = None,
                     defer_finish: bool = False) -> dict:
         conversation, kb = await self._owned_conversation(owner, conversation_id, lock=True)
         if conversation.archived_at is not None:
@@ -390,7 +431,7 @@ class AnswerService:
             return await self._view(message, attempt)
         return await self._finish_attempt(owner, conversation_id, kb, message, attempt,
                                           retriever, answerer, message.mode,
-                                          message.query_filter)
+                                          message.query_filter, on_preview)
 
     async def _notify_accepted(self, message, attempt, callback) -> None:
         try:

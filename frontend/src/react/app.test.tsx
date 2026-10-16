@@ -18,6 +18,8 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); sessionStorage.clear(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 const json = (value: unknown) => new Response(JSON.stringify(value), { headers: { 'Content-Type': 'application/json' } });
+const stream = (events: [string, unknown][]) => new Response(events.map(([name, data]) =>
+  `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`).join(''), { headers: { 'Content-Type': 'text/event-stream' } });
 
 it('disables chat creation when the business database is not configured and keeps setup errors visible', async () => {
   sessionStorage.clear();
@@ -173,7 +175,17 @@ function fixture(messages = sampleMessages[sampleChats[0].id], chats = sampleCha
     if (path.includes('/documents?')) return json({ items: sampleDocuments.slice(path.includes('offset=10') ? 10 : 0, path.includes('offset=10') ? 20 : 10), total: 17, counts: { ready: 16, failed: 1, deleted: 0 } });
     if (path.includes('/jobs?')) return json({ items: sampleJobs.slice(0, 10), total: 12, active_items: [], failed_count: 2 });
     if (path.endsWith('/messages')) return json({ items: messages });
-    if (path.endsWith('/retry')) return json({ ...messages[0], attempt_id: 'retried', status: 'answered', text: '合成重试结果', citations: [], saved: true });
+    if (path.endsWith('/retry/stream') && method === 'POST') {
+      const original = messages.find((item) => path.endsWith(`/messages/${encodeURIComponent(item.message_id)}/retry/stream`));
+      if (!original) return new Response(null, { status: 404 });
+      const { attempt_id } = JSON.parse(String(init?.body));
+      const answer = { ...original, attempt_id, status: 'answered', text: '合成重试结果', citations: [], saved: true, error_code: null };
+      return stream([
+        ['accepted', { ...answer, status: 'running', text: '', saved: false }],
+        ['delta', { attempt_id, seq: 1, text: answer.text, saved: true }],
+        ['saved', answer],
+      ]);
+    }
     if (path.includes('/conversations/') && method === 'PATCH') return json({ ...sampleChats[0], title: '改后的合成名称' });
     if (path.endsWith(`/conversations/${sampleChats[0].id}`)) return json(sampleChats[0]);
     return json({ items: chats });
@@ -528,12 +540,15 @@ it('restores fixed chat, opens a verified source and restores focus without writ
   expect(calls.every((call) => call.method === 'GET')).toBe(true);
 }, 20000);
 
-it.each(['partial', 'failed', 'interrupted'] as const)('connects the %s retry control to the existing retry API', async (status) => {
+it.each(['partial', 'failed', 'interrupted'] as const)('connects the %s retry control to the retry stream API', async (status) => {
   const { api, calls } = fixture([{ ...sampleMessages[sampleChats[0].id][0], status, citations: [], error_code: 'request_interrupted' }]);
   render(<CiteRagApp api={api} />);
-  fireEvent.click(await screen.findByRole('button', { name: '重试回答' }));
+  fireEvent.click(await screen.findByRole('button', { name: '重试回答' }, { timeout: 8000 }));
   await screen.findByText('合成重试结果');
-  expect(calls.filter((call) => call.method !== 'GET').map((call) => call.path)).toEqual([`/api/conversations/${sampleChats[0].id}/messages/design-message-1/retry`]);
+  const writes = calls.filter((call) => call.method !== 'GET');
+  expect(writes.map((call) => call.path)).toEqual([`/api/conversations/${sampleChats[0].id}/messages/design-message-1/retry/stream`]);
+  expect(JSON.parse(String(writes[0].body))).toEqual({ attempt_id: expect.any(String) });
+  expect(JSON.parse(String(writes[0].body)).attempt_id).not.toBe('design-attempt-1');
 }, 20000);
 
 it('does not publish uncommitted text or sources', async () => {
@@ -667,7 +682,10 @@ it.each(['failed', 'interrupted', 'partial'] as const)('keeps an unrouted ordina
   expect(retry.disabled).toBe(false);
   fireEvent.click(retry);
   expect(await screen.findByText('合成重试结果')).toBeTruthy();
-  expect(calls.some((call) => call.path.endsWith(`/messages/${message.message_id}/retry`) && call.method === 'POST')).toBe(true);
+  const retryCalls = calls.filter((call) => call.path.endsWith(`/messages/${message.message_id}/retry/stream`) && call.method === 'POST');
+  expect(retryCalls).toHaveLength(1);
+  expect(JSON.parse(String(retryCalls[0].body))).toEqual({ attempt_id: expect.any(String) });
+  expect(JSON.parse(String(retryCalls[0].body)).attempt_id).not.toBe(message.attempt_id);
 }, 20000);
 
 it.each(['hidden', 'stale'] as const)('keeps explicit %s invalidation for an unrouted ordinary answer', async (flag) => {

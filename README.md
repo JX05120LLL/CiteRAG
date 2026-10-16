@@ -55,7 +55,7 @@ CiteRAG 使用 [LightRAG](https://github.com/HKUDS/LightRAG) 为本地资料建�
 | 场景 | 当前代码能力 |
 | --- | --- |
 | 知识库与资料 | 创建和维护知识库，批量上传、查看任务、失败原因、删除、替换和受管重建。 |
-| 文字问答 | 自动区分普通回答与知识库回答；知识库回答选择精确或语义检索，保留来源、历史和重试。 |
+| 文字问答 | 自动区分普通回答与知识库回答；知识库回答选择精确或语义检索，保留来源、历史分页、停止回答和重试。 |
 | 会话与共享摘要 | 创建时固定普通聊天或单个知识库；同库共享摘要可手动保存、查看来源和删除，随来源删除或库修订失效。 |
 | 图片提问 | PNG/JPEG 私有附件先经视觉模型观察；不确定编号可要求确认，图片不会自动入库。 |
 | 实时语音 | LiveKit 音轨、火山 ASR、本地 Silero VAD、共用问答、MiniMax TTS 和浏览器播放；提供字幕、插话取消与文字降级。 |
@@ -91,6 +91,14 @@ git clone https://github.com/JX05120LLL/CiteRAG.git
 cd CiteRAG
 ```
 
+首次配置可先运行只读引导，无需先安装 Python 包或准备数据库：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\backend\start.ps1 -Profile knowledge -Guide
+```
+
+引导只打印安装、受控配置、诊断和启动命令，不读取凭证或修改文件。普通聊天可使用默认 `text` profile；前端引导加 `-Role frontend`。数据库创建或升级仍须单独准备与确认。
+
 首次显式安装依赖；日常启动复用已安装环境，避免自动同步移除可选依赖：
 
 ```powershell
@@ -117,6 +125,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\backend\start.ps1 -Rol
 ```
 
 打开 [工作台](http://127.0.0.1:5173/)。上述入口关闭语音、Agent、MCP、天气与备份后台任务；普通聊天使用默认 `text` profile，固定库聊天额外需要当前库真实就绪。退出前等待当前文字回答完成，在两个窗口分别按 `Ctrl+C`，Docker 保持运行。只有已授权时才显式启用入库/问答开关。
+
+已授权真实问答时，可给 API 命令追加 `-EnableAnswer`；需要资料入库时再加 `-EnableIngestion`。两项未显式开启时默认关闭，仍兼容启动终端已有的合法受控环境值。入口会显示本次开关状态，`-CheckOnly` 即使携带这些选项也不调用模型或恢复任务。
 
 需要聊天自动查天气时，须已安装 Agent 依赖、初始化检查点并配置天气。显式使用 `-EnableAgent -EnableWeather`（固定库聊天再加 `-Profile knowledge`）；先加 `-CheckOnly` 检查启动条件，缺项不会自动建表。仅 `-EnableWeather` 提供手动天气工具，不启用模型自动选择。完整命令见[启动说明](backend/STARTUP.md#可选自动工具与天气)。地点参数会发送给和风天气并可能计费；默认启动不会因此启用外部服务。
 

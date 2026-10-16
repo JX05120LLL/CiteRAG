@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import type { AgentRun, ApiClient } from '../api/client';
+import { ApiError, type AgentRun, type ApiClient, type ChatMessage } from '../api/client';
 import type { AppView } from '../app';
 import { Workbench } from './Workbench';
 
@@ -10,7 +10,7 @@ beforeEach(() => {
   vi.stubGlobal('matchMedia', (media: string) => ({ media, matches: false,
     addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {} }));
 });
-afterEach(() => cleanup());
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 function composerFixture(options: { knowledge?: boolean; pending?: boolean; loading?: boolean;
   selected?: boolean; maintaining?: boolean } = {}) {
@@ -204,4 +204,136 @@ it('keeps successful and failed terminal answers in the chat messages', () => {
     'Synthetic weather complete.', expect.stringMatching(/.+/),
   ]);
   expect(screen.getByText(/weather_auth_failed/)).toBeTruthy();
+});
+
+function historyFixture() {
+  const message: ChatMessage = { message_id: 'recent', attempt_id: 'recent-attempt', client_message_id: 'recent-client',
+    question: 'Recent question', mode: 'auto', route: 'general', status: 'answered',
+    text: 'Recent answer', citations: [], kb_revision: 0, error_code: null,
+    created_at: '2026-10-07T00:00:00Z', saved: true };
+  const loadMoreMessages = vi.fn(async () => {});
+  const stopChat = vi.fn();
+  const sendChat = vi.fn(async () => {});
+  const view = { state: { agentEnabled: false, selectedChatId: 'chat', selectedKbId: null,
+    bases: [], chats: [], chatMessages: [message], chatDraft: 'A new question', chatPending: false,
+    loading: false, chatImages: [], chatUploadedImages: [], chatError: null, selectedCitation: null },
+    messageHistory: { hasMore: true, loading: false, error: null, totalLoaded: 1 },
+    textAnswer: { canStop: false, stopping: false, notice: null },
+    actions: { loadMoreMessages, stopChat, sendChat, setDraft: vi.fn() } } as unknown as AppView;
+  const api = {} as ApiClient;
+  const result = render(<Workbench view={view} api={api} />);
+  return { view, message, loadMoreMessages, stopChat, sendChat,
+    update: () => result.rerender(<Workbench view={view} api={api} />) };
+}
+
+it('loads earlier messages once while leaving a new question available', async () => {
+  const { loadMoreMessages, sendChat } = historyFixture();
+  let finish!: () => void;
+  loadMoreMessages.mockImplementation(() => new Promise<void>((resolve) => { finish = resolve; }));
+  const load = screen.getByRole<HTMLButtonElement>('button', { name: '加载更早消息' });
+  fireEvent.click(load);
+  fireEvent.click(load);
+  expect(loadMoreMessages).toHaveBeenCalledTimes(1);
+  expect(load.disabled).toBe(true);
+  const send = screen.getByRole<HTMLButtonElement>('button', { name: /发送问题/ });
+  expect(send.disabled).toBe(false);
+  fireEvent.click(send);
+  expect(sendChat).toHaveBeenCalledTimes(1);
+  expect(screen.getByText('已加载 1 条消息')).toBeTruthy();
+  expect(screen.queryByText(/共 1 条消息/)).toBeNull();
+  await act(async () => finish());
+  expect(screen.getByRole<HTMLButtonElement>('button', { name: '加载更早消息' }).disabled).toBe(false);
+});
+
+it('shows a failed history read and allows retry without hiding loaded messages', async () => {
+  const { view, update, loadMoreMessages } = historyFixture();
+  view.messageHistory!.error = new ApiError('network');
+  update();
+  expect(screen.getAllByRole('alert').some((alert) => alert.textContent?.includes(view.messageHistory!.error!.message))).toBe(true);
+  expect(screen.getByText('Recent answer')).toBeTruthy();
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: '加载更早消息' })));
+  expect(loadMoreMessages).toHaveBeenCalledTimes(1);
+});
+
+it('hides the history action when no earlier page remains', () => {
+  const { view, update } = historyFixture();
+  view.messageHistory!.hasMore = false;
+  update();
+  expect(screen.queryByRole('button', { name: '加载更早消息' })).toBeNull();
+  expect(screen.getByText('已加载 1 条消息')).toBeTruthy();
+});
+
+it.each([0, 234])('keeps the current reading position when an earlier page is prepended despite %i pixels of unrelated layout change', async (layoutChange) => {
+  const { view, message, update, loadMoreMessages } = historyFixture();
+  const scroller = document.documentElement;
+  vi.spyOn(scroller, 'scrollHeight', 'get').mockImplementation(() =>
+    600 + document.querySelectorAll('.message-pair').length * 400 +
+      (document.querySelectorAll('.message-pair').length > 1 ? layoutChange : 0));
+  scroller.scrollTop = 180;
+  const originalMessage = screen.getByText('Recent question').closest('article')!;
+  vi.spyOn(originalMessage, 'getBoundingClientRect').mockImplementation(() => new DOMRect(0,
+    100 + (document.querySelectorAll('.message-pair').length - 1) * 400 - scroller.scrollTop, 300, 400));
+  const originalY = originalMessage.getBoundingClientRect().top;
+  let finish!: () => void;
+  loadMoreMessages.mockImplementation(() => new Promise<void>((resolve) => { finish = resolve; }));
+  fireEvent.click(screen.getByRole('button', { name: '加载更早消息' }));
+  view.state.chatMessages = [{ ...message, message_id: 'earlier', question: 'Earlier question' }, ...view.state.chatMessages];
+  view.messageHistory!.totalLoaded = 2;
+  update();
+  expect(scroller.scrollTop).toBe(580);
+  expect(originalMessage.getBoundingClientRect().top).toBe(originalY);
+  expect(screen.getByText('已加载 2 条消息')).toBeTruthy();
+  await act(async () => finish());
+  scroller.scrollTop = 0;
+});
+
+it('keeps a history reload notice visible alongside loaded messages', () => {
+  const { view, update } = historyFixture();
+  view.messageHistory!.notice = '聊天上下文已更新，已重新读取当前历史。';
+  update();
+  expect(screen.getByText('聊天上下文已更新，已重新读取当前历史。')).toBeTruthy();
+  expect(screen.getByText('Recent answer')).toBeTruthy();
+});
+
+it('does not restore a previous chat reading position into a newly selected chat', async () => {
+  const { view, message, update, loadMoreMessages } = historyFixture();
+  const scroller = document.documentElement;
+  vi.spyOn(scroller, 'scrollHeight', 'get').mockImplementation(() =>
+    view.state.selectedChatId === 'chat' ? 1000 : 1800);
+  scroller.scrollTop = 180;
+  let finish!: () => void;
+  loadMoreMessages.mockImplementation(() => new Promise<void>((resolve) => { finish = resolve; }));
+  fireEvent.click(screen.getByRole('button', { name: '加载更早消息' }));
+  view.state.selectedChatId = 'other-chat';
+  view.state.chatMessages = [{ ...message, message_id: 'other-message' }];
+  update();
+  expect(scroller.scrollTop).toBe(180);
+  expect(screen.getByRole<HTMLButtonElement>('button', { name: '加载更早消息' }).disabled).toBe(false);
+  await act(async () => finish());
+  scroller.scrollTop = 0;
+});
+
+it('only exposes stop for an accepted text answer and reports the supplied stopping state', () => {
+  const { view, update, stopChat } = historyFixture();
+  view.state.chatPending = true;
+  view.state.loading = true;
+  update();
+  expect(screen.queryByRole('button', { name: '停止回答' })).toBeNull();
+  view.textAnswer = { canStop: true, stopping: false, notice: null };
+  update();
+  const stop = screen.getByRole('button', { name: '停止回答' });
+  fireEvent.click(stop);
+  fireEvent.click(stop);
+  expect(stopChat).toHaveBeenCalledTimes(1);
+  view.textAnswer = { canStop: true, stopping: true, notice: '已请求停止，正在核对保存状态' };
+  update();
+  const stopping = screen.getByRole<HTMLButtonElement>('button', { name: '正在停止…' });
+  expect(stopping.disabled).toBe(true);
+  expect(screen.getByRole('status').textContent).toBe('已请求停止，正在核对保存状态');
+  fireEvent.click(stopping);
+  expect(stopChat).toHaveBeenCalledTimes(1);
+  view.textAnswer = { canStop: false, stopping: false, notice: '已停止' };
+  update();
+  expect(screen.queryByRole('button', { name: /停止回答|正在停止/ })).toBeNull();
+  expect(screen.getByRole('status').textContent).toBe('已停止');
 });

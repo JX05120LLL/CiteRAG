@@ -3,6 +3,8 @@ import { mountApp } from './app';
 import { createApi } from './api/client';
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+const stream = (events: [string, unknown][]) => new Response(events.map(([name, data]) =>
+  `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`).join(''), { headers: { 'Content-Type': 'text/event-stream' } });
 const failure = (status: number, code: string) => json({ detail: { code, message: 'private infrastructure details' } }, status);
 const button = (root: HTMLElement, text: string) => Array.from(root.querySelectorAll('button')).find((element) => element.textContent?.includes(text));
 const status = { status: 'partial', mode: 'local_single_user', database: 'not_configured', rag: 'not_configured', models: 'not_configured' };
@@ -495,10 +497,15 @@ describe('M0 local workbench', () => {
       const path = String(input);
       if (path === '/api/knowledge-bases') return json({ items: [{ id: 'kb', name: '合成库', status: 'ready' }] });
       if (path === '/api/conversations/chat/messages') return json({ items: [failed] });
-      if (path.endsWith('/retry') && init?.method === 'POST') {
+      if (path === '/api/conversations/chat/messages/message/retry/stream' && init?.method === 'POST') {
         calls += 1;
-        return json({ ...failed, attempt_id: JSON.parse(String(init.body)).attempt_id,
-          status: 'answered', text: '合成回答', error_code: null });
+        const { attempt_id } = JSON.parse(String(init.body));
+        const answer = { ...failed, attempt_id, status: 'answered', text: '合成回答', error_code: null };
+        return stream([
+          ['accepted', { ...answer, status: 'running', text: '', saved: false }],
+          ['delta', { attempt_id, seq: 1, text: answer.text, saved: true }],
+          ['saved', answer],
+        ]);
       }
       return json({ items: [{ id: 'chat', owner_id: 'local', kb_id: 'kb', title: '合成聊天',
         created_at: '2026-09-22T00:00:00Z' }] });
@@ -522,10 +529,15 @@ describe('M0 local workbench', () => {
       const path = String(input);
       if (path === '/api/knowledge-bases') return json({ items: [{ id: 'kb', name: '合成库', status: 'ready' }] });
       if (path === '/api/conversations/chat/messages') return json({ items: [partial] });
-      if (path.endsWith('/retry') && init?.method === 'POST') {
+      if (path === '/api/conversations/chat/messages/message/retry/stream' && init?.method === 'POST') {
         retryCalls++;
-        return json({ ...partial, attempt_id: JSON.parse(String(init.body)).attempt_id,
-          status: 'answered', text: '合成回答', error_code: null });
+        const { attempt_id } = JSON.parse(String(init.body));
+        const answer = { ...partial, attempt_id, status: 'answered', text: '合成回答', error_code: null };
+        return stream([
+          ['accepted', { ...answer, status: 'running', text: '', saved: false }],
+          ['delta', { attempt_id, seq: 1, text: answer.text, saved: true }],
+          ['saved', answer],
+        ]);
       }
       return json({ items: [{ id: 'chat', owner_id: 'local', kb_id: 'kb', title: '合成聊天',
         created_at: '2026-09-22T00:00:00Z' }] });

@@ -20,6 +20,7 @@ from app.models import AnswerAttempt, ConversationMessage, KnowledgeBase
 from app.rag.answer_adapter import AnswerError, checked_answer
 from app.rag.query_adapter import RetrievedChunk
 from app.rag.streamed_answer import ExtractiveDraft
+from app.rag.task_constraints import make_task_contract
 from app.services.answers import AnswerService
 from app.services.errors import ServiceError
 
@@ -355,7 +356,12 @@ async def test_general_question_skips_retrieval_and_kb_miss_never_falls_back(m13
 
         async def general_answer(self, question, context):
             calls.append("general")
-            assert question in {"What is RAG?", "Explain RAG further"}
+            # A routing rewrite is retrieval input, not a replacement user task.
+            assert question in {"What is RAG?", "Explain that concept further"}
+            assert context["_task_contract"] == make_task_contract(question)
+            if question == "Explain that concept further":
+                assert context["turns"][-1]["user"] == "What is RAG?"
+                assert context["turns"][-1]["answer_kind"] == "general"
             return '{"text":"RAG uses retrieval to provide context for generation."}'
 
     class EmptyRetrieval:
@@ -609,19 +615,31 @@ async def test_stream_accepts_input_then_only_emits_verified_saved_text(m13_envi
 
 @pytest.mark.asyncio
 async def test_stream_does_not_emit_fake_answer_without_evidence(m13_environment):
-    api, _, app, _ = m13_environment
+    api, db, app, _ = m13_environment
     kb = await new_kb(api)
     await finished(api, await upload(api, kb, data=b"The safe limit is 42 C.\n"))
     chat = (await api.post("/api/conversations", json={"kb_id": kb})).json()["id"]
     app.state.answer_enabled = True
     app.state.query_adapter = Query([])
-    app.state.answer_adapter = Answer()
+    class NoAnswer(Answer):
+        async def answer(self, *_args):
+            pytest.fail("Empty retrieval must not invoke answer generation")
+
+    app.state.answer_adapter = NoAnswer()
     received = events(await api.post(f"/api/conversations/{chat}/messages/stream", json={
         "client_message_id": str(uuid4()), "text": "What is the limit?",
     }))
     assert [name for name, _ in received] == ["accepted", "saved"]
     assert received[-1][1]["status"] == "insufficient_evidence"
-    assert received[-1][1]["text"] == "" and received[-1][1]["citations"] == []
+    result = received[-1][1]
+    assert result["text"] == (
+        "本次检索未找到可核对的原文证据，无法据此回答。请补充相关资料，"
+        "或提供更具体的文件名、对象和编号后重试。")
+    assert result["citations"] == [] and result["saved"] is True
+    async with db.sessions() as session:
+        stored = await session.get(AnswerAttempt, UUID(result["attempt_id"]))
+        assert stored.status == "insufficient_evidence" and stored.text == result["text"]
+        assert stored.citations == []
 
 
 @pytest.mark.asyncio

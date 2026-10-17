@@ -195,6 +195,9 @@ async def test_voice_final_turn_uses_runner_and_explicit_control(environment):  
         assert (await api.post(f"{path}/{run['id']}/resume", json=body)).status_code == 202
         await asyncio.wait_for(call.turn_task, 3)
         assert played == [("合成回答。", call.generation)]
+        review, = app.state.answer_adapter.reviews
+        assert review["response_channel"] == "voice" and review["draft"] == played[0][0]
+        assert review["context"]["task_supplements"] == [{"minutes": 10}]
         messages = (await api.get(f"/api/conversations/{chat}/messages")).json()["items"]
         assert len(messages) == 1 and messages[0]["route"] == "general"
     finally:

@@ -164,6 +164,9 @@ async def test_agent_city_then_weather_uses_one_history_and_no_kb_citations(envi
         model_results = app.state.answer_adapter.inputs[-1]["results"]
         assert all(item["source_type"] == "tool" for item in model_results)
         assert model_results[-1]["data"]["current"]["temperature"]["value"] == 25
+        review, = app.state.answer_adapter.reviews
+        assert review["results"] == model_results and review["response_channel"] == "text"
+        assert review["question"] == "合成问题：杭州现在天气怎么样？"
         history = (await api.get(f"/api/conversations/{chat}/messages")).json()["items"]
         assert len(history) == 1 and history[0]["saved"] is True
         assert history[0]["route"] == "general" and history[0]["citations"] == []
@@ -245,7 +248,7 @@ async def test_exact_city_weather_completes_without_approval_or_repeated_clarifi
         assert accepted.status_code == 202, accepted.text
         run = await settled(api, path, accepted.json()["id"])
         assert run["status"] == "completed", run
-        assert run["tool_attempts"] == 2 and run["model_rounds"] == 3
+        assert run["tool_attempts"] == 2 and run["model_rounds"] == 4
         assert len(requests) == 2
         async with database.sessions() as session:
             calls = list(await session.scalars(

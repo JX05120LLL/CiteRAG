@@ -29,6 +29,7 @@ from app.models import (
 )
 from app.rag.answer_adapter import AnswerError
 from app.rag.query_adapter import QueryError, RetrievedChunk
+from app.rag.task_constraints import make_task_contract
 from app.services.answers import AnswerService
 from app.services.errors import ServiceError
 
@@ -298,10 +299,13 @@ async def test_answer_receives_only_current_revision_same_chat_window(m13_enviro
             "client_message_id": str(uuid4()), "text": "What is the limit?",
         })
         assert response.status_code == 200 and response.json()["status"] == "answered"
-    assert answerer.contexts[0] == {"summary": "", "turns": []}
+    empty_context = {"summary": "", "turns": [],
+                     "_task_contract": make_task_contract("What is the limit?")}
+    assert answerer.contexts[0] == empty_context
     assert answerer.contexts[1]["turns"] == [{
         "user": "What is the limit?", "assistant": "The safe limit is 42 C.",
     }]
+    assert answerer.contexts[1]["_task_contract"] == empty_context["_task_contract"]
     async with db.sessions() as session:
         base = await session.get(KnowledgeBase, kb)
         base.revision += 1
@@ -309,7 +313,7 @@ async def test_answer_receives_only_current_revision_same_chat_window(m13_enviro
     third = await api.post(f"/api/conversations/{chat}/messages", json={
         "client_message_id": str(uuid4()), "text": "What is the limit?",
     })
-    assert third.status_code == 200 and answerer.contexts[2] == {"summary": "", "turns": []}
+    assert third.status_code == 200 and answerer.contexts[2] == empty_context
 
 
 @pytest.mark.asyncio

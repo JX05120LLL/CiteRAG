@@ -16,6 +16,7 @@ class SyntheticAnswerer:
     def __init__(self, decisions):
         self.decisions = list(decisions)
         self.inputs = []
+        self.reviews = []
 
     async def route_with_context(self, *args):
         return '{"mode":"general"}'
@@ -32,6 +33,19 @@ class SyntheticAnswerer:
             }
         )
         return self.decisions.pop(0)
+
+    async def review_general(self, question, context, draft, results, *, response_channel="text"):
+        """Implement the same bounded v2 review protocol as the real answer adapter."""
+        from app.rag.task_constraints import validate_task_contract
+
+        contract = validate_task_contract(context["_task_contract"])
+        self.reviews.append({"question": question, "context": context, "draft": draft,
+                             "results": results, "response_channel": response_channel})
+        return {"version": 2, "accepted": True, "issues": [], "revision": None,
+                "checks": [{"requirement_id": key, "verdict": "met", "quote": draft[:120],
+                            "reason": "Controlled public synthetic response."}
+                           for key in ["request", "scope", "precision",
+                                       *(item["id"] for item in contract["requirements"])]]}
 
 
 async def ready(api, decisions):
@@ -94,7 +108,7 @@ async def test_missing_tool_location_accepts_chat_text_and_keeps_one_task(enviro
         assert resumed.status_code == 202, resumed.text
         done = await settled(api, path, waiting["id"])
         assert done["status"] == "completed" and done["tool_attempts"] == 1
-        assert done["model_rounds"] == 3 and executions == [{"location": "Hanzhong"}]
+        assert done["model_rounds"] == 4 and executions == [{"location": "Hanzhong"}]
         assert app.state.answer_adapter.inputs[1]["context"]["task_supplements"][0] == {
             "reply_text": "Please check the weather in Hanzhong",
             "requested_fields": {"location": "string"},
@@ -310,7 +324,7 @@ async def test_general_clarification_stops_as_a_message_at_model_limit(environme
                                               "text": "Synthetic weather request"})
         assert response.status_code == 202
         run_id = response.json()["id"]
-        for _ in range(5):
+        for _ in range(4):
             waiting = await settled(api, path, run_id)
             assert waiting["status"] == "waiting_input", waiting
             resumed = await api.post(f"{path}/{run_id}/resume", json={
@@ -320,6 +334,8 @@ async def test_general_clarification_stops_as_a_message_at_model_limit(environme
             assert resumed.status_code == 202
         done = await settled(api, path, run_id)
         assert done["status"] == "completed" and done["model_rounds"] == 6
+        assert len(app.state.answer_adapter.inputs) == 5
+        assert len(app.state.answer_adapter.reviews) == 1
         assert done["waiting"] is None and done["tool_attempts"] == 0
         messages = (await api.get(f"/api/conversations/{chat}/messages")).json()["items"]
         assert len(messages) == 1 and messages[0]["saved"] is True
@@ -350,18 +366,64 @@ async def test_invalid_model_shape_fails_without_tool_and_unlocks_chat(environme
 
 
 async def test_ordinary_agent_accepts_direct_answer_json_without_tool_or_retry(environment):  # noqa: F811
-    api, _ = environment
+    from uuid import UUID
+
+    from sqlalchemy import select
+
+    from app.models import AgentStep
+    from app.rag.task_constraints import contract_hash
+
+    api, database = environment
     app, chat, path = await ready(api, ['{"text":"Synthetic self introduction."}'])
     try:
         accepted = await api.post(path, json={"client_message_id": str(uuid4()),
                                               "text": "Introduce yourself"})
         assert accepted.status_code == 202
         run = await settled(api, path, accepted.json()["id"])
-        assert run["status"] == "completed" and run["model_rounds"] == 1
+        assert run["status"] == "completed" and run["model_rounds"] == 2
         assert run["tool_attempts"] == 0
         messages = (await api.get(f"/api/conversations/{chat}/messages")).json()["items"]
         assert messages[0]["status"] == "answered"
         assert messages[0]["text"] == "Synthetic self introduction."
+        review, = app.state.answer_adapter.reviews
+        assert review["question"] == "Introduce yourself"
+        assert review["draft"] == messages[0]["text"] and review["results"] == []
+        assert review["response_channel"] == "text"
+        async with database.sessions() as session:
+            step = await session.scalar(select(AgentStep).where(
+                AgentStep.run_id == UUID(run["id"]), AgentStep.key == "answer_review"))
+            assert step.status == "succeeded" and step.data["review_version"] == 2
+            assert step.data["contract_hash"] == contract_hash(review["context"]["_task_contract"])
+            assert step.data["changed"] is False
+            assert {item["requirement_id"] for item in step.data["checks"]} == {
+                "request", "scope", "precision"}
+    finally:
+        await app.state.agent_runtime.close()
+
+
+@pytest.mark.parametrize("review_protocol", ["missing", "legacy"])
+async def test_ordinary_agent_rejects_missing_or_legacy_review(
+    environment, review_protocol,  # noqa: F811
+):
+    api, _ = environment
+    draft = "This unreviewed synthetic draft must not be saved."
+    app, chat, path = await ready(api, [{"action": "finish", "answer": {"text": draft}}])
+
+    async def legacy_review(*_args, **_kwargs):
+        return {"accepted": True, "issues": [], "revision": None}
+
+    app.state.answer_adapter.review_general = (
+        None if review_protocol == "missing" else legacy_review)
+    try:
+        accepted = await api.post(path, json={"client_message_id": str(uuid4()),
+                                              "text": "Public synthetic review gate"})
+        assert accepted.status_code == 202
+        run = await settled(api, path, accepted.json()["id"])
+        assert run["status"] == "failed" and run["error_code"] == "answer_unverifiable"
+        assert run["tool_attempts"] == 0
+        messages = (await api.get(f"/api/conversations/{chat}/messages")).json()["items"]
+        assert len(messages) == 1 and messages[0]["status"] == "failed"
+        assert draft not in messages[0]["text"] and messages[0]["citations"] == []
     finally:
         await app.state.agent_runtime.close()
 

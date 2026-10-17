@@ -111,7 +111,8 @@ class RunHooks:
         value = checked_decision(value)
         value = self._resolved_current_weather(value, prepared["question"], state["results"])
         if (prepared["general"] and value["action"] == "request_input"
-            and state["model_rounds"] >= 5):
+            and state["model_rounds"] >= 4):
+            # Reserve the sixth request for the required ordinary-answer review.
             value = {"action": "finish", "answer": {"text":
                 "本轮仍无法确定继续所需的信息，已停止。请在聊天中重新提问并补充必要参数。"}}
         if len(json.dumps(value, ensure_ascii=False, allow_nan=False)) > 16000:

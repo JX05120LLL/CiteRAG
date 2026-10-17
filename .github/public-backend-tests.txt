@@ -8,6 +8,11 @@ tests/test_agent_persistence.py
 tests/test_agent_semantic_prompt.py
 tests/test_agent_startup_preflight.py
 tests/test_answer_quality_regression.py
+tests/test_evidence_spans.py
+tests/test_general_review.py
+tests/test_task_constraints.py
+tests/test_source_mentions.py
+tests/test_verification_audit.py
 tests/test_article_evidence_selection.py
 tests/test_conversation_modes.py
 tests/test_embedding_boundaries.py

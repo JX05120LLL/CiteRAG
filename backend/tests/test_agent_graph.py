@@ -1,5 +1,8 @@
 """Real LangGraph with synthetic decisions and locally executed functions."""
 
+import json
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -65,6 +68,116 @@ async def test_direct_answer_has_one_model_round_and_no_tool():
     result = await graph.build_graph(hooks).ainvoke(graph.initial_state(str(uuid4())))
     assert result["model_rounds"] == 1
     assert not hooks.executed
+
+
+async def test_encoded_finish_is_normalized_before_journal_and_checkpoint(monkeypatch):
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    from app.agent import hooks as module
+    from app.models import AgentStep, ToolCall
+    from app.rag.task_constraints import make_task_contract
+
+    answer = {"text": "公开合成回答"}
+    expected = {"action": "finish", "answer": answer}
+    run_id, runner_id, owner_id, conversation_id = (uuid4() for _ in range(4))
+    run = SimpleNamespace(
+        id=run_id, generation=1, graph_version="citerag-agent-1", active_ms=0,
+        voice_session_id=None, model_rounds=0, event_seq=0,
+        owner_id=owner_id, conversation_id=conversation_id,
+        prepared={"question": "公开合成问题", "evidence": [], "context": {
+            "_task_contract": make_task_contract("公开合成问题")}, "general": True},
+    )
+    journal, model_calls, catalog_reads, reviews = [], [], [], []
+
+    class Session:
+        async def scalar(self, query):
+            key = query.compile().params["key_1"]
+            return next((item for item in journal
+                         if isinstance(item, AgentStep) and item.key == key), None)
+
+        async def get(self, model, identifier):
+            assert model is AgentStep
+            return next(item for item in journal if isinstance(item, AgentStep)
+                        and item.id == identifier)
+
+        def add(self, value):
+            if isinstance(value, AgentStep):
+                value.id = uuid4()  # An actual DB assigns this default when flushing.
+            journal.append(value)
+
+        async def commit(self):
+            pass
+
+    @asynccontextmanager
+    async def sessions():
+        yield Session()
+
+    async def fenced(_session, identifier, generation, runner):
+        assert (identifier, generation, runner) == (run_id, 1, runner_id)
+        return run
+
+    class Gateway:
+        def __init__(self, _session, registry):
+            assert registry == {}
+
+        async def catalog(self, owner, conversation):
+            catalog_reads.append((owner, conversation))
+            return []
+
+    async def decision(*args):
+        model_calls.append(args)
+        return json.dumps({"action": "finish", "answer": json.dumps(answer)})
+
+    async def review(*args, **kwargs):
+        assert kwargs == {"response_channel": "text"}
+        reviews.append(args)
+        return json.dumps({"version": 2, "accepted": True, "issues": [], "revision": None,
+            "checks": [{"requirement_id": key, "verdict": "met", "quote": answer["text"],
+                        "reason": "完整合成覆盖。"} for key in ("request", "scope", "precision")]})
+
+    monkeypatch.setattr(module, "fenced", fenced)
+    monkeypatch.setattr(module, "ToolGateway", Gateway)
+    runner = SimpleNamespace(
+        id=runner_id, db=SimpleNamespace(sessions=sessions), registry={},
+        assert_owned=lambda: None,
+    )
+    hooks = module.RunHooks(runner, run_id, 1, SimpleNamespace(
+        agent_decision=decision, review_general=review))
+    config = {"configurable": {"thread_id": str(run_id)}}
+    compiled = engine().build_graph(hooks, InMemorySaver())
+    result = await compiled.ainvoke(engine().initial_state(str(run_id)), config)
+    assert result["answer"] == answer
+    assert result["model_rounds"] == len(model_calls) == len(reviews) == 1
+    assert run.model_rounds == 2  # Planning and the separately journaled task review.
+    assert result["tool_attempts"] == 0
+    assert not any(isinstance(item, ToolCall) for item in journal)
+    step = next(item for item in journal if isinstance(item, AgentStep))
+    assert (step.key, step.status, step.data) == ("plan:0", "succeeded", expected)
+    checkpoint = await compiled.aget_state(config)
+    assert checkpoint.values["decision"] == expected
+    assert checkpoint.values["answer"] == answer
+    # Replaying a persisted plan does not request another model response.
+    assert await hooks.plan(engine().initial_state(str(run_id))) == expected
+    assert len(model_calls) == 1
+    assert catalog_reads == [(owner_id, conversation_id)]
+
+
+@pytest.mark.parametrize("encoded", [False, True])
+@pytest.mark.parametrize("excess", [0, 1])
+def test_finish_decision_size_boundary(encoded, excess):
+    graph = engine()
+    value = {"action": "finish", "answer": {"text": ""}}
+    overhead = len(json.dumps(value, ensure_ascii=False, allow_nan=False))
+    value["answer"]["text"] = "x" * (graph.MAX_DECISION_CHARS - overhead + excess)
+    expected = {**value, "answer": dict(value["answer"])}
+    assert len(json.dumps(value, ensure_ascii=False)) == graph.MAX_DECISION_CHARS + excess
+    if encoded:
+        value["answer"] = json.dumps(value["answer"], ensure_ascii=False)
+    if excess:
+        with pytest.raises(graph.AgentError, match="^agent_decision_invalid$"):
+            graph.checked_decision(value)
+    else:
+        assert graph.checked_decision(value) == expected
 
 
 async def test_approval_uses_real_interrupt_and_resume_without_replanning():

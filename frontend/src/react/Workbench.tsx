@@ -10,6 +10,7 @@ import { displayCitations } from '../preview/model';
 import { StateTag } from '../preview/shared';
 import { answerRouteLabel } from './answerRoute';
 import { AgentTasks } from './AgentTasks';
+import { AnswerContent } from './AnswerContent';
 import { ToolInvocation, WeatherResult, toolFailure } from './ToolControls';
 import logo from '../../../assets/brand/mark.svg';
 
@@ -304,7 +305,7 @@ export function Workbench({ view, api }: { view: AppView; api: ApiClient }) {
               : '等待你补充参数，本轮回答尚未完成。'
               : m.status === 'running' || !m.saved ? '正在生成并核验，正文提交后再展示。'
           : ['failed', 'interrupted'].includes(m.status) ? answerFailure(m.error_code)
-            : m.status === 'insufficient_evidence' ? '当前知识库没有足够的可核查证据，暂不作答。'
+            : m.status === 'insufficient_evidence' ? m.text.trim() || '当前知识库没有足够的可核查证据，暂不作答。'
               : m.status === 'needs_clarification' ? m.text || '请补充查询对象或范围。'
                 : m.status === 'conflicting_evidence' ? m.text || '当前资料存在冲突，请核查原文。' : m.text;
         return <article key={m.message_id} className="message-pair"><div className="question-line"><Bubble placement="end" className="question-bubble" content={m.question} /><time dateTime={m.created_at}>{messageTime(m.created_at)}</time></div>
@@ -324,12 +325,12 @@ export function Workbench({ view, api }: { view: AppView; api: ApiClient }) {
             </div>)}</div>}
           <div className="answer-line"><span className="answer-avatar"><img src={logo} alt="" /></span><div className="answer-card"><div className="answer-heading"><strong>{answerRouteLabel(m.route).split(' · ')[0]}</strong><StateTag value={m.status === 'answered' && !m.saved ? 'uncommitted' : m.status} />
             {!m.saved && <Tag>尚未保存</Tag>}</div>
-            <div className="answer-text">{content}</div>
+            <AnswerContent className="answer-text" text={content} />
             {streaming && <p className="muted">{s.chatStreamSaved ? '结果已保存，等待最终提交' : '核验与保存处理中'}</p>}
             {readable && m.route !== 'needs_clarification' && <p className="muted answer-route">{answerRouteLabel(m.route)}</p>}
             {readable && m.error_code && <p className="failure-reason">{!['failed', 'interrupted'].includes(m.status) && <>{answerFailure(m.error_code)}<br /></>}{ /^[a-z][a-z0-9_]{0,63}$/.test(m.error_code) && <>错误代码：{m.error_code}</>}</p>}
-            {cited && <div className="source-buttons">{m.citations.map((c) => <Button key={c.evidence_id} icon={<FileTextOutlined />} data-source-key={`${m.message_id}:${c.evidence_id}`}
-              onClick={() => { trigger.current = `${m.message_id}:${c.evidence_id}`; a.selectCitation(m.message_id, c.evidence_id); }}>查看来源 · {c.filename} · {locationText(c)} <span aria-hidden="true">›</span></Button>)}</div>}
+            {cited && <div className="source-buttons">{displayCitations(m).map((c) => <Button key={c.evidence_id} icon={<FileTextOutlined />} data-source-key={`${m.message_id}:${c.evidence_id}`}
+              onClick={() => { trigger.current = `${m.message_id}:${c.evidence_id}`; a.selectCitation(m.message_id, c.evidence_id); }}>查看来源 · {c.evidence_id} · {c.filename} · {locationText(c)} <span aria-hidden="true">›</span></Button>)}</div>}
             {readable && (['failed', 'interrupted', 'partial'].includes(m.status) || m.status === 'needs_clarification' &&
               !!m.images?.some((image) => image.needs_confirmation) &&
               !!m.images?.every((image) => !image.needs_confirmation || !!image.confirmed_identifier)) && <Button className="retry-answer" disabled={busy || (s.selectedKbId !== null && base?.status !== 'ready')}
@@ -375,7 +376,7 @@ export function Workbench({ view, api }: { view: AppView; api: ApiClient }) {
       {citation && <div className="source-content"><div className="source-file-card"><h2><FileTextOutlined />{citation.filename}</h2><p><BookOutlined />{locationText(citation)}</p></div>
         <h3>原文内容（节选）</h3><blockquote>{citation.excerpt}</blockquote>
         <p className="muted">摘录、文件和定位均来自已保存的核验结果。</p>
-        <div className="source-buttons">{sourceMessage?.citations.map((c) => <Button key={c.evidence_id} onClick={() => a.selectCitation(sourceMessage.message_id, c.evidence_id)}>{c.filename} · {locationText(c)}</Button>)}</div></div>}
+        <div className="source-buttons">{sourceMessage?.citations.map((c) => <Button key={c.evidence_id} onClick={() => a.selectCitation(sourceMessage.message_id, c.evidence_id)}>{c.evidence_id} · {c.filename} · {locationText(c)}</Button>)}</div></div>}
     </Drawer>
     <Drawer title={`同库共享摘要 · ${base?.name || ''}`} rootClassName="workspace-detail-drawer" open={memoryOpen && !!base} onClose={() => setMemoryOpen(false)} size="min(460px, 100vw)" destroyOnHidden>
       <p className="muted">仅用于理解偏好和讨论背景。资料结论仍须重新检索当前知识库；这些条目不是引用。</p>

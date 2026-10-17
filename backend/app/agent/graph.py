@@ -1,5 +1,6 @@
 """A small sequential graph. Business state, permission and side effects live in hooks."""
 
+import json
 from typing import Protocol, TypedDict
 from uuid import NAMESPACE_URL, uuid5
 
@@ -10,6 +11,7 @@ from app.agent.errors import AgentError
 from app.tools.contracts import arguments_fingerprint
 
 GRAPH_VERSION = "citerag-agent-1"
+MAX_DECISION_CHARS = 16000
 
 
 class AgentState(TypedDict, total=False):
@@ -51,8 +53,20 @@ def checked_decision(value: dict) -> dict:
         raise AgentError("agent_decision_invalid")
     action = value.get("action")
     if action == "finish" and set(value) == {"action", "answer"}:
-        if isinstance(value["answer"], dict):
-            return value
+        answer = value["answer"]
+        try:
+            # Some JSON-mode models encode the final answer object a second
+            # time. Only this field permits one bounded decode. Never repair
+            # actions/tool arguments or recursively interpret generated data.
+            if isinstance(answer, str) and len(answer) <= MAX_DECISION_CHARS:
+                answer = json.loads(answer)
+            if isinstance(answer, dict):
+                normalized = value if answer is value["answer"] else {**value, "answer": answer}
+                if len(json.dumps(normalized, ensure_ascii=False,
+                                  allow_nan=False)) <= MAX_DECISION_CHARS:
+                    return normalized
+        except (ValueError, TypeError, RecursionError):
+            pass
     if action == "call_tool" and set(value) == {"action", "tool_id", "arguments"}:
         if isinstance(value["tool_id"], str) and 1 <= len(value["tool_id"]) <= 80:
             try:

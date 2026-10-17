@@ -101,7 +101,9 @@ class DashScopeClient:
             raise ValueError("completion model is not configured")
         if not messages or any(not message.content for message in messages):
             raise ValueError("completion messages must not be empty")
-        output_limit = 2048 if model == self._config.models["answer"] else 512
+        # Full verification proofs need more output than an ordinary draft.
+        # Callers still set their own smaller limits; streaming stays at 2048.
+        output_limit = 4096 if model == self._config.models["answer"] else 512
         if max_tokens < 1 or max_tokens > output_limit:
             raise ValueError(f"completion max_tokens must be between 1 and {output_limit}")
         if response_format not in {None, "json_object"}:

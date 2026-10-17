@@ -19,7 +19,7 @@ describe('candidate preview data boundaries', () => {
     expect(parsePreviewLocation('?design=a').design).toBe('b');
   });
 
-  it.each(['running', 'failed', 'interrupted', 'partial', 'insufficient_evidence'] as const)(
+  it.each(['running', 'failed', 'interrupted', 'partial'] as const)(
     'does not publish sources for %s output even if a stale source is present', (status) => {
       expect(displayCitations({ ...answered, status })).toEqual([]);
     });
@@ -29,6 +29,16 @@ describe('candidate preview data boundaries', () => {
   });
   it('preserves genuine saved knowledge citations', () => {
     expect(displayCitations(answered)).toEqual([citation]);
+    expect(displayCitations({ ...answered, status: 'insufficient_evidence' })).toEqual([citation]);
+    expect(displayCitations({ ...answered, status: 'conflicting_evidence' })).toEqual([citation]);
+  });
+  it.each([{ saved: false }, { hidden: true }, { stale: true }, { route: 'general' as const },
+    { route: 'chat' as const }])('keeps insufficient-evidence sources behind saved knowledge gates: %j', (change) => {
+    expect(displayCitations({ ...answered, status: 'insufficient_evidence', ...change })).toEqual([]);
+  });
+  it.each([{ saved: false }, { hidden: true }, { stale: true }, { route: 'general' as const },
+    { route: 'chat' as const }])('keeps conflict sources behind saved knowledge gates: %j', (change) => {
+    expect(displayCitations({ ...answered, status: 'conflicting_evidence', ...change })).toEqual([]);
   });
 
   it('exposes only read operations and requests backend pagination rather than all documents', async () => {

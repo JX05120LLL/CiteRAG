@@ -141,7 +141,8 @@ async def test_semantic_summary_and_followup_retrieve_fresh_evidence(corpus, fol
     model.verify_answer.assert_awaited_once_with(corpus["summary_answer"], evidence)
     assert [citation["locator"] for citation in result[2]] == [block.locator for block in blocks]
     assert all(citation["document_id"] == str(document.id) for citation in result[2])
-    assert "999" not in json.dumps(result, ensure_ascii=False)
+    assert "999" not in result[1]
+    assert all("999" not in citation["excerpt"] for citation in result[2])
 
 
 @pytest.mark.parametrize("corpus", CORPORA, ids=lambda corpus: corpus["id"])
@@ -154,7 +155,8 @@ async def test_empty_retrieval_does_not_fall_back_to_ordinary_model(corpus):
         uuid4(), "synthetic-workspace", corpus["unsupported_question"], retriever, model,
         "auto", {"mode": "semantic"}, {},
     )
-    assert result == ("insufficient_evidence", "", [])
+    assert result[0] == "insufficient_evidence" and result[2] == []
+    assert "本次检索未找到" in result[1] and "补充相关资料" in result[1]
     model.answer.assert_not_awaited()
     model.general_answer.assert_not_awaited()
 
@@ -180,7 +182,9 @@ async def test_retrieved_text_must_map_to_the_current_managed_original(corpus, c
         with pytest.raises(QueryError, match="^retrieval_failed$"):
             await call
     else:
-        assert await call == ("insufficient_evidence", "", [])
+        result = await call
+        assert result[0] == "insufficient_evidence" and result[2] == []
+        assert "无法定位到当前受管原文" in result[1]
     model.answer.assert_not_awaited()
     model.general_answer.assert_not_awaited()
 
@@ -269,3 +273,137 @@ async def test_ordinary_response_uses_chat_context_without_knowledge_sources(que
     )
     assert result == ("answered", "公开合成回答。", [])
     model.general_answer.assert_awaited_once_with(question, context)
+
+
+def insufficient_output(*, known_fact=True):
+    return {
+        "status": "insufficient_evidence",
+        "text": (("已确认：仅限室内使用，不可露天雨淋。\n" if known_fact else "")
+                 + "本次检索证据未提供 IP 等级及售价，无法据此给出等级或报价。"
+                 + "请补充对应型号的防护等级说明及有效报价资料。"),
+        "evidence_ids": ["E1"] if known_fact else [],
+        "support": [{"evidence_id": "E1", "quote": "仅限室内使用，不可露天雨淋。"}]
+                   if known_fact else [],
+    }
+
+
+async def test_insufficient_answer_preserves_verified_known_fact_and_specific_missing_items():
+    evidence = [{"id": "E1", "text": "KX-17 仅限室内使用，不可露天雨淋。"}]
+    citations = [{"evidence_id": "E1", "filename": "公开合成运行说明.txt",
+                  "excerpt": evidence[0]["text"]}]
+    model = SimpleNamespace(verify_answer=AsyncMock(return_value='{"supported":true}'))
+    data = insufficient_output()
+    result = await AnswerService._checked_result(model, json.dumps(data), evidence, citations)
+    assert result == ("insufficient_evidence", data["text"], citations)
+    model.verify_answer.assert_awaited_once_with(data["text"], evidence)
+
+
+@pytest.mark.parametrize("text", [
+    "本次检索证据未提供 IP 等级及售价，请补充有效资料。",
+    # Real public-synthetic T07 regression: the verifier returned true despite no citations.
+    "根据当前资料，KX-17 的防水等级和售价均未提供。该设备仅限室内使用，"
+    "环境相对湿度不得超过 75%，且不能在雨天露天运行。",
+])
+async def test_uncited_insufficient_prose_is_rejected_even_when_verifier_would_accept(text):
+    evidence = [{"id": "E1", "text": "公开合成设备仅限室内使用。"}]
+    data = insufficient_output(known_fact=False)
+    data["text"] = text
+    model = SimpleNamespace(verify_answer=AsyncMock(return_value='{"supported":true}'))
+    with pytest.raises(AnswerError, match="^answer_reference_invalid$"):
+        await AnswerService._checked_result(model, json.dumps(data), evidence, [])
+    model.verify_answer.assert_not_awaited()
+
+
+async def test_live_synthetic_compressed_quote_still_fails_closed():
+    evidence = [{"id": "E1", "text":
+                 "KX-17 的当前要求：仅限室内使用；滤芯每 60 天检查一次。"
+                 "更换滤芯前必须停机并断电。"}]
+    data = {"status": "answered", "text": "滤芯每60天检查一次，更换前停机断电。",
+            "evidence_ids": ["E1"], "support": [
+                {"evidence_id": "E1", "quote": "KX-17 的当前要求：...滤芯每 60 天检查一次。"},
+            ]}
+    model = SimpleNamespace(verify_answer=AsyncMock(return_value='{"supported":true}'))
+    with pytest.raises(AnswerError, match="^answer_source_mismatch$"):
+        await AnswerService._checked_result(model, json.dumps(data), evidence, [])
+    model.verify_answer.assert_not_awaited()
+
+
+@pytest.mark.parametrize("verdict", ['{"supported":false}', 'not-json', None])
+async def test_insufficient_prose_never_bypasses_fact_verification(verdict):
+    evidence = [{"id": "E1", "text": "KX-17 仅限室内使用，不可露天雨淋。"}]
+    data = insufficient_output()
+    data["text"] += "产品售价 999 元，防护等级 IP68。"
+    model = SimpleNamespace() if verdict is None else SimpleNamespace(
+        verify_answer=AsyncMock(return_value=verdict),
+    )
+    code = "answer_unsupported_claims" if verdict == '{"supported":false}' else (
+        "answer_verification_unavailable"
+    )
+    with pytest.raises(AnswerError, match=f"^{code}$"):
+        await AnswerService._checked_result(model, json.dumps(data), evidence, [])
+
+
+@pytest.mark.parametrize("corruption", [
+    "unknown-reference", "wrong-quote", "invented-url", "missing-support", "uncited-support",
+])
+async def test_insufficient_prose_keeps_original_reference_and_schema_gates(corruption):
+    evidence = [{"id": "E1", "text": "KX-17 仅限室内使用，不可露天雨淋。"}]
+    data = insufficient_output()
+    if corruption == "unknown-reference":
+        data["evidence_ids"] = ["E9"]
+    elif corruption == "wrong-quote":
+        data["support"][0]["quote"] = "可以露天雨淋。"
+    elif corruption == "invented-url":
+        data["text"] += "详情 https://unverified.invalid/price"
+    elif corruption == "missing-support":
+        del data["support"]
+    else:
+        data["evidence_ids"] = []
+    model = SimpleNamespace(verify_answer=AsyncMock())
+    with pytest.raises(AnswerError):
+        await AnswerService._checked_result(model, json.dumps(data), evidence, [])
+    model.verify_answer.assert_not_awaited()
+
+
+@pytest.mark.parametrize("with_support", [False, True])
+async def test_empty_insufficient_output_gets_server_guidance_without_model_call(with_support):
+    data = {"status": "insufficient_evidence", "text": "", "evidence_ids": []}
+    if with_support:
+        data["support"] = []
+    model = SimpleNamespace(verify_answer=AsyncMock())
+    status, text, citations = await AnswerService._checked_result(model, json.dumps(data), [], [])
+    assert status == "insufficient_evidence" and citations == []
+    assert "本次检索证据不足" in text and "有效资料" in text
+    assert "75%" not in text and "室内" not in text
+    model.verify_answer.assert_not_awaited()
+
+
+async def test_clarification_status_cannot_publish_new_unverified_prose():
+    data = {**insufficient_output(), "status": "needs_clarification"}
+    model = SimpleNamespace(verify_answer=AsyncMock())
+    with pytest.raises(AnswerError, match="^answer_format_invalid$"):
+        await AnswerService._checked_result(model, json.dumps(data), [
+            {"id": "E1", "text": "KX-17 仅限室内使用，不可露天雨淋。"},
+        ], [])
+    model.verify_answer.assert_not_awaited()
+
+
+@pytest.mark.parametrize("mode", ["literal", "exact", "exact-empty-blocks"])
+async def test_missing_exact_or_literal_target_explains_the_lookup_without_model_fallback(mode):
+    session = SimpleNamespace(scalars=AsyncMock(return_value=[]), commit=AsyncMock())
+    model = SimpleNamespace(answer=AsyncMock(), general_answer=AsyncMock())
+    service = AnswerService(session)
+    if mode == "literal":
+        result = await service._resolve_literal(uuid4(), "KX-17 的价格？", "KX-17", model, {})
+        assert "编号或原文短语" in result[1]
+    else:
+        if mode == "exact-empty-blocks":
+            session.scalars.side_effect = [[SimpleNamespace(id=uuid4())], []]
+        result = await service._resolve_exact(
+            uuid4(), "KX-17 的价格？", {"doc_code": "KX-17"}, model, {},
+        )
+        assert "匹配" in result[1] and "资料" in result[1]
+    assert result[0] == "insufficient_evidence" and result[2] == []
+    assert "请" in result[1]
+    model.answer.assert_not_awaited()
+    model.general_answer.assert_not_awaited()

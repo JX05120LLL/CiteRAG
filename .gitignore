@@ -19,6 +19,11 @@
 !/backend/tests/test_ingestion_parsing.py
 !/backend/tests/test_embedding_boundaries.py
 !/backend/tests/test_answer_quality_regression.py
+!/backend/tests/test_evidence_spans.py
+!/backend/tests/test_general_review.py
+!/backend/tests/test_task_constraints.py
+!/backend/tests/test_source_mentions.py
+!/backend/tests/test_verification_audit.py
 !/backend/tests/test_query_routing.py
 !/backend/tests/test_m13_exact_api.py
 !/backend/tests/test_m13_answer_api.py
@@ -59,6 +64,7 @@
 !/frontend/src/preview/app.test.tsx
 !/frontend/src/react/controller.test.ts
 !/frontend/src/react/app.test.tsx
+!/frontend/src/react/AnswerContent.test.tsx
 !/frontend/src/react/AgentTasks.test.tsx
 !/frontend/src/react/management.test.tsx
 !/frontend/src/react/VoiceVisual.test.tsx

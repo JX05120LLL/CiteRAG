@@ -7,8 +7,9 @@ import { action, el, icon, alert, heading } from '../shared/dom';
 
 export function answerFailure(code: string | null): string {
   const reasons: Record<string, string> = {
-    answer_unverifiable: '模型输出未通过格式或原文核验。请重试，或把问题缩小到资料中的具体内容。',
+    answer_unverifiable: '模型输出未通过本轮检查，回答未完成。请重试；若持续失败，请反馈此错误代码。',
     answer_format_invalid: '模型返回的格式不完整或不符合要求。请重试，或缩小问题范围。',
+    agent_decision_invalid: '模型返回的任务决策格式不符合要求，回答未完成。请重试；若持续失败，请反馈此错误代码。',
     answer_reference_invalid: '模型给出的引用编号未通过核验。请重试；当前未展示未核验的回答。',
     answer_source_mismatch: '模型的引用摘录无法匹配原文，或网址没有资料依据。请重试，或明确要查询的资料。',
     answer_unsupported_claims: '回答包含未得到资料支持的事实，已停止展示。请补充资料，或把问题缩小到具体内容后重试。',

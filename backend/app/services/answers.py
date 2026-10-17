@@ -29,9 +29,12 @@ from app.models import (
     ToolCall,
 )
 from app.rag.answer_adapter import AnswerError, checked_answer, checked_route
+from app.rag.evidence_spans import EvidenceSpanError, expand_span_support
 from app.rag.query_adapter import QueryError, RetrievedChunk
+from app.rag.response_review import ResponseReviewError, checked_general_answer
 from app.rag.source_mapping import locate_chunk, select_verified_article_block
 from app.rag.streamed_answer import ExtractiveDraft
+from app.rag.task_constraints import TaskConstraintError, enforce_constraints, make_task_contract
 from app.services.conversation_context import ORDINARY_WORKSPACE, prepare_context
 from app.services.conversation_retention import active_conversation
 from app.services.errors import ServiceError
@@ -530,6 +533,9 @@ class AnswerService:
                 question = (f"{question}\n【当前提问的图片观察，非知识库原文或引用】\n"
                             f"{observation}")
             context = await prepare_context(self.session, conversation_id, kb, answerer)
+            # Only the original user's message can declare output requirements.
+            # Image observations appended to question and prior assistant prose cannot.
+            context["_task_contract"] = make_task_contract(message.content)
             if kb is not None:
                 shared = await shared_context(self.session, owner, kb)
                 if shared:
@@ -547,6 +553,12 @@ class AnswerService:
                 preview if on_preview is not None else None,
                 general_segment if on_general_segment is not None else None,
             )
+            if status == "answered" and (kb is None or (isinstance(exact, dict)
+                and exact.get("mode") in {"general", "chat"})):
+                try:
+                    enforce_constraints(text, make_task_contract(message.content))
+                except TaskConstraintError:
+                    raise AnswerError("answer_unverifiable") from None
             error_code = None
         except _ImageNeedsConfirmation:
             pass
@@ -635,6 +647,10 @@ class AnswerService:
                     return raw
             status, text, citations = await self._resolve(None, attempt.workspace,
                 prepared["question"], None, Draft(), "auto", {"mode": "general"}, {})
+            try:
+                enforce_constraints(text, make_task_contract(message.content))
+            except TaskConstraintError:
+                raise AnswerError("answer_unverifiable") from None
         else:
             status, text, citations = await self._checked_result(answerer, raw,
                 prepared["evidence"], prepared["citations"])
@@ -688,7 +704,7 @@ class AnswerService:
                 stream = getattr(answerer, "stream_general", None)
                 if on_general_segment is not None and stream is not None:
                     generated, pending = "", ""
-                    async for piece in stream(route.get("query", question),
+                    async for piece in stream(question,
                                               ordinary_context(context,
                                                                ordinary_chat=kb_id is None)):
                         if not isinstance(piece, str):
@@ -712,20 +728,13 @@ class AnswerService:
                 general = getattr(answerer, "general_answer", None)
                 if general is None:
                     raise AnswerError("answer_unavailable")
-                raw = await general(route.get("query", question), ordinary_context(
+                raw = await general(question, ordinary_context(
                     context, ordinary_chat=kb_id is None))
                 try:
-                    data = json.loads(raw)
-                    if (not isinstance(data, dict) or set(data) != {"text"}
-                        or not isinstance(data["text"], str) or not data["text"].strip()
-                        or len(data["text"]) > 1000
-                        or re.search(r"https?://", data["text"], re.IGNORECASE)
-                        or any(category(char).startswith("C") and char not in "\n\t"
-                               for char in data["text"])):
-                        raise ValueError
-                except (ValueError, TypeError):
+                    text = checked_general_answer(raw)
+                except ResponseReviewError:
                     raise AnswerError("answer_format_invalid") from None
-                return "answered", data["text"].strip(), []
+                return "answered", text, []
             if routed_mode == "exact":
                 return await self._resolve_exact(kb_id, question, route["filters"], answerer,
                                                  context, on_preview)
@@ -757,7 +766,9 @@ class AnswerService:
             document.source_key: document.engine_doc_id for document in documents
         })
         if not chunks:
-            return "insufficient_evidence", "", []
+            return ("insufficient_evidence",
+                    "本次检索未找到可核对的原文证据，无法据此回答。请补充相关资料，"
+                    "或提供更具体的文件名、对象和编号后重试。", [])
         evidence: list[dict[str, Any]] = []
         citations: list[dict] = []
         for chunk in chunks:
@@ -792,7 +803,9 @@ class AnswerService:
                 break
         await self.session.commit()
         if not evidence:
-            return "insufficient_evidence", "", []
+            return ("insufficient_evidence",
+                    "本次检索结果无法定位到当前受管原文，因此未用于回答。请核对资料状态、"
+                    "改用原文短语或补充对应资料后重试。", [])
         evidence, citations = select_evidence(evidence, citations)
         if not evidence:
             return "needs_clarification", "原文片段过长，请缩小问题或定位范围。", []
@@ -816,7 +829,9 @@ class AnswerService:
         pattern = re.compile(r"(?<![A-Za-z0-9])" + re.escape(phrase) + r"(?![A-Za-z0-9])")
         matches = [block for block in blocks if pattern.search(block.text)]
         if not matches:
-            return "insufficient_evidence", "", []
+            return ("insufficient_evidence",
+                    "未在当前就绪资料中找到该编号或原文短语。请核对拼写、编号和版本，"
+                    "或补充对应资料后重试。", [])
         if len({block.document_id for block in matches}) != 1:
             return "needs_clarification", "多个资料包含该编号或短语，请指定文件或补充区分条件。", []
         if len(matches) > 3 or sum(len(block.text) for block in matches) > 6000:
@@ -857,7 +872,9 @@ class AnswerService:
             *conditions,
         ).order_by(Document.id).limit(4)))
         if not documents:
-            return "insufficient_evidence", "", []
+            return ("insufficient_evidence",
+                    "未找到与已确认编号或属性匹配的就绪资料。请核对编号和版本，"
+                    "或将对应资料加入当前知识库后重试。", [])
         if len(documents) != 1:
             return "needs_clarification", "", []
         document = documents[0]
@@ -874,7 +891,9 @@ class AnswerService:
             block for block in blocks if pattern is None or pattern.search(block.text)
         ]
         if not selected_blocks:
-            return "insufficient_evidence", "", []
+            return ("insufficient_evidence",
+                    "已匹配到资料，但未找到可用于本次定位的原文段落。请核对短语和版本，"
+                    "或补充对应内容后重试。", [])
         if (len(selected_blocks) > 3
             or sum(len(block.text) for block in selected_blocks) > 6000):
             return "needs_clarification", "", []
@@ -900,15 +919,28 @@ class AnswerService:
     @staticmethod
     async def _checked_result(answerer: Answerer, raw: str, evidence: list[dict],
                                citations: list[dict]) -> tuple[str, str, list[dict]]:
+        try:
+            raw = expand_span_support(raw, evidence)
+        except EvidenceSpanError as error:
+            raise AnswerError(error.code) from None
+        except (ValueError, TypeError, RecursionError):
+            raise AnswerError("answer_format_invalid") from None
         status, text, identifiers = checked_answer(
             raw, {item["id"]: item["text"] for item in evidence},
         )
-        if status == "answered" and "support" in json.loads(raw):
-            verifier = getattr(answerer, "verify_answer", None)
-            if verifier is None:
-                raise AnswerError("answer_verification_unavailable")
+        if status == "insufficient_evidence" and not text:
+            return (status, "本次检索证据不足，尚无法核实这个问题。请补充包含所问信息的有效资料，"
+                    "或限定具体对象、编号和版本后重试。", [])
+        if text and "support" in json.loads(raw):
             selected = [item for item in evidence if item["id"] in identifiers]
-            verdict = await verifier(text, selected)
+            contextual = getattr(answerer, "verify_answer_in_context", None)
+            if contextual is not None:
+                verdict = await contextual(text, selected, evidence)
+            else:
+                verifier = getattr(answerer, "verify_answer", None)
+                if verifier is None:
+                    raise AnswerError("answer_verification_unavailable")
+                verdict = await verifier(text, selected)
             try:
                 data = json.loads(verdict)
                 if (not isinstance(data, dict) or set(data) != {"supported"}

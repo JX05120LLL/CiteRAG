@@ -10,6 +10,14 @@ from sqlalchemy import select
 from app.agent.graph import AgentError, checked_decision
 from app.agent.repository import emit, fenced
 from app.models import AgentStep, ToolCall
+from app.rag.answer_adapter import AnswerError
+from app.rag.response_review import (
+    ResponseReviewError,
+    checked_general_answer,
+    checked_general_review,
+    parse_general_review,
+)
+from app.rag.task_constraints import TaskConstraintError, contract_hash, validate_task_contract
 from app.services.errors import ServiceError
 from app.tools.contracts import bounded_model_results
 from app.tools.gateway import ToolContext, ToolGateway, call_view
@@ -95,7 +103,7 @@ class RunHooks:
         if isinstance(value, str):
             try:
                 value = json.loads(value)
-            except ValueError:
+            except (ValueError, RecursionError):
                 raise AgentError("agent_decision_invalid") from None
         if (prepared["general"] and isinstance(value, dict)
             and set(value) == {"text"} and isinstance(value["text"], str)):
@@ -262,4 +270,81 @@ class RunHooks:
         }
 
     async def finish(self, state):
-        return state["decision"]["answer"]
+        self.runner.assert_owned()
+        async with self.runner.db.sessions() as session:
+            run = await fenced(session, self.run_id, self.generation, self.runner.id)
+            if not run.prepared["general"]:
+                return state["decision"]["answer"]
+            try:
+                contract = validate_task_contract(run.prepared["context"].get("_task_contract"))
+                fingerprint = contract_hash(contract)
+                draft = checked_general_answer(state["decision"]["answer"])
+            except (TaskConstraintError, ResponseReviewError):
+                # An old pending run lacks an original-user contract. Do not
+                # silently reinterpret image observations or respend its request.
+                raise AnswerError("answer_unverifiable") from None
+            response_channel = "voice" if run.voice_session_id is not None else "text"
+            if run.voice_session_id is not None:
+                await self.runner.check_voice(run)
+            step = await session.scalar(select(AgentStep).where(
+                AgentStep.run_id == self.run_id, AgentStep.key == "answer_review",
+            ))
+            if step is not None:
+                # A model request with no durable result is unknown. Replaying it
+                # after a lost checkpoint must not repeat a paid supplier call.
+                if (step.status != "succeeded" or not isinstance(step.data, dict)
+                    or step.data.get("contract_hash") != fingerprint
+                    or step.data.get("review_version") != 2):
+                    raise AnswerError("answer_unverifiable")
+                try:
+                    text = checked_general_answer(step.data.get("answer"))
+                    replayed = checked_general_review(step.data.get("review"), draft,
+                                                       contract=contract, strict=True)
+                    if text != replayed or step.data.get("changed") is not (text != draft):
+                        raise ResponseReviewError("answer_unverifiable")
+                except ResponseReviewError:
+                    raise AnswerError("answer_unverifiable") from None
+                if response_channel == "voice" and "```" in text:
+                    raise AnswerError("answer_format_invalid")
+                return {"text": text}
+            if run.model_rounds >= 6:
+                raise AgentError("agent_model_budget")
+            if run.active_ms >= 60_000:
+                raise AgentError("agent_time_budget")
+            reviewer = getattr(self.base, "review_general", None)
+            if reviewer is None:
+                raise AnswerError("answer_unverifiable")
+            prepared = run.prepared
+            context = {**prepared["context"], "task_supplements": state.get("supplements", [])}
+            run.model_rounds += 1
+            step = AgentStep(run_id=self.run_id, key="answer_review",
+                             kind="model", status="running")
+            session.add(step)
+            await session.commit()
+        # There is no tool catalog or executable decision in this stage. The
+        # original question, draft and actual bounded results are reviewed once.
+        async with asyncio.timeout(30):
+            raw = await reviewer(prepared["question"], context, draft,
+                                 bounded_model_results(state.get("results", [])),
+                                 response_channel=response_channel)
+        try:
+            text = checked_general_review(raw, draft, contract=contract, strict=True)
+            review = parse_general_review(raw, contract=contract, strict=True, draft_text=draft)
+        except ResponseReviewError:
+            raise AnswerError("answer_unverifiable") from None
+        if response_channel == "voice" and "```" in text:
+            raise AnswerError("answer_format_invalid")
+        self.runner.assert_owned()
+        async with self.runner.db.sessions() as session:
+            run = await fenced(session, self.run_id, self.generation, self.runner.id)
+            if run.voice_session_id is not None:
+                await self.runner.check_voice(run)
+            saved = await session.get(AgentStep, step.id)
+            saved.data = {"answer": {"text": text}, "accepted": review.accepted,
+                          "issues": list(review.issues), "checks": list(review.checks),
+                          "review_version": 2, "contract_hash": fingerprint,
+                          "changed": text != draft,
+                          "review": json.loads(raw) if isinstance(raw, str) else raw}
+            saved.status = "succeeded"
+            await session.commit()
+        return {"text": text}

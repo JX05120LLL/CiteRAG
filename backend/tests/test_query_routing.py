@@ -16,7 +16,17 @@ from app.providers.dashscope import DashScopeClient
 from app.providers.types import Message
 from app.rag.answer_adapter import AnswerError, LightRAGAnswerAdapter, checked_answer, checked_route
 from app.rag.runtime import RagRuntime
+from app.rag.task_constraints import make_task_contract
 from app.services.answers import AnswerService, matching_candidates
+
+
+def _synthetic_review(payload):
+    candidate = payload["draft"]
+    keys = ["request", "scope", "precision"] + [
+        item["id"] for item in payload["task_contract"]["requirements"]]
+    return json.dumps({"version": 2, "accepted": True, "issues": [], "revision": None,
+        "checks": [{"requirement_id": key, "verdict": "met", "quote": candidate[:120],
+                    "reason": "离线完整审查 fixture。"} for key in keys]})
 
 
 async def test_agent_requests_provider_json_mode_without_a_second_model_call(monkeypatch):
@@ -200,9 +210,19 @@ async def test_general_runtime_sends_bounded_history_to_model():
     ]}
 
     class Client:
-        async def complete(self, model, messages, *, max_tokens):
-            assert model == "qwen-flash" and max_tokens == 1024
+        async def complete(self, model, messages, *, max_tokens, response_format=None):
+            assert model == "qwen-flash"
             payload = json.loads(messages[1].content)
+            if "draft" in payload:
+                template = payload.pop("review_template")
+                assert [item["requirement_id"] for item in template["checks"]] == [
+                    "request", "scope", "precision"]
+                assert payload == {"question": "能举个例子吗？", "conversation_context": context,
+                    "draft": "可以用技术文档说明 RAG 的检索步骤。", "tool_results": [],
+                    "task_contract": make_task_contract("能举个例子吗？"), "server_checks": []}
+                assert max_tokens == 1600 and response_format == "json_object"
+                return SimpleNamespace(content=_synthetic_review(payload))
+            assert max_tokens == 1024 and response_format is None
             assert payload == {"question": "能举个例子吗？", "conversation_context": context}
             assert "未检索知识库" in messages[0].content
             return SimpleNamespace(content='{"text":"可以用技术文档说明 RAG 的检索步骤。"}')
@@ -239,6 +259,9 @@ async def test_general_and_voice_receive_the_same_trusted_local_clock(monkeypatc
     class Client:
         async def complete(self, _model, messages, **_options):
             captured.append(messages)
+            payload = json.loads(messages[-1].content)
+            if "draft" in payload:
+                return SimpleNamespace(content=_synthetic_review(payload))
             return SimpleNamespace(content='{"text":"公开合成回答"}')
 
         async def stream_complete(self, _model, messages, **_options):
@@ -259,7 +282,7 @@ async def test_general_and_voice_receive_the_same_trusted_local_clock(monkeypatc
     assert "".join([part async for part in runtime.stream_general(question, context)]) == (
         "公开合成回答"
     )
-    assert len(captured) == 2
+    assert len(captured) == 4
     clocks = []
     for messages in captured:
         system = messages[0].content
@@ -277,7 +300,10 @@ async def test_general_and_voice_receive_the_same_trusted_local_clock(monkeypatc
         assert "本机时钟，未联网校准" in system
         assert "天气" in system and "不得编造" in system
         payload = json.loads(messages[1].content)
-        assert payload == {"question": question, "conversation_context": context}
+        assert payload["question"] == question and payload["conversation_context"] == context
+        assert set(payload) in ({"question", "conversation_context"},
+                                {"question", "conversation_context", "draft", "tool_results",
+                                 "task_contract", "server_checks", "review_template"})
         clocks.append(clock)
     assert clocks[0] == clocks[1]
 
@@ -366,6 +392,17 @@ async def test_cold_runtime_can_use_models_before_any_engine_is_opened(
 
         async def complete(self, *args, **kwargs):
             self.calls += 1
+            if operation == "verify":
+                payload = json.loads(args[1][-1].content)
+                return SimpleNamespace(content=json.dumps({"units": [
+                    {"unit_id": unit["id"], "verdict": "unsupported", "support": []}
+                    for unit in payload["answer_units"]
+                ]}))
+            if operation == "general":
+                payload = json.loads(args[1][-1].content)
+                return SimpleNamespace(content=(
+                    _synthetic_review(payload) if "draft" in payload
+                    else '{"text":"synthetic output"}'))
             return SimpleNamespace(content="synthetic output")
 
         async def stream_complete(self, *args, **kwargs):
@@ -399,18 +436,20 @@ async def test_cold_runtime_can_use_models_before_any_engine_is_opened(
         if operation == "summary":
             return await instance.complete_summary("", [])
         if operation == "general":
-            return await instance.complete_general("synthetic question", {})
+            return json.loads(await instance.complete_general("synthetic question", {}))["text"]
         if operation == "verify":
             return await instance.verify_answer("synthetic answer", [])
         return "".join([part async for part in instance.stream_answer("synthetic question", [])])
 
-    assert await asyncio.gather(call(), call()) == ["synthetic output"] * 2
-    assert len(created) == 1 and created[0].calls == 2
+    expected = '{"supported": false}' if operation == "verify" else "synthetic output"
+    assert await asyncio.gather(call(), call()) == [expected] * 2
+    expected_calls = 4 if operation == "general" else 2
+    assert len(created) == 1 and created[0].calls == expected_calls
     assert instance._manager is None
     owned = False
     with pytest.raises(RuntimeError, match="owner lost"):
         await call()
-    assert created[0].calls == 2
+    assert created[0].calls == expected_calls
     await instance.close()
     await instance.close()
     assert created[0].closed == 1
@@ -453,17 +492,50 @@ async def test_answer_output_budget_supports_summary_without_expanding_engine_bu
         with pytest.raises(ValueError):
             await client.complete("qwen-plus", messages, max_tokens=513)
         with pytest.raises(ValueError):
-            await client.complete("qwen-flash", messages, max_tokens=2049)
+            await client.complete("qwen-flash", messages, max_tokens=4097)
     assert len(calls) == 1
 
 
-def test_answer_prompt_separates_summary_from_exact_support_quotes():
+async def test_structured_verification_budget_reaches_real_sdk_without_expanding_engine_budget():
+    config = DashScopeConfig(
+        region="cn-beijing", workspace_id="disposable-workspace",
+        models={"answer": "qwen-flash", "engine": "qwen-plus", "summary": "qwen-max",
+                "embedding": "text-embedding-v4", "rerank": "qwen3-vl-rerank"},
+        embedding_dimension=1024, api_key=SecretStr("synthetic-secret"),
+        credential_ciphertext_sha256="1" * 64,
+    )
+    calls = []
+
+    def handler(request):
+        body = json.loads(request.content)
+        calls.append(body)
+        return httpx.Response(200, json={"choices": [{"message": {"content": '{"units":[]}'},
+                                                     "finish_reason": "stop"}]})
+
+    async with DashScopeClient(config, transport=httpx.MockTransport(handler)) as client:
+        result = await client.complete("qwen-flash", [Message("user", "synthetic proof")],
+                                       max_tokens=4096, response_format="json_object")
+        assert result.content == '{"units":[]}'
+        with pytest.raises(ValueError):
+            await client.complete("qwen-plus", [Message("user", "synthetic")], max_tokens=513)
+        with pytest.raises(ValueError):
+            await client.complete("qwen-flash", [Message("user", "synthetic")], max_tokens=4097)
+    assert len(calls) == 1 and calls[0]["max_tokens"] == 4096
+
+
+def test_answer_prompt_separates_summary_from_server_selected_support():
     messages = RagRuntime._answer_messages(
         "synthetic overview", [{"id": "E1", "text": "x" * 1000}], {},
     )
     assert "最多1500字符" in messages[0].content
     assert "可忠实解释、概括" in messages[0].content
-    assert "逐字复制对应证据" in messages[0].content
+    assert "勿生成quote" in messages[0].content
+    payload = json.loads(messages[1].content)
+    assert "text" not in payload["evidence"][0]
+    assert "".join(span["text"] for span in payload["evidence"][0]["spans"]) == "x" * 1000
+    assert [span["span_index"] for span in payload["evidence"][0]["spans"]] == [1, 2]
+    assert all(set(span) == {"span_index", "text"}
+               for span in payload["evidence"][0]["spans"])
 
 
 @pytest.mark.asyncio

@@ -79,6 +79,116 @@ function assistantActions(): VoiceActions {
     output: vi.fn(), back: vi.fn(), status: vi.fn(), originalUrl: id => `/api/documents/${id}/original` };
 }
 
+// The same public synthetic table was returned as literal Markdown in the T06 real-model retest.
+const comparisonTable = '| 项目 | 《青岚设备运行规范 V1》 | 《青岚设备运行规范 V2》 | 变化 |\n' +
+  '|------|------------------------|------------------------|------|\n' +
+  '| 连续运行温度上限 | 40 摄氏度 | 42 摄氏度 | 提升 2 摄氏度 |\n' +
+  '| 环境相对湿度上限 | 70% | 75% | 提升 5% |\n' +
+  '| 单次连续运行时长 | 6 小时 | 8 小时 | 延长 2 小时 |\n' +
+  '| 滤芯检查周期 | 每 90 天 | 每 60 天 | 缩短 30 天 |\n\n当前有效版本为 V2。';
+
+it('renders the saved T06 comparison as a semantic table without changing values or source controls', async () => {
+  const message = { ...sampleMessages[sampleChats[0].id][0], text: comparisonTable };
+  const { api } = fixture([message]);
+  render(<CiteRagApp api={api} />);
+  const table = await screen.findByRole('table');
+  expect(within(table).getAllByRole('columnheader')).toHaveLength(4);
+  expect(within(table).getAllByRole('row')).toHaveLength(5);
+  expect(within(table).getByRole('cell', { name: '提升 5%' })).toBeTruthy();
+  expect(screen.getByText('当前有效版本为 V2。')).toBeTruthy();
+  const region = table.closest('[role="region"]');
+  expect(region?.getAttribute('tabindex')).toBe('0');
+  expect(region?.getAttribute('aria-label')).toContain('可横向滚动');
+  expect(screen.getByRole('button', { name: /查看来源/ })).toBeTruthy();
+}, 20000);
+
+it('shares table rendering with saved voice history while keeping hidden and uncommitted answers private', () => {
+  const actions = assistantActions();
+  const answer = { ...sampleMessages[sampleChats[0].id][0], text: comparisonTable };
+  actions.media.answers = [answer];
+  const context = { chatId: 'chat', chatTitle: '合成语音', kbName: '合成库', kbReady: true, chatPending: false };
+  const view = render(<Voice context={context} actions={actions} />);
+  expect(within(view.container.querySelector('.voice-answer') as HTMLElement).getByRole('table')).toBeTruthy();
+  expect(screen.getByRole('button', { name: /查看来源/ })).toBeTruthy();
+  view.rerender(<Voice context={context} actions={{ ...actions, media: { ...actions.media, answers: [{ ...answer, hidden: true }] } }} />);
+  expect(within(view.container.querySelector('.voice-answer') as HTMLElement).queryByRole('table')).toBeNull();
+  expect(screen.getByText('资料已变化，旧回答与来源暂停展示。')).toBeTruthy();
+  view.rerender(<Voice context={context} actions={{ ...actions, media: { ...actions.media, answers: [{ ...answer, saved: false }] } }} />);
+  expect(within(view.container.querySelector('.voice-answer') as HTMLElement).queryByRole('table')).toBeNull();
+  expect(screen.getByText('回答尚未确认保存，正文暂不展示。')).toBeTruthy();
+});
+
+it('shows a saved insufficient-evidence explanation and its checked sources without claiming a complete answer', async () => {
+  const message = { ...sampleMessages[sampleChats[0].id][0], status: 'insufficient_evidence' as const,
+    text: '已确认：仅限室内使用。\n未找到：防水等级与价格。请补充对应规格或报价。' };
+  const { api } = fixture([message]);
+  render(<CiteRagApp api={api} />);
+  expect(await screen.findByText(/已确认：仅限室内使用/)).toBeTruthy();
+  expect(screen.getByText(/未找到：防水等级与价格/)).toBeTruthy();
+  expect(screen.getByText('证据不足')).toBeTruthy();
+  expect(screen.queryByText('回答已保存')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: /查看来源/ }));
+  const drawer = await screen.findByRole('dialog');
+  expect(within(drawer).getByRole('link', { name: '下载原文' })).toBeTruthy();
+}, 20000);
+
+it('uses saved insufficient-evidence explanations in voice with an empty-history fallback and save gate', () => {
+  const actions = assistantActions();
+  const answer = { ...sampleMessages[sampleChats[0].id][0], status: 'insufficient_evidence' as const,
+    text: '已确认：仅限室内使用。\n未找到：防水等级与价格。请补充对应规格或报价。' };
+  actions.media.answers = [answer];
+  const context = { chatId: 'chat', chatTitle: '合成语音', kbName: '合成库', kbReady: true, chatPending: false };
+  const view = render(<Voice context={context} actions={actions} />);
+  expect(screen.getByText(/已确认：仅限室内使用/)).toBeTruthy();
+  expect(screen.getByText('证据不足')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: /查看来源/ }));
+  expect(screen.getByRole('dialog')).toBeTruthy();
+  view.rerender(<Voice context={context} actions={{ ...actions, media: { ...actions.media, answers: [{ ...answer, text: '  ' }] } }} />);
+  expect(screen.getByText('当前资料没有足够证据，请补充或缩小问题范围。')).toBeTruthy();
+  view.rerender(<Voice context={context} actions={{ ...actions, media: { ...actions.media, answers: [{ ...answer, saved: false }] } }} />);
+  expect(screen.queryByText(/已确认：仅限室内使用/)).toBeNull();
+  expect(screen.getByText('回答尚未确认保存，正文暂不展示。')).toBeTruthy();
+  expect(screen.queryByRole('button', { name: /查看来源/ })).toBeNull();
+});
+
+it('shows a checked conflict analysis and its genuine source without labeling it a complete answer', async () => {
+  const message = { ...sampleMessages[sampleChats[0].id][0], status: 'conflicting_evidence' as const,
+    text: '正式规范上限为42℃；未经核准的记录声称47℃，不能据此修改正式规范。' };
+  const { api } = fixture([message]);
+  render(<CiteRagApp api={api} />);
+  expect(await screen.findByText(message.text)).toBeTruthy();
+  expect(screen.getByText('资料存在冲突')).toBeTruthy();
+  expect(screen.queryByText('回答已保存')).toBeNull();
+  expect(screen.getByRole('button', { name: /查看来源 · E1 ·/ })).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: /查看来源/ }));
+  const drawer = await screen.findByRole('dialog');
+  expect(within(drawer).getByText(message.citations[0].excerpt)).toBeTruthy();
+  expect(within(drawer).getByRole('link', { name: '下载原文' })).toBeTruthy();
+}, 20000);
+
+it('keeps conflict analysis and sources readable in voice while preserving old-history and save gates', () => {
+  const actions = assistantActions();
+  const answer = { ...sampleMessages[sampleChats[0].id][0], status: 'conflicting_evidence' as const,
+    text: '两份资料分别记载42℃和47℃，不能擅自批准更高上限。' };
+  actions.media.answers = [answer];
+  const context = { chatId: 'chat', chatTitle: '合成语音', kbName: '合成库', kbReady: true, chatPending: false };
+  const view = render(<Voice context={context} actions={actions} />);
+  expect(screen.getByText(answer.text)).toBeTruthy();
+  expect(screen.getByText('资料存在冲突')).toBeTruthy();
+  expect(screen.getByRole('button', { name: /查看来源 · E1 ·/ })).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: /查看来源/ }));
+  expect(screen.getByRole('dialog')).toBeTruthy();
+  view.rerender(<Voice context={context} actions={{ ...actions, media: { ...actions.media, answers: [{ ...answer, text: '' }] } }} />);
+  expect(screen.getByText('当前资料存在冲突，请核查原文。')).toBeTruthy();
+  view.rerender(<Voice context={context} actions={{ ...actions, media: { ...actions.media, answers: [{ ...answer, stale: true }] } }} />);
+  expect(screen.queryByText(answer.text)).toBeNull();
+  expect(screen.queryByRole('button', { name: /查看来源/ })).toBeNull();
+  view.rerender(<Voice context={context} actions={{ ...actions, media: { ...actions.media, answers: [{ ...answer, saved: false }] } }} />);
+  expect(screen.queryByText(answer.text)).toBeNull();
+  expect(screen.getByText('回答尚未确认保存，正文暂不展示。')).toBeTruthy();
+  expect(screen.queryByRole('button', { name: /查看来源/ })).toBeNull();
+});
+
 it('distinguishes configured, connecting and ready voice states without false configuration failure', () => {
   const actions = assistantActions();
   const context = { chatId: 'chat', chatTitle: '合成语音', kbName: '合成库', kbReady: true, chatPending: false };
@@ -655,6 +765,50 @@ it('keeps image observation failure and retry visible without empty details', as
   expect(screen.getByText(/错误代码：image_observation_unavailable/)).toBeTruthy();
   expect(screen.getByRole<HTMLButtonElement>('button', { name: '重试回答' }).disabled).toBe(false);
   expect(screen.queryByText('查看图片识别详情')).toBeNull();
+});
+
+it.each([
+  ['agent_decision_invalid', '模型返回的任务决策格式不符合要求，回答未完成。请重试；若持续失败，请反馈此错误代码。'],
+  ['answer_unverifiable', '模型输出未通过本轮检查，回答未完成。请重试；若持续失败，请反馈此错误代码。'],
+  ['answer_unavailable', '回答模型服务暂不可用。请检查系统状态、模型配置或供应商配额后重试。'],
+  ['answer_source_mismatch', '模型的引用摘录无法匹配原文，或网址没有资料依据。请重试，或明确要查询的资料。'],
+])('explains %s consistently in text and voice without displaying the rejected model output', async (code, reason) => {
+  const rejectedOutput = '{"action":"finish","answer":"rejected synthetic model output"}';
+  const message = { ...sampleMessages[sampleChats[0].id][0], status: 'failed' as const,
+    text: rejectedOutput, citations: [], error_code: code };
+  const { api, calls } = fixture([message]);
+  const mounted = render(<CiteRagApp api={api} />);
+  expect(await screen.findByText(reason)).toBeTruthy();
+  expect(screen.getByText(`错误代码：${code}`)).toBeTruthy();
+  expect(screen.queryByText(rejectedOutput)).toBeNull();
+  const retry = screen.getByRole<HTMLButtonElement>('button', { name: '重试回答' });
+  expect(retry.disabled).toBe(false);
+  fireEvent.click(retry);
+  expect(await screen.findByText('合成重试结果')).toBeTruthy();
+  expect(calls.filter((call) => call.path.endsWith(`/messages/${message.message_id}/retry/stream`)
+    && call.method === 'POST')).toHaveLength(1);
+  mounted.unmount();
+
+  const actions = assistantActions();
+  actions.media.answers = [message];
+  render(<Voice context={{ chatId: sampleChats[0].id, chatTitle: '合成聊天', kbName: '合成库',
+    kbReady: true, chatPending: false }} actions={actions} />);
+  expect(screen.getByText(reason)).toBeTruthy();
+  expect(screen.queryByText(rejectedOutput)).toBeNull();
+}, 20000);
+
+it('does not direct an ordinary review failure toward nonexistent knowledge sources', async () => {
+  const chat = { ...sampleChats[0], kb_id: null, title: '合成普通审查失败' };
+  sessionStorage.setItem('citerag.workbench.selection', JSON.stringify({ kbId: null, chatId: chat.id }));
+  const message = { ...sampleMessages[sampleChats[0].id][0], status: 'failed' as const,
+    route: 'general' as const, text: '', citations: [], kb_revision: 0,
+    error_code: 'answer_unverifiable' };
+  const { api } = fixture([message], [chat]);
+  render(<CiteRagApp api={api} />);
+  expect(await screen.findByText('模型输出未通过本轮检查，回答未完成。请重试；若持续失败，请反馈此错误代码。')).toBeTruthy();
+  expect(screen.getByText('普通聊天 · 无知识库访问')).toBeTruthy();
+  expect(screen.queryByText(/原文核验|资料中的具体内容/)).toBeNull();
+  expect(screen.queryByRole('button', { name: /查看来源/ })).toBeNull();
 });
 
 it.each(['failed', 'interrupted', 'partial'] as const)('keeps an unrouted ordinary %s answer readable and connects its retry to the API', async (status) => {

@@ -111,6 +111,42 @@ async def test_streamed_tts_failure_keeps_the_saved_text_fallback():
 
 
 @pytest.mark.asyncio
+async def test_verified_insufficient_detail_reaches_voice_without_claiming_a_spoken_answer():
+    import json
+
+    registry = VoiceSessions()
+    call = registry.create(Binding(uuid4(), uuid4(), uuid4(), 1, "space"), uuid4())
+    evidence = [{"id": "E1", "text": "公开合成设备仅限室内使用。"}]
+    citation = {"evidence_id": "E1", "filename": "公开合成说明.txt", "excerpt": evidence[0]["text"]}
+    text = "仅限室内使用。本次检索证据未提供售价，请补充有效报价资料。"
+
+    class Verifier:
+        async def verify_answer(self, actual_text, selected):
+            assert actual_text == text and selected == evidence
+            return '{"supported":true}'
+
+    async def answer(_call, _request, _text, _generation):
+        status, checked_text, citations = await AnswerService._checked_result(
+            Verifier(), json.dumps({"status": "insufficient_evidence", "text": text,
+                                   "evidence_ids": ["E1"], "support": [
+                                       {"evidence_id": "E1", "quote": evidence[0]["text"]},
+                                   ]}), evidence, [citation],
+        )
+        return {"saved": True, "status": status, "text": checked_text, "citations": citations}
+
+    async def play(_text, _generation):
+        raise AssertionError("insufficient evidence remains a text fallback, without new TTS")
+
+    await VoiceTurns(registry, call, answer, play).submit(1, "这个设备可露天使用吗？售价多少？")
+    await asyncio.wait_for(call.turn_task, 1)
+    answers = [event["answer"] for event in call.events if event["type"] == "answer"]
+    assert answers == [{"saved": True, "status": "insufficient_evidence", "text": text,
+                        "citations": [citation]}]
+    assert call.phase == "listening"
+    assert not any(event["type"] == "error" for event in call.events)
+
+
+@pytest.mark.asyncio
 async def test_segmented_tts_uses_one_track_and_emits_text_with_audio(monkeypatch):
     import livekit
 

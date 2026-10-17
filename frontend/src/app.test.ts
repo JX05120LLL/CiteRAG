@@ -188,8 +188,9 @@ describe('M0 local workbench', () => {
   });
 
   it.each([
-    ['answer_unverifiable', '未通过格式或原文核验'],
+    ['answer_unverifiable', '未通过本轮检查'],
     ['answer_format_invalid', '模型返回的格式不完整'],
+    ['agent_decision_invalid', '模型返回的任务决策格式不符合要求，回答未完成'],
     ['answer_reference_invalid', '引用编号未通过核验'],
     ['answer_source_mismatch', '引用摘录无法匹配原文'],
     ['answer_unsupported_claims', '未得到资料支持的事实'],

@@ -7,6 +7,14 @@ from typing import Any, Protocol
 from unicodedata import category
 
 from app.providers.errors import ProviderError
+from app.rag.evidence_spans import EvidenceSpanError, expand_span_support
+from app.rag.response_review import ResponseReviewError
+from app.rag.source_mentions import (
+    SourceMentionError,
+    canonicalize_selected_span_references,
+    checked_source_mentions,
+)
+from app.rag.task_constraints import TaskConstraintError
 from app.services.token_budget import TokenBudgetExceeded
 
 
@@ -17,7 +25,11 @@ class AnswerRuntime(Protocol):
                              context: dict | None = None,
                              documents: list[dict] | None = None) -> str: ...
     async def complete_general(self, question: str, context: dict) -> str: ...
+    async def complete_general_review(self, question: str, context: dict, draft: str,
+                                      tool_results: list[dict] | None = None) -> str: ...
     async def verify_answer(self, text: str, evidence: list[dict]) -> str: ...
+    async def verify_answer_in_context(self, text: str, selected_evidence: list[dict],
+                                       all_evidence: list[dict]) -> str: ...
 
 
 class AnswerError(Exception):
@@ -75,6 +87,23 @@ class LightRAGAnswerAdapter:
             raise _provider_answer_error(error) from None
         except TokenBudgetExceeded:
             raise AnswerError("answer_budget_exceeded") from None
+        except (ResponseReviewError, TaskConstraintError):
+            raise AnswerError("answer_unverifiable") from None
+        except Exception:
+            raise AnswerError("answer_unavailable") from None
+
+    async def review_general(self, question: str, context: dict, draft: str,
+                             tool_results: list[dict] | None = None, *,
+                             response_channel: str = "text") -> str:
+        try:
+            return await self.runtime.complete_general_review(
+                question, context, draft, tool_results, response_channel=response_channel)
+        except ProviderError as error:
+            raise _provider_answer_error(error) from None
+        except TokenBudgetExceeded:
+            raise AnswerError("answer_budget_exceeded") from None
+        except (ResponseReviewError, TaskConstraintError):
+            raise AnswerError("answer_unverifiable") from None
         except Exception:
             raise AnswerError("answer_unavailable") from None
 
@@ -95,12 +124,30 @@ class LightRAGAnswerAdapter:
             raise _provider_answer_error(error) from None
         except TokenBudgetExceeded:
             raise AnswerError("answer_budget_exceeded") from None
+        except (ResponseReviewError, TaskConstraintError):
+            raise AnswerError("answer_unverifiable") from None
         except Exception:
             raise AnswerError("answer_unavailable") from None
 
     async def verify_answer(self, text: str, evidence: list[dict]) -> str:
         try:
             return await self.runtime.verify_answer(text, evidence)
+        except ProviderError as error:
+            raise AnswerError("answer_output_limit" if error.category == "output_limit"
+                              else "answer_verification_unavailable") from None
+        except TokenBudgetExceeded:
+            raise AnswerError("answer_budget_exceeded") from None
+        except Exception:
+            raise AnswerError("answer_verification_unavailable") from None
+
+    async def verify_answer_in_context(self, text: str, selected_evidence: list[dict],
+                                       all_evidence: list[dict]) -> str:
+        contextual = getattr(self.runtime, "verify_answer_in_context", None)
+        if contextual is None:
+            # Existing test/custom runtimes can retain the earlier selected-only contract.
+            return await self.verify_answer(text, selected_evidence)
+        try:
+            return await contextual(text, selected_evidence, all_evidence)
         except ProviderError as error:
             raise AnswerError("answer_output_limit" if error.category == "output_limit"
                               else "answer_verification_unavailable") from None
@@ -196,6 +243,10 @@ def checked_route(raw: str, candidates: list[dict], question: str,
 def checked_answer(raw: str, evidence: dict[str, str]) -> tuple[str, str, list[str]]:
     """The model supplies prose and evidence IDs, never source metadata or URLs."""
     try:
+        try:
+            raw = expand_span_support(raw, evidence)
+        except EvidenceSpanError as error:
+            raise AnswerError(error.code) from None
         data: Any = json.loads(raw)
         fields = {"status", "text", "evidence_ids"}
         if not isinstance(data, dict) or set(data) not in (fields, fields | {"support"}):
@@ -219,7 +270,15 @@ def checked_answer(raw: str, evidence: dict[str, str]) -> tuple[str, str, list[s
             for identifier in identifiers)
             or len(set(identifiers)) != len(identifiers)):
             raise AnswerError("answer_reference_invalid")
-        if status != "answered":
+        explanatory_prose = status in {"insufficient_evidence", "conflicting_evidence"} \
+            and bool(text.strip())
+        if explanatory_prose and not identifiers:
+            # An LLM verifier cannot substitute for a declared source binding.
+            raise AnswerError("answer_reference_invalid")
+        if explanatory_prose and not summarized:
+            # New explanatory prose must never take the legacy extractive shortcut.
+            raise ValueError
+        if status != "answered" and not explanatory_prose:
             if summarized and (data["support"] != [] or identifiers or text):
                 raise ValueError
             return status, "", []
@@ -240,6 +299,11 @@ def checked_answer(raw: str, evidence: dict[str, str]) -> tuple[str, str, list[s
                 covered.add(item["evidence_id"])
             if covered != set(identifiers):
                 raise AnswerError("answer_reference_invalid")
+            try:
+                text = canonicalize_selected_span_references(text, identifiers, evidence, support)
+                checked_source_mentions(text, identifiers, evidence)
+            except SourceMentionError as error:
+                raise AnswerError(error.code) from None
             url_pattern = r"https?://[^\s<>\"，。；）)]+"
             source_urls = {url.rstrip(".") for identifier in identifiers
                            for url in re.findall(url_pattern, evidence[identifier], re.IGNORECASE)}
@@ -254,5 +318,5 @@ def checked_answer(raw: str, evidence: dict[str, str]) -> tuple[str, str, list[s
         if text.strip() not in evidence[identifiers[0]]:
             raise AnswerError("answer_source_mismatch")
         return status, text.strip(), identifiers
-    except (ValueError, TypeError, KeyError):
+    except (ValueError, TypeError, KeyError, RecursionError):
         raise AnswerError("answer_format_invalid") from None

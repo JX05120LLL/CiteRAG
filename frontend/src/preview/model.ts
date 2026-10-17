@@ -26,7 +26,7 @@ export function parsePreviewLocation(search: string): PreviewLocation {
 }
 
 export function displayCitations(message: ChatMessage): Citation[] {
-  return message.status === 'answered' && message.saved && !message.hidden && !message.stale &&
+  return ['answered', 'insufficient_evidence', 'conflicting_evidence'].includes(message.status) && message.saved && !message.hidden && !message.stale &&
     message.route !== 'general' && message.route !== 'chat' ? message.citations : [];
 }
 

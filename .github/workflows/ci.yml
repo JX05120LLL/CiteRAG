@@ -57,6 +57,7 @@ jobs:
               "frontend/src/preview/app.test.tsx",
               "frontend/src/react/controller.test.ts",
               "frontend/src/react/app.test.tsx",
+              "frontend/src/react/AnswerContent.test.tsx",
               "frontend/src/react/AgentTasks.test.tsx",
               "frontend/src/react/Status.check.test.tsx",
               "frontend/src/react/Workbench.input.test.tsx",

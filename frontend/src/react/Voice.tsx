@@ -11,6 +11,7 @@ import logo from '../../../assets/brand/mark.svg';
 import { AgentTaskCard } from './AgentTasks';
 import { VoiceVisual } from './VoiceVisual';
 import { voiceVisualState } from './voiceVisualModel';
+import { AnswerContent } from './AnswerContent';
 
 // React adaptation of LiveKit's MIT welcome-view and agent-session-view-01.
 // Source pinned in vendor/livekit/README.md. Media remains owned by VoiceController.
@@ -75,12 +76,13 @@ export function Voice({ context, actions, levels = [], readOnly = false }: {
     <div className="voice-user-row"><span className="voice-user-avatar"><UserOutlined /></span><div className="voice-user-card"><strong><UserOutlined /> 用户</strong>
       {answer.question.length > 160 ? <details className="voice-question"><summary>{answer.question.slice(0, 80)}…（展开全文）</summary><p>{answer.question}</p></details> : <p>{answer.question}</p>}</div></div>
     <div className="voice-assistant-row"><span className="voice-assistant-avatar"><img src={logo} alt="" /></span><div className="voice-assistant-card"><Space wrap><strong>{answerRouteLabel(answer.route).split(' · ')[0]}</strong><StateTag value={answer.status} />{!answer.saved && <Tag>未保存</Tag>}</Space>
-    <p className="voice-answer">{answer.hidden || answer.stale ? '资料已变化，旧回答与来源暂停展示。'
+    <AnswerContent className="voice-answer" text={answer.hidden || answer.stale ? '资料已变化，旧回答与来源暂停展示。'
       : ['failed', 'interrupted'].includes(answer.status) ? answerFailure(answer.error_code)
-        : answer.status === 'insufficient_evidence' ? '当前资料没有足够证据，请补充或缩小问题范围。'
-          : !answer.saved ? '回答尚未确认保存，正文暂不展示。' : answer.text}</p>
+        : !answer.saved ? '回答尚未确认保存，正文暂不展示。'
+          : answer.status === 'insufficient_evidence' ? answer.text.trim() || '当前资料没有足够证据，请补充或缩小问题范围。'
+            : answer.status === 'conflicting_evidence' ? answer.text.trim() || '当前资料存在冲突，请核查原文。' : answer.text} />
     <p className="muted voice-route-detail">{answerRouteLabel(answer.route)}</p>
-    {displayCitations(answer).map((item) => <Button key={item.evidence_id} icon={<FileTextOutlined />} className="voice-source-button" onClick={() => setSource({ message: answer.message_id, evidence: item.evidence_id })}>查看来源 · {item.filename} · {locationText(item)} <span aria-hidden="true">›</span></Button>)}</div></div>
+    {displayCitations(answer).map((item) => <Button key={item.evidence_id} icon={<FileTextOutlined />} className="voice-source-button" onClick={() => setSource({ message: answer.message_id, evidence: item.evidence_id })}>查看来源 · {item.evidence_id} · {item.filename} · {locationText(item)} <span aria-hidden="true">›</span></Button>)}</div></div>
   </article>;
   const disabled = readOnly || actions.checking || actions.capabilityError || !context.chatId || !context.kbReady ||
     context.chatPending || !!context.error || actions.capability?.transport !== 'configured' ||
